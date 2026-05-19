@@ -94,12 +94,20 @@ function updateRenderedFromMerge(): void {
 function ingestChunkSnapshot(key: string, snap: Snapshot): void {
   channelSnapshots.set(key, new Map(Object.entries(snap.players)));
 
-  if (key === chunkKey(homeChunk)) {
-    const mine = snap.players[username];
-    if (mine) maybeShiftWindow(mine);
-  }
+  // The local cube may have migrated to a different chunk than it joined
+  // through; follow it wherever the server reports it.
+  const mine = findOwnCube();
+  if (mine) maybeShiftWindow(mine);
 
   updateRenderedFromMerge();
+}
+
+function findOwnCube(): PlayerPos | undefined {
+  for (const m of channelSnapshots.values()) {
+    const p = m.get(username);
+    if (p) return p;
+  }
+  return undefined;
 }
 
 let windowCenter: Coord = homeChunk;

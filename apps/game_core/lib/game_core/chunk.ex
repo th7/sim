@@ -53,6 +53,17 @@ defmodule GameCore.Chunk do
   @spec subscribe(GenServer.server(), pid()) :: :ok
   def subscribe(server, pid), do: GenServer.call(server, {:subscribe, pid})
 
+  @doc """
+  Migration handshake: a source Chunk hands an entity off to its neighbor.
+  The destination adds every passed component and triggers an immediate
+  out-of-cycle snapshot so observers see the entity in its new chunk
+  without waiting for the next broadcast tick.
+  """
+  @spec migrate_in(GenServer.server(), GameCore.World.eid(), %{module() => any()}) :: :ok
+  def migrate_in(server, eid, components) do
+    GenServer.call(server, {:migrate_in, eid, components})
+  end
+
   @impl true
   def init(opts) do
     coord = Keyword.fetch!(opts, :coord)
@@ -107,27 +118,49 @@ defmodule GameCore.Chunk do
   end
 
   def handle_call({:set_intent, username, {dx, dy}}, _from, state) do
-    world =
-      World.add_component(state.world, username, Velocity, %{
-        vx: dx * state.speed,
-        vy: dy * state.speed
-      })
+    # No-op if the entity has already migrated to a neighboring chunk;
+    # the input is still being routed here from the player's original
+    # owner channel (Phase 6 introduces a Session that retargets input).
+    case World.fetch(state.world, username, Position) do
+      {:ok, _} ->
+        world =
+          World.add_component(state.world, username, Velocity, %{
+            vx: dx * state.speed,
+            vy: dy * state.speed
+          })
 
-    {:reply, :ok, %{state | world: world}}
+        {:reply, :ok, %{state | world: world}}
+
+      :error ->
+        {:reply, :ok, state}
+    end
   end
 
   def handle_call({:subscribe, pid}, _from, state) do
     {:reply, :ok, %{state | subscribers: [pid | state.subscribers]}}
   end
 
+  def handle_call({:migrate_in, eid, components}, _from, state) do
+    world =
+      Enum.reduce(components, state.world, fn {mod, data}, w ->
+        World.add_component(w, eid, mod, data)
+      end)
+
+    snap = BroadcastSystem.snapshot(world)
+    Enum.each(state.subscribers, &send(&1, {:snapshot, snap}))
+
+    {:reply, :ok, %{state | world: world}}
+  end
+
   @impl true
   def handle_info(:tick, state) do
     dt = state.tick_ms / 1000.0
     world = MovementSystem.run(state.world, dt)
+    {world, migrated?} = migrate_out(world, state.coord)
     tick_count = state.tick_count + 1
     state = %{state | world: world, tick_count: tick_count}
 
-    if rem(tick_count, 2) == 0 do
+    if migrated? or rem(tick_count, 2) == 0 do
       snap = BroadcastSystem.snapshot(world)
       Enum.each(state.subscribers, &send(&1, {:snapshot, snap}))
     end
@@ -197,4 +230,33 @@ defmodule GameCore.Chunk do
 
   defp schedule_tick(tick_ms), do: Process.send_after(self(), :tick, tick_ms)
   defp schedule_flush(flush_ms), do: Process.send_after(self(), :flush_db, flush_ms)
+
+  defp migrate_out(world, coord) do
+    positions = Map.get(world.components, Position, %{})
+
+    Enum.reduce(positions, {world, false}, fn {eid, %{x: x, y: y}}, {w, migrated?} ->
+      case GameCore.ChunkGeometry.coord_for(x, y) do
+        ^coord ->
+          {w, migrated?}
+
+        dest_coord ->
+          case GameCore.Chunks.whereis(dest_coord) do
+            pid when is_pid(pid) ->
+              :ok = migrate_in(pid, eid, entity_components(w, eid))
+              {World.remove_entity(w, eid), true}
+
+            _ ->
+              # No destination available (outside the live grid). Leave the
+              # entity in place; Phase 5 doesn't try to expand the world.
+              {w, migrated?}
+          end
+      end
+    end)
+  end
+
+  defp entity_components(world, eid) do
+    for {mod, m} <- world.components, Map.has_key?(m, eid), into: %{} do
+      {mod, Map.fetch!(m, eid)}
+    end
+  end
 end

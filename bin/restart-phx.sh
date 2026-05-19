@@ -7,7 +7,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 pkill -f beam.smp 2>/dev/null || true
+# Vite is a child of the BEAM watcher but doesn't always exit when the
+# parent dies; kill it directly so port 3000 is free for the new BEAM
+# to spawn its own Vite (otherwise the orphan keeps the port and the
+# new BEAM runs without a watcher).
+pkill -f 'node .*vite' 2>/dev/null || true
 while pgrep -f beam.smp >/dev/null; do sleep 0.2; done
+while pgrep -f 'node .*vite' >/dev/null; do sleep 0.2; done
 
 LOG=/tmp/phx-restart.log
 nohup mix phx.server >"$LOG" 2>&1 &
