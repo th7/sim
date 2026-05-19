@@ -62,7 +62,8 @@ defmodule GameWeb.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
     [
-      setup: ["deps.get"],
+      setup: ["deps.get", "cmd --cd ../../frontend npm install"],
+      "assets.deploy": ["cmd --cd ../../frontend npm run build"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

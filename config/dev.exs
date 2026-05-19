@@ -21,7 +21,9 @@ config :game_web, GameWeb.Endpoint,
   code_reloader: true,
   debug_errors: true,
   secret_key_base: "SaKbvVh/BNfbJSRwoPW/QHlDu/jfc8G+g6TYyEUXUQ4gnp1xO494V9XVstoSy3Ef",
-  watchers: []
+  watchers: [
+    npm: ["run", "dev", cd: Path.expand("../frontend", __DIR__)]
+  ]
 
 # ## SSL Support
 #
