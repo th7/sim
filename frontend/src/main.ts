@@ -3,12 +3,36 @@ import { Socket, type Channel } from 'phoenix';
 
 type PlayerPos = { x: number; y: number };
 type Snapshot = { players: Record<string, PlayerPos> };
+type Coord = readonly [number, number];
+
+const CHUNK_SIZE = 16;
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
+const urlParams = new URLSearchParams(window.location.search);
 
-const username =
-  new URLSearchParams(window.location.search).get('u') ??
-  `player-${Math.floor(Math.random() * 10000)}`;
+const username = urlParams.get('u') ?? `player-${Math.floor(Math.random() * 10000)}`;
+const homeChunk = parseChunkParam(urlParams.get('chunk')) ?? ([0, 0] as const);
+
+function parseChunkParam(raw: string | null): Coord | null {
+  if (!raw) return null;
+  const m = raw.match(/^(-?\d+):(-?\d+)$/);
+  if (!m) return null;
+  return [parseInt(m[1], 10), parseInt(m[2], 10)] as const;
+}
+
+function chunkKey([cx, cy]: Coord): string {
+  return `${cx}:${cy}`;
+}
+
+function windowCoords([cx, cy]: Coord): Coord[] {
+  const out: Coord[] = [];
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      out.push([cx + dx, cy + dy] as const);
+    }
+  }
+  return out;
+}
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x101010);
@@ -19,16 +43,16 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   500,
 );
-camera.position.set(12, 12, 12);
-camera.lookAt(0, 0, 0);
+const camLookAt = new THREE.Vector3(homeChunk[0] * CHUNK_SIZE, 0, homeChunk[1] * CHUNK_SIZE);
+camera.position.set(camLookAt.x + 12, 12, camLookAt.z + 12);
+camera.lookAt(camLookAt);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 app.appendChild(renderer.domElement);
 
-const grid = new THREE.GridHelper(20, 20, 0x404040, 0x202020);
-scene.add(grid);
+scene.add(new THREE.GridHelper(CHUNK_SIZE * 5, CHUNK_SIZE * 5, 0x404040, 0x202020));
 
 const playerMeshes = new Map<string, THREE.Mesh>();
 const palette = [0x4caf50, 0x2196f3, 0xff9800, 0xe91e63, 0x9c27b0, 0xffeb3b];
@@ -39,10 +63,15 @@ function colorFor(name: string): number {
   return palette[Math.abs(h) % palette.length];
 }
 
-function applySnapshot(snap: Snapshot): void {
-  const seen = new Set<string>();
-  for (const [name, pos] of Object.entries(snap.players)) {
-    seen.add(name);
+// One snapshot map per subscribed chunk. The rendered set is the union.
+const channelSnapshots = new Map<string, Map<string, PlayerPos>>();
+
+function updateRenderedFromMerge(): void {
+  const union = new Map<string, PlayerPos>();
+  for (const m of channelSnapshots.values()) {
+    for (const [name, pos] of m) union.set(name, pos);
+  }
+  for (const [name, pos] of union) {
     let mesh = playerMeshes.get(name);
     if (!mesh) {
       mesh = new THREE.Mesh(
@@ -55,16 +84,61 @@ function applySnapshot(snap: Snapshot): void {
     mesh.position.set(pos.x, 0.5, pos.y);
   }
   for (const [name, mesh] of playerMeshes) {
-    if (!seen.has(name)) {
+    if (!union.has(name)) {
       scene.remove(mesh);
       playerMeshes.delete(name);
     }
   }
 }
 
-// Read-only view of rendered player positions, for E2E smoke tests.
+function ingestChunkSnapshot(key: string, snap: Snapshot): void {
+  channelSnapshots.set(key, new Map(Object.entries(snap.players)));
+
+  if (key === chunkKey(homeChunk)) {
+    const mine = snap.players[username];
+    if (mine) maybeShiftWindow(mine);
+  }
+
+  updateRenderedFromMerge();
+}
+
+let windowCenter: Coord = homeChunk;
+const homeKey0 = chunkKey(homeChunk);
+
+function maybeShiftWindow({ x, y }: PlayerPos): void {
+  const [cx, cy] = [Math.floor(x / CHUNK_SIZE), Math.floor(y / CHUNK_SIZE)];
+  if (cx === windowCenter[0] && cy === windowCenter[1]) return;
+
+  const newCenter: Coord = [cx, cy];
+  const oldKeys = new Set(windowCoords(windowCenter).map(chunkKey));
+  const newKeys = new Set(windowCoords(newCenter).map(chunkKey));
+
+  // Drop stale observer subscriptions, but never leave the home chunk —
+  // it's the channel that owns the local Player.
+  for (const k of oldKeys) {
+    if (newKeys.has(k)) continue;
+    if (k === homeKey0) continue;
+    const ch = channels.get(k);
+    if (ch) {
+      ch.leave();
+      channels.delete(k);
+      channelSnapshots.delete(k);
+    }
+  }
+
+  // Subscribe to newly-in-window chunks as observers.
+  for (const k of newKeys) {
+    if (channels.has(k)) continue;
+    const [ncx, ncy] = k.split(':').map((s) => parseInt(s, 10));
+    subscribeChunk([ncx, ncy], 'observer');
+  }
+
+  windowCenter = newCenter;
+}
+
 (window as unknown as { __game: unknown }).__game = {
   username,
+  homeChunk,
   players(): Record<string, PlayerPos> {
     const out: Record<string, PlayerPos> = {};
     for (const [name, mesh] of playerMeshes) {
@@ -76,12 +150,28 @@ function applySnapshot(snap: Snapshot): void {
 
 const socket = new Socket('/socket');
 socket.connect();
-const channel: Channel = socket.channel('chunk:0:0', { username });
-channel
-  .join()
-  .receive('ok', () => console.info(`joined as ${username}`))
-  .receive('error', (e: unknown) => console.error('join failed', e));
-channel.on('snapshot', (snap: Snapshot) => applySnapshot(snap));
+
+const channels = new Map<string, Channel>();
+
+function subscribeChunk(coord: Coord, role: 'owner' | 'observer'): Channel {
+  const key = chunkKey(coord);
+  const topic = `chunk:${coord[0]}:${coord[1]}`;
+  const channel = socket.channel(topic, { username, role });
+  channel.on('snapshot', (snap: Snapshot) => ingestChunkSnapshot(key, snap));
+  channel
+    .join()
+    .receive('error', (e: unknown) => console.error(`join ${topic} failed`, e));
+  channels.set(key, channel);
+  return channel;
+}
+
+const homeKey = chunkKey(homeChunk);
+const ownerChannel = subscribeChunk(homeChunk, 'owner');
+
+for (const coord of windowCoords(homeChunk)) {
+  if (chunkKey(coord) === homeKey) continue;
+  subscribeChunk(coord, 'observer');
+}
 
 const keys = { w: false, a: false, s: false, d: false };
 let lastIntent = { dx: 0, dy: 0 };
@@ -96,7 +186,7 @@ function currentIntent(): { dx: number; dy: number } {
 function maybePushIntent(): void {
   const intent = currentIntent();
   if (intent.dx !== lastIntent.dx || intent.dy !== lastIntent.dy) {
-    channel.push('move', intent);
+    ownerChannel.push('move', intent);
     lastIntent = intent;
   }
 }

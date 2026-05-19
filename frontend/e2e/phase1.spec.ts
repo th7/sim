@@ -1,12 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-
-type PlayerPos = { x: number; y: number };
-
-declare global {
-  interface Window {
-    __game: { username: string; players(): Record<string, PlayerPos> };
-  }
-}
+import './types';
 
 function uniq(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;

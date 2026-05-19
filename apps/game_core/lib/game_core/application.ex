@@ -18,7 +18,10 @@ defmodule GameCore.Application do
       {:ok, sup} ->
         if Application.get_env(:game_core, :start_phase1_chunk?, true) do
           repo = Application.get_env(:game_core, :chunk_repo, GameCore.ChunkRepo.Null)
-          {:ok, _} = GameCore.start_chunk(coord: {0, 0}, repo: repo)
+
+          for cx <- -2..2, cy <- -2..2 do
+            {:ok, _} = GameCore.start_chunk(coord: {cx, cy}, repo: repo)
+          end
         end
 
         {:ok, sup}

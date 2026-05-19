@@ -1,6 +1,12 @@
 defmodule GameWeb.ChunkChannel do
   @moduledoc """
   Phoenix Channel for a single Overworld Chunk. Topic format `chunk:<x>:<y>`.
+
+  Two roles:
+    - "owner" (default): joining adds the Player to this chunk's world and
+      subscribes for snapshot pushes. Terminate flushes & removes the entity.
+    - "observer": only subscribes for snapshot pushes. Used by the client
+      to receive neighbor chunks' broadcasts without joining them as a Player.
   """
 
   use GameWeb, :channel
@@ -9,15 +15,19 @@ defmodule GameWeb.ChunkChannel do
   alias GameCore.Chunks
 
   @impl true
-  def join("chunk:" <> coord_str, %{"username" => username}, socket) do
+  def join("chunk:" <> coord_str, params, socket) do
+    username = Map.fetch!(params, "username")
+    role = Map.get(params, "role", "owner")
+
     with {:ok, coord} <- parse_coord(coord_str),
          pid when is_pid(pid) <- Chunks.whereis(coord),
-         :ok <- Chunk.join(pid, username),
+         :ok <- enter(pid, role, username),
          :ok <- Chunk.subscribe(pid, self()) do
       socket =
         socket
         |> assign(:coord, coord)
         |> assign(:username, username)
+        |> assign(:role, role)
 
       {:ok, socket}
     else
@@ -25,10 +35,16 @@ defmodule GameWeb.ChunkChannel do
     end
   end
 
+  defp enter(pid, "owner", username), do: Chunk.join(pid, username)
+  defp enter(_pid, "observer", _username), do: :ok
+
   @impl true
   def handle_in("move", %{"dx" => dx, "dy" => dy}, socket) when is_number(dx) and is_number(dy) do
-    pid = Chunks.whereis(socket.assigns.coord)
-    if is_pid(pid), do: Chunk.set_intent(pid, socket.assigns.username, {dx, dy})
+    if socket.assigns.role == "owner" do
+      pid = Chunks.whereis(socket.assigns.coord)
+      if is_pid(pid), do: Chunk.set_intent(pid, socket.assigns.username, {dx, dy})
+    end
+
     {:noreply, socket}
   end
 
@@ -39,7 +55,7 @@ defmodule GameWeb.ChunkChannel do
   end
 
   @impl true
-  def terminate(_reason, %{assigns: %{coord: coord, username: username}}) do
+  def terminate(_reason, %{assigns: %{coord: coord, username: username, role: "owner"}}) do
     case Chunks.whereis(coord) do
       pid when is_pid(pid) -> Chunk.leave(pid, username)
       _ -> :ok

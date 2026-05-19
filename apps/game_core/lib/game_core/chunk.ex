@@ -158,8 +158,13 @@ defmodule GameCore.Chunk do
   defp hydrate_position(state, username) do
     case state.repo.fetch_player(username) do
       %{chunk_x: cx, chunk_y: cy, x: x, y: y} when {cx, cy} == state.coord -> {x, y}
-      _ -> {0.0, 0.0}
+      _ -> chunk_center(state.coord)
     end
+  end
+
+  defp chunk_center({cx, cy}) do
+    size = GameCore.ChunkGeometry.chunk_size()
+    {cx * size + size / 2, cy * size + size / 2}
   end
 
   defp flush_one(state, username) do

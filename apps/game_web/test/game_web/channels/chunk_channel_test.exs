@@ -56,4 +56,33 @@ defmodule GameWeb.ChunkChannelTest do
 
     refute Map.has_key?(Chunk.snapshot(chunk).players, "alice")
   end
+
+  test "joining as an observer does not add the player to the chunk", %{chunk: chunk} do
+    {:ok, _reply, _socket} =
+      GameWeb.UserSocket
+      |> socket("user_obs", %{})
+      |> subscribe_and_join(GameWeb.ChunkChannel, "chunk:0:0", %{
+        "username" => "obs",
+        "role" => "observer"
+      })
+
+    refute Map.has_key?(Chunk.snapshot(chunk).players, "obs")
+  end
+
+  test "an observer still receives snapshot pushes", %{chunk: chunk} do
+    {:ok, _reply, _owner} = join_as("alice")
+
+    {:ok, _reply, _obs} =
+      GameWeb.UserSocket
+      |> socket("user_obs", %{})
+      |> subscribe_and_join(GameWeb.ChunkChannel, "chunk:0:0", %{
+        "username" => "obs",
+        "role" => "observer"
+      })
+
+    send(chunk, :tick)
+    send(chunk, :tick)
+
+    assert_push "snapshot", %{players: %{"alice" => _}}
+  end
 end

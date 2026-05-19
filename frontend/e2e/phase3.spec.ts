@@ -3,17 +3,10 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import './types';
 
 const exec = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-type PlayerPos = { x: number; y: number };
-
-declare global {
-  interface Window {
-    __game: { username: string; players(): Record<string, PlayerPos> };
-  }
-}
 
 function uniq(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
