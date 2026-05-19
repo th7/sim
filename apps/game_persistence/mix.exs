@@ -10,6 +10,7 @@ defmodule GamePersistence.MixProject do
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
       elixir: "~> 1.18",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps()
@@ -18,9 +19,12 @@ defmodule GamePersistence.MixProject do
 
   defp aliases do
     [
-      test: ["ecto.create --quiet", "test"]
+      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"]
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
   def application do
@@ -33,6 +37,7 @@ defmodule GamePersistence.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:game_core, in_umbrella: true},
       {:ecto_sql, "~> 3.12"},
       {:postgrex, "~> 0.19"}
     ]

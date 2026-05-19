@@ -1,5 +1,7 @@
 import Config
 
+config :game_core, chunk_repo: GamePersistence.ChunkRepo
+
 config :game_persistence, GamePersistence.Repo,
   database: "sim_dev",
   pool_size: 10,

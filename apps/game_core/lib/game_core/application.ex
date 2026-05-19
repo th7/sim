@@ -17,7 +17,8 @@ defmodule GameCore.Application do
     case Supervisor.start_link(children, opts) do
       {:ok, sup} ->
         if Application.get_env(:game_core, :start_phase1_chunk?, true) do
-          {:ok, _} = GameCore.start_chunk(coord: {0, 0})
+          repo = Application.get_env(:game_core, :chunk_repo, GameCore.ChunkRepo.Null)
+          {:ok, _} = GameCore.start_chunk(coord: {0, 0}, repo: repo)
         end
 
         {:ok, sup}
