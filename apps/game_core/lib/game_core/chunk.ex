@@ -28,6 +28,7 @@ defmodule GameCore.Chunk do
   @default_tick_ms 50
   @default_speed 4.0
   @default_flush_ms 5_000
+  @default_idle_timeout_ms 5_000
 
   def start_link(opts) do
     {name, opts} = Keyword.pop(opts, :name)
@@ -54,6 +55,18 @@ defmodule GameCore.Chunk do
   def subscribe(server, pid), do: GenServer.call(server, {:subscribe, pid})
 
   @doc """
+  Express interest in keeping this Chunk hot. The chunk monitors `pid`
+  and removes it from the interest set on `DOWN`. When the interest set
+  is empty for `idle_timeout_ms`, the chunk deactivates (final flush +
+  terminate). Phase 6's `GameCore.Session` is the typical caller.
+  """
+  @spec express_interest(GenServer.server(), pid()) :: :ok
+  def express_interest(server, pid), do: GenServer.call(server, {:express_interest, pid})
+
+  @spec release_interest(GenServer.server(), pid()) :: :ok
+  def release_interest(server, pid), do: GenServer.call(server, {:release_interest, pid})
+
+  @doc """
   Migration handshake: a source Chunk hands an entity off to its neighbor.
   The destination adds every passed component and triggers an immediate
   out-of-cycle snapshot so observers see the entity in its new chunk
@@ -73,6 +86,7 @@ defmodule GameCore.Chunk do
     auto_flush = Keyword.get(opts, :auto_flush, true)
     flush_ms = Keyword.get(opts, :flush_ms, @default_flush_ms)
     repo = Keyword.get(opts, :repo, GameCore.ChunkRepo.Null)
+    idle_timeout_ms = Keyword.get(opts, :idle_timeout_ms, @default_idle_timeout_ms)
 
     Process.flag(:trap_exit, true)
 
@@ -86,7 +100,10 @@ defmodule GameCore.Chunk do
       flush_ms: flush_ms,
       repo: repo,
       subscribers: [],
-      tick_count: 0
+      tick_count: 0,
+      interests: MapSet.new(),
+      idle_timeout_ms: idle_timeout_ms,
+      idle_since: nil
     }
 
     if auto_tick, do: schedule_tick(tick_ms)
@@ -140,6 +157,18 @@ defmodule GameCore.Chunk do
     {:reply, :ok, %{state | subscribers: [pid | state.subscribers]}}
   end
 
+  def handle_call({:express_interest, pid}, _from, state) do
+    Process.monitor(pid)
+    interests = MapSet.put(state.interests, pid)
+    {:reply, :ok, %{state | interests: interests, idle_since: nil}}
+  end
+
+  def handle_call({:release_interest, pid}, _from, state) do
+    interests = MapSet.delete(state.interests, pid)
+    state = %{state | interests: interests}
+    {:reply, :ok, maybe_arm_idle(state)}
+  end
+
   def handle_call({:migrate_in, eid, components}, _from, state) do
     world =
       Enum.reduce(components, state.world, fn {mod, data}, w ->
@@ -156,7 +185,7 @@ defmodule GameCore.Chunk do
   def handle_info(:tick, state) do
     dt = state.tick_ms / 1000.0
     world = MovementSystem.run(state.world, dt)
-    {world, migrated?} = migrate_out(world, state.coord)
+    {world, migrated?} = migrate_out(world, state.coord, state.repo)
     tick_count = state.tick_count + 1
     state = %{state | world: world, tick_count: tick_count}
 
@@ -174,6 +203,24 @@ defmodule GameCore.Chunk do
     if state.auto_flush, do: schedule_flush(state.flush_ms)
     {:noreply, state}
   end
+
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+    interests = MapSet.delete(state.interests, pid)
+    {:noreply, maybe_arm_idle(%{state | interests: interests})}
+  end
+
+  def handle_info(:idle_check, state) do
+    if MapSet.size(state.interests) == 0 and state.idle_since != nil and
+         System.monotonic_time(:millisecond) - state.idle_since >= state.idle_timeout_ms do
+      {:stop, :normal, state}
+    else
+      {:noreply, state}
+    end
+  end
+
+  # trap_exit is set so that terminate/2 runs cleanly; ignore EXIT messages
+  # from linked test processes (and similar) that aren't our supervisor.
+  def handle_info({:EXIT, _from, _reason}, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
@@ -231,7 +278,21 @@ defmodule GameCore.Chunk do
   defp schedule_tick(tick_ms), do: Process.send_after(self(), :tick, tick_ms)
   defp schedule_flush(flush_ms), do: Process.send_after(self(), :flush_db, flush_ms)
 
-  defp migrate_out(world, coord) do
+  defp maybe_arm_idle(state) do
+    cond do
+      MapSet.size(state.interests) > 0 ->
+        %{state | idle_since: nil}
+
+      state.idle_since == nil ->
+        Process.send_after(self(), :idle_check, max(state.idle_timeout_ms, 1))
+        %{state | idle_since: System.monotonic_time(:millisecond)}
+
+      true ->
+        state
+    end
+  end
+
+  defp migrate_out(world, coord, repo) do
     positions = Map.get(world.components, Position, %{})
 
     Enum.reduce(positions, {world, false}, fn {eid, %{x: x, y: y}}, {w, migrated?} ->
@@ -240,16 +301,15 @@ defmodule GameCore.Chunk do
           {w, migrated?}
 
         dest_coord ->
-          case GameCore.Chunks.whereis(dest_coord) do
-            pid when is_pid(pid) ->
-              :ok = migrate_in(pid, eid, entity_components(w, eid))
-              {World.remove_entity(w, eid), true}
+          {:ok, pid} = GameCore.Chunks.ensure_started(dest_coord, repo)
+          :ok = migrate_in(pid, eid, entity_components(w, eid))
 
-            _ ->
-              # No destination available (outside the live grid). Leave the
-              # entity in place; Phase 5 doesn't try to expand the world.
-              {w, migrated?}
+          case GameCore.Sessions.whereis(eid) do
+            spid when is_pid(spid) -> GameCore.Session.on_migrated(spid, dest_coord)
+            _ -> :ok
           end
+
+          {World.remove_entity(w, eid), true}
       end
     end)
   end

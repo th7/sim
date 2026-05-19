@@ -157,6 +157,9 @@ function maybeShiftWindow({ x, y }: PlayerPos): void {
 };
 
 const socket = new Socket('/socket');
+socket.onOpen(() => console.log('socket:open'));
+socket.onClose(() => console.log('socket:close'));
+socket.onError((e: unknown) => console.log('socket:error', e));
 socket.connect();
 
 const channels = new Map<string, Channel>();

@@ -1,7 +1,9 @@
 import Config
 
-# Tests start chunks themselves under start_supervised.
-config :game_core, start_phase1_chunk?: false
+# Tests start chunks themselves under start_supervised; the Session
+# warm radius is forced to 0 so it doesn't spawn 25 chunks under the
+# global ChunkSupervisor during channel tests.
+config :game_core, session_warm_radius: 0
 
 config :game_persistence, GamePersistence.Repo,
   database: "sim_test",

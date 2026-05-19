@@ -14,4 +14,9 @@ defmodule GameCore do
     opts = Keyword.put_new(opts, :name, GameCore.Chunks.via(coord))
     DynamicSupervisor.start_child(GameCore.ChunkSupervisor, {GameCore.Chunk, opts})
   end
+
+  @doc "Start a Player Session under the SessionSupervisor."
+  def start_session(opts) do
+    DynamicSupervisor.start_child(GameCore.SessionSupervisor, {GameCore.Session, opts})
+  end
 end
