@@ -8,13 +8,22 @@ defmodule GameCore.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      # Starts a worker by calling: GameCore.Worker.start_link(arg)
-      # {GameCore.Worker, arg}
+      {Registry, keys: :unique, name: GameCore.Chunks},
+      {DynamicSupervisor, name: GameCore.ChunkSupervisor, strategy: :one_for_one}
     ]
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: GameCore.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    case Supervisor.start_link(children, opts) do
+      {:ok, sup} ->
+        if Application.get_env(:game_core, :start_phase1_chunk?, true) do
+          {:ok, _} = GameCore.start_chunk(coord: {0, 0})
+        end
+
+        {:ok, sup}
+
+      other ->
+        other
+    end
   end
 end

@@ -1,18 +1,17 @@
 defmodule GameCore do
   @moduledoc """
-  Documentation for `GameCore`.
+  Public entry points for the pure game core: starting Chunks under the
+  shared `DynamicSupervisor` and registering them in the `Chunks` registry.
   """
 
   @doc """
-  Hello world.
-
-  ## Examples
-
-      iex> GameCore.hello()
-      :world
-
+  Start a Chunk under `GameCore.ChunkSupervisor`, registered by coord in
+  `GameCore.Chunks`. Accepts the same options as `GameCore.Chunk.start_link/1`
+  (the `:name` option is filled in automatically from `:coord`).
   """
-  def hello do
-    :world
+  def start_chunk(opts) do
+    coord = Keyword.fetch!(opts, :coord)
+    opts = Keyword.put_new(opts, :name, GameCore.Chunks.via(coord))
+    DynamicSupervisor.start_child(GameCore.ChunkSupervisor, {GameCore.Chunk, opts})
   end
 end

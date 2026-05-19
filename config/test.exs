@@ -1,5 +1,8 @@
 import Config
 
+# Tests start chunks themselves under start_supervised.
+config :game_core, start_phase1_chunk?: false
+
 config :game_persistence, GamePersistence.Repo,
   database: "sim_test",
   pool_size: 5

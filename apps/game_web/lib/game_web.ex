@@ -32,6 +32,7 @@ defmodule GameWeb do
   def channel do
     quote do
       use Phoenix.Channel
+      import Phoenix.Socket, only: [assign: 3]
     end
   end
 

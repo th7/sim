@@ -25,3 +25,8 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 game_web-*.tar
 
+# Vite-built assets emitted by `mix assets.deploy` (see frontend/vite.config.ts).
+/priv/static/assets/
+/priv/static/.vite/
+/priv/static/index.html
+
