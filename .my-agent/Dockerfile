@@ -60,6 +60,35 @@ ENV PGDATA=/workspace/.pgdata \
 COPY .my-agent/scripts/pg-start.sh /usr/local/bin/pg-start
 RUN chmod +x /usr/local/bin/pg-start
 
+# Playwright (E2E smoke tests): Chromium's runtime libs need apt (root-only),
+# and the browser binary cache must live outside /home/agent — the project's
+# home volume mounts over it at runtime and would mask anything installed
+# under the default ~/.cache/ms-playwright. Same gotcha solved here as for
+# MIX_HOME=/opt/mix below.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      libnss3 \
+      libnspr4 \
+      libdbus-1-3 \
+      libatk1.0-0t64 \
+      libatk-bridge2.0-0t64 \
+      libcups2t64 \
+      libxkbcommon0 \
+      libxcomposite1 \
+      libxdamage1 \
+      libxfixes3 \
+      libxrandr2 \
+      libgbm1 \
+      libpango-1.0-0 \
+      libcairo2 \
+      libasound2t64 \
+      libatspi2.0-0t64 \
+      fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN mkdir -p /opt/ms-playwright && chown -R agent:agent /opt/ms-playwright
+
 # Docker's `USER` directive sets uid/gid but not $HOME — without this, mix
 # would default to /root/.mix at build time. And my-agent mounts a persistent
 # docker volume over /home/agent at runtime, so anything the build wrote

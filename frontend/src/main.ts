@@ -62,6 +62,18 @@ function applySnapshot(snap: Snapshot): void {
   }
 }
 
+// Read-only view of rendered player positions, for E2E smoke tests.
+(window as unknown as { __game: unknown }).__game = {
+  username,
+  players(): Record<string, PlayerPos> {
+    const out: Record<string, PlayerPos> = {};
+    for (const [name, mesh] of playerMeshes) {
+      out[name] = { x: mesh.position.x, y: mesh.position.z };
+    }
+    return out;
+  },
+};
+
 const socket = new Socket('/socket');
 socket.connect();
 const channel: Channel = socket.channel('chunk:0:0', { username });
