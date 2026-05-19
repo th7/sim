@@ -1,15 +1,5 @@
-# my-agent project config — uncomment and edit any section.
-#
-# To install project dev dependencies into the container, add a
-# `.my-agent/Dockerfile` layered on `my-agent-baseline:latest`. See
-# https://github.com/th7/my-agent/blob/main/.my-agent/Dockerfile for a
-# Python/uv example.
-#
-# env:
-#   - GITHUB_TOKEN                   # name only — value forwarded from host env
-#
-# ports:
-#   - "3000:3000"
+ports:
+  - 3000:3000
 
 features:
   - all_recommended
