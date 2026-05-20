@@ -17,7 +17,7 @@ defmodule GameCore.Chunk do
 
   use GenServer
 
-  alias GameCore.World
+  alias GameCore.{ChunkLifecycle, World}
   alias GameCore.Components.{Position, Velocity, Renderable, PlayerControlled}
   alias GameCore.Systems.{MovementSystem, BroadcastSystem}
 
@@ -28,7 +28,6 @@ defmodule GameCore.Chunk do
   @default_tick_ms 50
   @default_speed 4.0
   @default_flush_ms 5_000
-  @default_idle_timeout_ms 5_000
 
   def start_link(opts) do
     {name, opts} = Keyword.pop(opts, :name)
@@ -135,7 +134,6 @@ defmodule GameCore.Chunk do
     auto_flush = Keyword.get(opts, :auto_flush, true)
     flush_ms = Keyword.get(opts, :flush_ms, @default_flush_ms)
     repo = Keyword.get(opts, :repo, GameCore.ChunkRepo.Null)
-    idle_timeout_ms = Keyword.get(opts, :idle_timeout_ms, @default_idle_timeout_ms)
 
     Process.flag(:trap_exit, true)
 
@@ -150,9 +148,7 @@ defmodule GameCore.Chunk do
       repo: repo,
       subscribers: [],
       tick_count: 0,
-      interests: MapSet.new(),
-      idle_timeout_ms: idle_timeout_ms,
-      idle_since: nil
+      lifecycle: ChunkLifecycle.new(Keyword.take(opts, [:idle_timeout_ms]))
     }
 
     if auto_tick, do: schedule_tick(tick_ms)
@@ -166,30 +162,8 @@ defmodule GameCore.Chunk do
   end
 
   def handle_call(:dev_status, _from, state) do
-    lifecycle =
-      if MapSet.size(state.interests) == 0 and state.idle_since != nil,
-        do: :idle_armed,
-        else: :hot
-
-    idle_ms_remaining =
-      case state.idle_since do
-        nil ->
-          nil
-
-        ts ->
-          elapsed = System.monotonic_time(:millisecond) - ts
-          max(state.idle_timeout_ms - elapsed, 0)
-      end
-
     entity_count = state.world.components |> Map.get(Position, %{}) |> map_size()
-
-    status = %{
-      lifecycle: lifecycle,
-      idle_ms_remaining: idle_ms_remaining,
-      entity_count: entity_count,
-      interest_count: MapSet.size(state.interests)
-    }
-
+    status = Map.put(ChunkLifecycle.dev_view(state.lifecycle), :entity_count, entity_count)
     {:reply, status, state}
   end
 
@@ -235,15 +209,11 @@ defmodule GameCore.Chunk do
   end
 
   def handle_call({:express_interest, pid}, _from, state) do
-    Process.monitor(pid)
-    interests = MapSet.put(state.interests, pid)
-    {:reply, :ok, %{state | interests: interests, idle_since: nil}}
+    {:reply, :ok, %{state | lifecycle: ChunkLifecycle.express(state.lifecycle, pid)}}
   end
 
   def handle_call({:release_interest, pid}, _from, state) do
-    interests = MapSet.delete(state.interests, pid)
-    state = %{state | interests: interests}
-    {:reply, :ok, maybe_arm_idle(state)}
+    {:reply, :ok, %{state | lifecycle: ChunkLifecycle.release(state.lifecycle, pid)}}
   end
 
   def handle_call({:migrate_in, eid, components}, _from, state) do
@@ -282,16 +252,13 @@ defmodule GameCore.Chunk do
   end
 
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    interests = MapSet.delete(state.interests, pid)
-    {:noreply, maybe_arm_idle(%{state | interests: interests})}
+    {:noreply, %{state | lifecycle: ChunkLifecycle.handle_down(state.lifecycle, pid)}}
   end
 
   def handle_info(:idle_check, state) do
-    if MapSet.size(state.interests) == 0 and state.idle_since != nil and
-         System.monotonic_time(:millisecond) - state.idle_since >= state.idle_timeout_ms do
-      {:stop, :normal, state}
-    else
-      {:noreply, state}
+    case ChunkLifecycle.check_idle(state.lifecycle) do
+      {:deactivate, _} -> {:stop, :normal, state}
+      {:keep, lc} -> {:noreply, %{state | lifecycle: lc}}
     end
   end
 
@@ -363,20 +330,6 @@ defmodule GameCore.Chunk do
 
   defp schedule_tick(tick_ms), do: Process.send_after(self(), :tick, tick_ms)
   defp schedule_flush(flush_ms), do: Process.send_after(self(), :flush_db, flush_ms)
-
-  defp maybe_arm_idle(state) do
-    cond do
-      MapSet.size(state.interests) > 0 ->
-        %{state | idle_since: nil}
-
-      state.idle_since == nil ->
-        Process.send_after(self(), :idle_check, max(state.idle_timeout_ms, 1))
-        %{state | idle_since: System.monotonic_time(:millisecond)}
-
-      true ->
-        state
-    end
-  end
 
   defp migrate_out(world, coord, repo) do
     positions = Map.get(world.components, Position, %{})

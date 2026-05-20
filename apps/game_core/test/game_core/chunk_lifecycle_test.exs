@@ -59,8 +59,7 @@ defmodule GameCore.ChunkLifecycleTest do
 
     # Give the chunk a moment to process the DOWN message.
     _ = :sys.get_state(pid)
-    state = :sys.get_state(pid)
-    assert MapSet.size(state.interests) == 0
+    assert Chunk.dev_status(pid).interest_count == 0
 
     Process.exit(pid, :shutdown)
   end

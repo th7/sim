@@ -53,7 +53,7 @@ defmodule GameCore.SessionLifecycleTest do
     # but with no Session interest, awaiting idle deactivation.
     minus2 = Chunks.whereis({-2, 0})
     assert is_pid(minus2)
-    refute MapSet.member?(:sys.get_state(minus2).interests, sess)
+    assert Chunk.dev_status(minus2).interest_count == 0
 
     # Drive a second migration further east.
     Session.on_migrated(sess, {3, 0})
@@ -63,7 +63,7 @@ defmodule GameCore.SessionLifecycleTest do
     minus1 = Chunks.whereis({-1, 0})
 
     if is_pid(minus1) do
-      refute MapSet.member?(:sys.get_state(minus1).interests, sess)
+      assert Chunk.dev_status(minus1).interest_count == 0
     end
 
     assert is_pid(Chunks.whereis({5, 0})), "chunk (5,0) should be activated on demand"
