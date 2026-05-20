@@ -9,11 +9,11 @@ defmodule GamePersistence.Schemas.Player do
   import Ecto.Changeset
 
   schema "players" do
-    field :username, :string
-    field :chunk_x, :integer, default: 0
-    field :chunk_y, :integer, default: 0
-    field :x, :float, default: 0.0
-    field :y, :float, default: 0.0
+    field(:username, :string)
+    field(:chunk_x, :integer, default: 0)
+    field(:chunk_y, :integer, default: 0)
+    field(:x, :float, default: 0.0)
+    field(:y, :float, default: 0.0)
 
     timestamps(type: :utc_datetime_usec)
   end

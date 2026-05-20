@@ -72,6 +72,7 @@ defmodule GameCore.ChunkMigrationTest do
        %{source: src, dest: dst} do
     :ok = Chunk.join(src, "alice")
     :ok = Chunk.set_intent(src, "alice", {1.0, 0.0})
+
     Enum.each(1..41, fn _ ->
       send(src, :tick)
       _ = :sys.get_state(src)

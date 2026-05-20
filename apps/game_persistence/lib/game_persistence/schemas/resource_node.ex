@@ -5,12 +5,12 @@ defmodule GamePersistence.Schemas.ResourceNode do
   import Ecto.Changeset
 
   schema "resource_nodes" do
-    field :chunk_x, :integer
-    field :chunk_y, :integer
-    field :type, :string
-    field :x, :float
-    field :y, :float
-    field :depleted_until, :utc_datetime_usec
+    field(:chunk_x, :integer)
+    field(:chunk_y, :integer)
+    field(:type, :string)
+    field(:x, :float)
+    field(:y, :float)
+    field(:depleted_until, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)
   end

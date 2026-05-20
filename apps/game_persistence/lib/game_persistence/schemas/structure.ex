@@ -5,13 +5,13 @@ defmodule GamePersistence.Schemas.Structure do
   import Ecto.Changeset
 
   schema "structures" do
-    field :chunk_x, :integer
-    field :chunk_y, :integer
-    field :owner_username, :string
-    field :type, :string
-    field :x, :float
-    field :y, :float
-    field :hp, :integer, default: 100
+    field(:chunk_x, :integer)
+    field(:chunk_y, :integer)
+    field(:owner_username, :string)
+    field(:type, :string)
+    field(:x, :float)
+    field(:y, :float)
+    field(:hp, :integer, default: 100)
 
     timestamps(type: :utc_datetime_usec)
   end
