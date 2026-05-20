@@ -15,7 +15,16 @@ defmodule GameCore.Chunk do
   on a periodic `flush_db` tick, and on chunk terminate.
   """
 
-  use GenServer
+  # `:transient` is load-bearing: a Chunk's idle deactivation is an
+  # intentional `:normal` exit (see ChunkLifecycle and CONTEXT.md). With
+  # the default `:permanent`, the DynamicSupervisor restarts every
+  # deactivated Chunk — and a single player moving one chunk releases
+  # interest on a whole column of (2 * radius + 1) chunks at once. They
+  # all idle out together, trip ChunkSupervisor's max_restarts, the
+  # supervisor crashes, the outer Supervisor resurrects an empty one,
+  # every live chunk dies, and every Session is stranded on a dead
+  # current_chunk — silently losing movement.
+  use GenServer, restart: :transient
 
   alias GameCore.{ChunkLifecycle, ChunkMigration, World}
   alias GameCore.Components.{Position, Velocity, Renderable, PlayerControlled}
