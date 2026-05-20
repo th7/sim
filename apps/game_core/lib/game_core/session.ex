@@ -16,9 +16,7 @@ defmodule GameCore.Session do
   # outlive the players they represent and conflict with reconnects.
   use GenServer, restart: :temporary
 
-  alias GameCore.{Chunk, Chunks, Sessions}
-
-  @default_warm_radius 2
+  alias GameCore.{Chunk, Chunks, Sessions, WarmSet}
 
   def start_link(opts) do
     username = Keyword.fetch!(opts, :username)
@@ -70,21 +68,26 @@ defmodule GameCore.Session do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
+    initial_chunk = Keyword.fetch!(opts, :initial_chunk)
+
+    warm_opts =
+      Keyword.take(opts, [:repo]) ++
+        case Keyword.fetch(opts, :warm_radius) do
+          {:ok, r} -> [radius: r]
+          :error -> []
+        end
+
+    # WarmSet.new/3 warms synchronously, so the Session is fully initialized
+    # before start_link/1 returns — see the moduledoc on `GameCore.WarmSet`.
+    warm = WarmSet.new(initial_chunk, self(), warm_opts)
+
     state = %{
       username: Keyword.fetch!(opts, :username),
-      current_chunk: Keyword.fetch!(opts, :initial_chunk),
-      repo: Keyword.get(opts, :repo, GameCore.ChunkRepo.Null),
-      warm_radius: Keyword.get(opts, :warm_radius, @default_warm_radius),
-      warm: MapSet.new()
+      current_chunk: initial_chunk,
+      warm: warm
     }
 
-    # Warm synchronously so the Session is fully initialized when start_link
-    # returns. If we deferred this to `handle_continue`, the warm-up could
-    # race a fast caller's termination — the original owner chunk might be
-    # gone by the time we try to express interest, causing us to spawn a
-    # fresh chunk under `ChunkSupervisor` that nobody is then responsible
-    # for cleaning up.
-    {:ok, sync_warm_set(state)}
+    {:ok, state}
   end
 
   @impl true
@@ -103,7 +106,7 @@ defmodule GameCore.Session do
 
   @impl true
   def handle_cast({:migrated, new_coord}, state) do
-    {:noreply, state |> Map.put(:current_chunk, new_coord) |> sync_warm_set()}
+    {:noreply, %{state | current_chunk: new_coord, warm: WarmSet.recenter(state.warm, new_coord)}}
   end
 
   @impl true
@@ -116,56 +119,12 @@ defmodule GameCore.Session do
 
   @impl true
   def terminate(_reason, state) do
-    for coord <- state.warm do
-      case Chunks.whereis(coord) do
-        pid when is_pid(pid) -> safe(fn -> Chunk.release_interest(pid, self()) end)
-        _ -> :ok
-      end
-    end
+    WarmSet.release_all(state.warm)
 
     # See the same comment in `GameCore.Chunk.terminate/2`.
     safe(fn -> Registry.unregister(Sessions, state.username) end)
 
     :ok
-  end
-
-  defp sync_warm_set(state) do
-    want = window_coords(state.current_chunk, state.warm_radius)
-    to_drop = MapSet.difference(state.warm, want)
-    to_add = MapSet.difference(want, state.warm)
-
-    for coord <- to_add, do: warm_up(coord, state.repo)
-
-    for coord <- to_drop do
-      case Chunks.whereis(coord) do
-        pid when is_pid(pid) -> safe(fn -> Chunk.release_interest(pid, self()) end)
-        _ -> :ok
-      end
-    end
-
-    %{state | warm: want}
-  end
-
-  # Race between a chunk's idle-deactivation and ensure_started: the lookup
-  # can see a pid that's already terminating. Retry once with a fresh start.
-  defp warm_up(coord, repo), do: warm_up(coord, repo, 2)
-
-  defp warm_up(_coord, _repo, 0), do: :ok
-
-  defp warm_up(coord, repo, retries) do
-    {:ok, pid} = Chunks.ensure_started(coord, repo)
-
-    try do
-      Chunk.express_interest(pid, self())
-    catch
-      :exit, _ -> warm_up(coord, repo, retries - 1)
-    end
-  end
-
-  defp window_coords({cx, cy}, radius) do
-    for dx <- -radius..radius, dy <- -radius..radius, into: MapSet.new() do
-      {cx + dx, cy + dy}
-    end
   end
 
   defp safe(fun) do

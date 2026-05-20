@@ -90,8 +90,10 @@ defmodule GameCore.Chunk do
   def subscribe(server, pid), do: GenServer.call(server, {:subscribe, pid})
 
   @doc """
-  Read-only snapshot of this Chunk's runtime state, for the dev-mode overlay.
-  Pure read — never mutates state, never blocks the gameplay tick.
+  Read-only diagnostic of this Chunk's runtime state — lifecycle, idle
+  countdown, entity count, interest count. Pure read; never mutates state
+  or blocks the gameplay tick. Used by the dev-mode overlay and by tests
+  inspecting Chunk lifecycle through the public interface.
   """
   @spec dev_status(GenServer.server()) :: %{
           lifecycle: :hot | :idle_armed,
@@ -101,15 +103,15 @@ defmodule GameCore.Chunk do
         }
   def dev_status(server), do: GenServer.call(server, :dev_status)
 
-  @doc """
-  Express interest in keeping this Chunk hot. The chunk monitors `pid`
-  and removes it from the interest set on `DOWN`. When the interest set
-  is empty for `idle_timeout_ms`, the chunk deactivates (final flush +
-  terminate). Phase 6's `GameCore.Session` is the typical caller.
-  """
+  # Interest tracking is the low-level mechanism behind `GameCore.WarmSet`.
+  # Callers wanting to keep a Chunk hot should construct a WarmSet rather
+  # than calling these directly; they are documented here for the WarmSet
+  # implementation and for Chunk-lifecycle tests.
+  @doc false
   @spec express_interest(GenServer.server(), pid()) :: :ok
   def express_interest(server, pid), do: GenServer.call(server, {:express_interest, pid})
 
+  @doc false
   @spec release_interest(GenServer.server(), pid()) :: :ok
   def release_interest(server, pid), do: GenServer.call(server, {:release_interest, pid})
 
@@ -164,9 +166,10 @@ defmodule GameCore.Chunk do
   end
 
   def handle_call(:dev_status, _from, state) do
-    lifecycle = if MapSet.size(state.interests) == 0 and state.idle_since != nil,
-                  do: :idle_armed,
-                  else: :hot
+    lifecycle =
+      if MapSet.size(state.interests) == 0 and state.idle_since != nil,
+        do: :idle_armed,
+        else: :hot
 
     idle_ms_remaining =
       case state.idle_since do
