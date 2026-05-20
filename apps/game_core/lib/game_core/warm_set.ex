@@ -14,7 +14,7 @@ defmodule GameCore.WarmSet do
   warm-up — get it for free.
   """
 
-  alias GameCore.{Chunk, Chunks}
+  alias GameCore.{Chunk, ChunkGeometry, Chunks}
 
   @default_radius 2
 
@@ -56,7 +56,7 @@ defmodule GameCore.WarmSet do
   """
   @spec recenter(t(), Chunk.coord()) :: t()
   def recenter(%__MODULE__{} = ws, new_center) do
-    want = window_coords(new_center, ws.radius)
+    want = ChunkGeometry.neighborhood(new_center, ws.radius)
     Enum.each(MapSet.difference(want, ws.members), &warm_up(&1, ws))
     Enum.each(MapSet.difference(ws.members, want), &cool_down(&1, ws))
     %{ws | center: new_center, members: want}
@@ -90,12 +90,6 @@ defmodule GameCore.WarmSet do
     case Chunks.whereis(coord) do
       pid when is_pid(pid) -> safe(fn -> Chunk.release_interest(pid, ws.holder) end)
       _ -> :ok
-    end
-  end
-
-  defp window_coords({cx, cy}, radius) do
-    for dx <- -radius..radius, dy <- -radius..radius, into: MapSet.new() do
-      {cx + dx, cy + dy}
     end
   end
 

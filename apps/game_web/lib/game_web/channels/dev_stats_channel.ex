@@ -10,7 +10,7 @@ defmodule GameWeb.DevStatsChannel do
 
   use GameWeb, :channel
 
-  alias GameCore.{Chunk, Chunks, Session, Sessions}
+  alias GameCore.{Chunk, ChunkGeometry, Chunks, Session, Sessions}
 
   @tick_ms 1_000
   @ring_radius 3
@@ -43,12 +43,10 @@ defmodule GameWeb.DevStatsChannel do
   defp around(username) do
     case Sessions.whereis(username) do
       pid when is_pid(pid) ->
-        {cx, cy} = Session.current_chunk(pid)
-
-        for dx <- -@ring_radius..@ring_radius,
-            dy <- -@ring_radius..@ring_radius do
-          entry_for({cx + dx, cy + dy})
-        end
+        pid
+        |> Session.current_chunk()
+        |> ChunkGeometry.neighborhood(@ring_radius)
+        |> Enum.map(&entry_for/1)
 
       _ ->
         []
