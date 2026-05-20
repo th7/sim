@@ -17,7 +17,7 @@ defmodule GameCore.Chunk do
 
   use GenServer
 
-  alias GameCore.{ChunkLifecycle, World}
+  alias GameCore.{ChunkLifecycle, ChunkMigration, World}
   alias GameCore.Components.{Position, Velocity, Renderable, PlayerControlled}
   alias GameCore.Systems.{MovementSystem, BroadcastSystem}
 
@@ -114,12 +114,13 @@ defmodule GameCore.Chunk do
   @spec release_interest(GenServer.server(), pid()) :: :ok
   def release_interest(server, pid), do: GenServer.call(server, {:release_interest, pid})
 
-  @doc """
-  Migration handshake: a source Chunk hands an entity off to its neighbor.
-  The destination adds every passed component and triggers an immediate
-  out-of-cycle snapshot so observers see the entity in its new chunk
-  without waiting for the next broadcast tick.
-  """
+  # Destination side of the Boundary crossing handshake. Adds every passed
+  # component and triggers an out-of-cycle snapshot so observers see the
+  # entity in its new chunk without waiting for the next broadcast tick.
+  # Callers handing off entities between chunks should go through
+  # `GameCore.ChunkMigration.cross/5`; this is its low-level destination
+  # call.
+  @doc false
   @spec migrate_in(GenServer.server(), GameCore.World.eid(), %{module() => any()}) :: :ok
   def migrate_in(server, eid, components) do
     GenServer.call(server, {:migrate_in, eid, components})
@@ -340,14 +341,7 @@ defmodule GameCore.Chunk do
           {w, migrated?}
 
         dest_coord ->
-          {:ok, pid} = GameCore.Chunks.ensure_started(dest_coord, repo)
-          :ok = migrate_in(pid, eid, entity_components(w, eid))
-
-          case GameCore.Sessions.whereis(eid) do
-            spid when is_pid(spid) -> GameCore.Session.on_migrated(spid, dest_coord)
-            _ -> :ok
-          end
-
+          :ok = ChunkMigration.cross(eid, coord, dest_coord, entity_components(w, eid), repo)
           {World.remove_entity(w, eid), true}
       end
     end)

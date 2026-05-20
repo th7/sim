@@ -1,12 +1,18 @@
 defmodule GameCore.Session do
   @moduledoc """
-  Per-Player GenServer that owns the warm-set of Chunks around the Player.
-  Started as a side-car by the owner channel on join; stopped on channel
-  terminate. Releases all warm-set interests on terminate; Chunks
-  deactivate themselves shortly after their last interested pid disappears.
+  Per-Player GenServer that owns the Player's chunk-membership lifecycle:
+  the Warm set of Chunks around the Player, the current_chunk pointer
+  (which Chunk owns the Player's entity right now), and final cleanup on
+  disconnect. Started as a side-car by the owner channel on join; stopped
+  on channel terminate.
 
-  The Session is also notified when the Player's entity migrates between
-  Chunks (via `on_migrated/2`) so it can pan its warm window to follow.
+  On terminate the Session does the entity's `Chunk.leave` on whichever
+  Chunk currently owns it, then releases all Warm set interests. The
+  owner channel is just a transport — it stops the Session and lets the
+  Session do the world-state cleanup.
+
+  The Session is also notified when the Player's entity crosses a Chunk
+  boundary (via `relocate/2`) so it can pan its Warm set to follow.
   """
 
   # A Session's lifetime is bounded by its owning channel — when the channel
@@ -53,9 +59,12 @@ defmodule GameCore.Session do
     end
   end
 
-  @doc "Called by a Chunk after it migrates a Player's entity to a neighbor."
-  @spec on_migrated(GenServer.server(), GameCore.Chunk.coord()) :: :ok
-  def on_migrated(server, new_coord), do: GenServer.cast(server, {:migrated, new_coord})
+  @doc """
+  Update the Session's record of where the Player's entity lives now.
+  Called after a boundary crossing; pans the Warm set to the new center.
+  """
+  @spec relocate(GenServer.server(), GameCore.Chunk.coord()) :: :ok
+  def relocate(server, new_coord), do: GenServer.cast(server, {:relocate, new_coord})
 
   @spec current_chunk(GenServer.server()) :: GameCore.Chunk.coord()
   def current_chunk(server), do: GenServer.call(server, :current_chunk)
@@ -105,7 +114,7 @@ defmodule GameCore.Session do
   end
 
   @impl true
-  def handle_cast({:migrated, new_coord}, state) do
+  def handle_cast({:relocate, new_coord}, state) do
     {:noreply, %{state | current_chunk: new_coord, warm: WarmSet.recenter(state.warm, new_coord)}}
   end
 
@@ -119,6 +128,14 @@ defmodule GameCore.Session do
 
   @impl true
   def terminate(_reason, state) do
+    # Leave whichever Chunk currently owns the entity. Done before
+    # WarmSet.release_all so the owning Chunk is still hot (no race against
+    # idle-deactivation).
+    case Chunks.whereis(state.current_chunk) do
+      pid when is_pid(pid) -> safe(fn -> Chunk.leave(pid, state.username) end)
+      _ -> :ok
+    end
+
     WarmSet.release_all(state.warm)
 
     # See the same comment in `GameCore.Chunk.terminate/2`.

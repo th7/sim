@@ -95,32 +95,14 @@ defmodule GameWeb.ChunkChannel do
   end
 
   @impl true
-  def terminate(_reason, %{assigns: %{coord: coord, username: username, role: "owner"} = a}) do
-    # Leave whichever chunk currently owns the entity (may have migrated).
-    current_coord =
-      case a[:session_pid] do
-        nil -> coord
-        spid -> if Process.alive?(spid), do: try_current(spid, coord), else: coord
-      end
-
-    case Chunks.whereis(current_coord) do
-      pid when is_pid(pid) -> safe(fn -> Chunk.leave(pid, username) end)
-      _ -> :ok
-    end
-
-    if pid = a[:session_pid], do: safe(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+  def terminate(_reason, %{assigns: %{role: "owner", session_pid: spid}}) when is_pid(spid) do
+    # Session owns the player's chunk membership; stopping it triggers
+    # Chunk.leave on whichever Chunk currently owns the entity.
+    if Process.alive?(spid), do: safe(fn -> GenServer.stop(spid) end)
     :ok
   end
 
   def terminate(_reason, _socket), do: :ok
-
-  defp try_current(spid, fallback) do
-    try do
-      GameCore.Session.current_chunk(spid)
-    catch
-      _, _ -> fallback
-    end
-  end
 
   defp safe(fun) do
     fun.()

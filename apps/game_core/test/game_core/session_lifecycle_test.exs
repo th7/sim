@@ -45,7 +45,7 @@ defmodule GameCore.SessionLifecycleTest do
     refute Chunks.whereis({3, 0})
 
     # Migrate east; Session pans the warm window.
-    Session.on_migrated(sess, {1, 0})
+    Session.relocate(sess, {1, 0})
     _ = :sys.get_state(sess)
 
     assert is_pid(Chunks.whereis({3, 0})), "chunk (3,0) should be activated on demand"
@@ -56,7 +56,7 @@ defmodule GameCore.SessionLifecycleTest do
     assert Chunk.dev_status(minus2).interest_count == 0
 
     # Drive a second migration further east.
-    Session.on_migrated(sess, {3, 0})
+    Session.relocate(sess, {3, 0})
     _ = :sys.get_state(sess)
 
     # Now even (-1,0) should be released from the Session's warm set.
@@ -69,6 +69,36 @@ defmodule GameCore.SessionLifecycleTest do
     assert is_pid(Chunks.whereis({5, 0})), "chunk (5,0) should be activated on demand"
 
     Process.exit(sess, :shutdown)
+  end
+
+  test "Session.terminate leaves the post-relocate Chunk, not the initial one" do
+    {:ok, src} = Chunks.ensure_started({0, 0})
+    {:ok, dst} = Chunks.ensure_started({1, 0})
+
+    # Entity has already crossed into dst — we pre-place it there.
+    Chunk.join(dst, "alice")
+    assert Map.has_key?(Chunk.snapshot(dst).players, "alice")
+
+    {:ok, sess} =
+      Session.start_link(
+        username: "alice",
+        initial_chunk: {0, 0},
+        warm_radius: 0,
+        repo: GameCore.ChunkRepo.Null
+      )
+
+    # Notify the session of the boundary crossing.
+    Session.relocate(sess, {1, 0})
+    _ = :sys.get_state(sess)
+
+    ref = Process.monitor(sess)
+    GenServer.stop(sess)
+    assert_receive {:DOWN, ^ref, :process, ^sess, _}
+
+    # The leave fired against dst (the current chunk), not src.
+    refute Map.has_key?(Chunk.snapshot(dst).players, "alice")
+    # src never had alice, so its player set is independent.
+    refute Map.has_key?(Chunk.snapshot(src).players, "alice")
   end
 
   test "a chunk with no interested sessions deactivates within the idle window" do

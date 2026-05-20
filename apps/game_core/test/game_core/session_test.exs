@@ -34,7 +34,7 @@ defmodule GameCore.SessionTest do
 
     _ = :sys.get_state(sess)
 
-    Session.on_migrated(sess, {2, 0})
+    Session.relocate(sess, {2, 0})
     _ = :sys.get_state(sess)
 
     # Chunks (-1, *) should no longer be warm; (3, *) should now be.

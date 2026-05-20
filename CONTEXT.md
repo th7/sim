@@ -42,6 +42,10 @@ The transition of a **Chunk** from cold (state-on-disk-only) to hot (live GenSer
 **Chunk deactivation**:
 The reverse — snapshot the live state to durable storage and terminate the GenServer. Triggered by sustained absence of players.
 
+**Boundary crossing**:
+A **Player**'s entity exits the bounds of its owning **Chunk** and enters a neighbor. The entity is handed off from the source's process to the destination's; the Player's session updates its **Warm set** to the new center; the entity continues in the destination process on the next tick.
+_Avoid_: Migration (an implementation term — `ChunkMigration` is the module that performs the handoff; the event itself is a boundary crossing), chunk transfer, hop.
+
 **Warm set**:
 The set of **Chunks** a connected **Player**'s session keeps hot on their behalf — currently the 5×5 grid centered on the **Chunk** the Player occupies. A **Chunk** stays hot as long as at least one session has it in its warm set.
 _Avoid_: Warm zone, warm radius (the radius is a parameter; the set is the concept).
