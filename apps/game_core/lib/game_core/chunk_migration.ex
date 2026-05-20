@@ -8,10 +8,6 @@ defmodule GameCore.ChunkMigration do
   the destination Chunk is hot, performs the synchronous handoff, and
   notifies the Player's Session so its Warm set pans to follow. The
   source then removes the entity from its own world.
-
-  Phase 7 (distributed BEAM) is the natural place to add cross-node
-  tracing and any retry policy around the synchronous handoff — both
-  fit at this seam.
   """
 
   alias GameCore.{Chunk, Chunks, Session, Sessions}

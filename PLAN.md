@@ -2,7 +2,7 @@
 
 Build order for the game. Each phase ends in something runnable and demonstrable. See `CONTEXT.md` for domain language.
 
-The plan is ordered to push *uncertainty* forward — the distributed-systems mechanics (migration, lazy lifecycle, distributed registry) are validated *before* gameplay content is built on top, so they can't quietly break content later.
+The plan is ordered to push *uncertainty* forward — the chunk-locality mechanics (boundary crossing, lazy lifecycle) are validated *before* gameplay content is built on top, so they can't quietly break content later. Cross-node distribution is deliberately *not* in v1; see the Deferred section for why.
 
 ## Phase 0 — Scaffolding
 
@@ -111,19 +111,9 @@ The plan is ordered to push *uncertainty* forward — the distributed-systems me
 
 **Done when**: toggle dev mode in a running game; the 7×7 grid around your Player is colored by lifecycle, bordered by relationship, and labeled with `{cx, cy}`. Walk away from a chunk and watch its fill turn yellow with a shrinking bar, then disappear when it deactivates. HUD numbers stay coherent with the world.
 
-## Phase 7 — Distributed BEAM
+## Phase 7 — Distributed BEAM (deferred)
 
-**Goal**: chunks distributed across multiple BEAM nodes.
-
-- Add `libcluster` with the gossip strategy for local dev (3 nodes on one machine)
-- Swap `Registry` for `Horde.Registry`
-- Swap `DynamicSupervisor` for `Horde.DynamicSupervisor`
-- Swap `Phoenix.PubSub` adapter to PG2
-- Chunk spawning chooses a node via Horde's distribution strategy (consistent hashing on `{chunk_x, chunk_y}`)
-- Migration handshake now potentially crosses nodes — the existing GenServer call works transparently but latency varies; add a tracing span around `migrate_in`
-- Netsplit handling: accept that during a split, a Chunk may run on both sides. Document. Don't fix in v1.
-
-**Done when**: run 3 BEAM nodes locally, players connect to any of them, can walk across chunks owned by different nodes without noticing.
+Originally planned as the cross-node distribution layer; deferred during the Phase 6.5 → Phase 8 transition. See the Deferred section for the rationale. The phase number is preserved (rather than renumbering Phase 8/9) so existing commits and code references stay legible.
 
 ## Phase 8 — Gameplay slice: gathering and building
 
@@ -154,6 +144,7 @@ The plan is ordered to push *uncertainty* forward — the distributed-systems me
 
 These are deliberately not in v1 — record them here so they're not forgotten:
 
+- **Distributed BEAM** (former Phase 7). v1 runs on a single BEAM node. Realistic capacity for this game (low-thousands concurrent at the optimistic end) fits comfortably on one beefy box, and the legitimate reasons to ever go multi-node — fault tolerance, geographic distribution, memory bound — are all out of v1 scope. The work that *was* in Phase 7 (libcluster + Horde swap + cross-node tracing) is a costly architectural exercise with no realistic deployment target until one of those reasons becomes concrete. If/when picked up, the `Registry` / `DynamicSupervisor` APIs in `GameCore` are shaped to be Horde-compatible, and two sub-decisions need to be made then: (1) whether snapshot fan-out stays direct-send (`send/2` to subscriber pids, transparent cross-node) or moves to `Phoenix.PubSub` for uniform topic semantics; (2) whether the player's Session is found via a cluster-aware registry or via a Session-pid component carried with the entity through `ChunkMigration`. Static cluster only — node-death tolerance is its own further step.
 - Auth, anti-cheat, public exposure, ops/observability
 - Player housing, persistent dungeons, guild halls
 - PvP (combat model exists, but no PvP-specific rules / safe zones / loot drops on death)
