@@ -98,6 +98,19 @@ The plan is ordered to push *uncertainty* forward — the distributed-systems me
 
 **Done when**: world feels infinite. Walk in one direction for 5 minutes — Chunks ahead activate, Chunks behind deactivate. Server memory stays flat.
 
+## Phase 6.5 — Dev mode
+
+**Goal**: a toggleable per-client overlay that visualizes Chunk lifecycle, the **Warm set**, and the **View window**, plus a small numeric HUD.
+
+- Activation: URL param `?dev=1` sets initial state; backtick key toggles at runtime. When off, the `dev:stats` Channel is not joined and the overlay group is hidden.
+- Server: new `dev:stats` Phoenix Channel. New `Chunk.dev_status/1` returning `{lifecycle, idle_ms_remaining, entity_count, interest_count}` — pure read, no behavior change on the gameplay tick. New `GameCore.Sessions.count/0` helper.
+- Stats tick: channel handler runs a 1 Hz timer per dev client; resolves the Player's current Chunk via `Sessions.whereis`/`Session.current_chunk`, walks the 7×7 around it, pulls `dev_status` from every hot Chunk in the region, and combines with `Registry.count(GameCore.Chunks)` + `Sessions.count()`. One `stats` event per tick.
+- Client overlay: a `THREE.Group` of ground-plane fills + borders + coord-label sprites. Fill encodes lifecycle (hot / idle-armed with shrinking bar / cold); border encodes the client's relationship (owner thick / view-window solid / warm-only thin / outside-warm dashed). Y-stack: GridHelper @ 0, fills @ 0.005, borders @ 0.01, labels @ 0.02.
+- Client HUD: HTML `<div id="dev-hud">` in the top-left, monospace, listing username / world pos / chunk / nearby / active / total. Nearby updates at snapshot rate (10 Hz) from the client's existing merged `channelSnapshots`; the global counts update from the 1 Hz `stats` push.
+- Tests: ExUnit covers `Chunk.dev_status/1` shape and the `dev:stats` Channel join/push. Playwright `phase6_5-devmode.spec.ts` toggles dev mode on, asserts the HUD appears, asserts `nearby` matches `__game.players()` length, asserts the `devOverlay` group is present in the scene.
+
+**Done when**: toggle dev mode in a running game; the 7×7 grid around your Player is colored by lifecycle, bordered by relationship, and labeled with `{cx, cy}`. Walk away from a chunk and watch its fill turn yellow with a shrinking bar, then disappear when it deactivates. HUD numbers stay coherent with the world.
+
 ## Phase 7 — Distributed BEAM
 
 **Goal**: chunks distributed across multiple BEAM nodes.

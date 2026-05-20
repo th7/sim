@@ -33,7 +33,42 @@ defmodule GameCore.Chunk do
   def start_link(opts) do
     {name, opts} = Keyword.pop(opts, :name)
     gen_opts = if name, do: [name: name], else: []
-    GenServer.start_link(__MODULE__, opts, gen_opts)
+    start_with_retry(opts, gen_opts, 50)
+  end
+
+  # Starting a fresh Chunk under the same `:via` name immediately after the
+  # prior owner has died — or is mid-terminate — can race the Registry's
+  # asynchronous DOWN handling. If the registered pid is already dead, wait
+  # briefly for Registry to clear and retry. If it's still alive but about
+  # to die (e.g. mid-terminate from `Supervisor.terminate_child`), monitor
+  # it: the moment it exits, retry. Give up only when the deadline elapses
+  # with the name still held.
+  defp start_with_retry(opts, gen_opts, retries_left) do
+    case GenServer.start_link(__MODULE__, opts, gen_opts) do
+      {:error, {:already_started, pid}} when retries_left > 0 ->
+        wait_for_clear(pid, 50)
+        start_with_retry(opts, gen_opts, retries_left - 1)
+
+      result ->
+        result
+    end
+  end
+
+  defp wait_for_clear(pid, timeout_ms) do
+    if Process.alive?(pid) do
+      ref = Process.monitor(pid)
+
+      receive do
+        {:DOWN, ^ref, :process, _, _} -> :ok
+      after
+        timeout_ms ->
+          Process.demonitor(ref, [:flush])
+          :timeout
+      end
+    else
+      Process.sleep(2)
+      :ok
+    end
   end
 
   @spec snapshot(GenServer.server()) :: BroadcastSystem.snapshot()
@@ -53,6 +88,18 @@ defmodule GameCore.Chunk do
 
   @spec subscribe(GenServer.server(), pid()) :: :ok
   def subscribe(server, pid), do: GenServer.call(server, {:subscribe, pid})
+
+  @doc """
+  Read-only snapshot of this Chunk's runtime state, for the dev-mode overlay.
+  Pure read — never mutates state, never blocks the gameplay tick.
+  """
+  @spec dev_status(GenServer.server()) :: %{
+          lifecycle: :hot | :idle_armed,
+          idle_ms_remaining: nil | non_neg_integer(),
+          entity_count: non_neg_integer(),
+          interest_count: non_neg_integer()
+        }
+  def dev_status(server), do: GenServer.call(server, :dev_status)
 
   @doc """
   Express interest in keeping this Chunk hot. The chunk monitors `pid`
@@ -114,6 +161,33 @@ defmodule GameCore.Chunk do
   @impl true
   def handle_call(:snapshot, _from, state) do
     {:reply, BroadcastSystem.snapshot(state.world), state}
+  end
+
+  def handle_call(:dev_status, _from, state) do
+    lifecycle = if MapSet.size(state.interests) == 0 and state.idle_since != nil,
+                  do: :idle_armed,
+                  else: :hot
+
+    idle_ms_remaining =
+      case state.idle_since do
+        nil ->
+          nil
+
+        ts ->
+          elapsed = System.monotonic_time(:millisecond) - ts
+          max(state.idle_timeout_ms - elapsed, 0)
+      end
+
+    entity_count = state.world.components |> Map.get(Position, %{}) |> map_size()
+
+    status = %{
+      lifecycle: lifecycle,
+      idle_ms_remaining: idle_ms_remaining,
+      entity_count: entity_count,
+      interest_count: MapSet.size(state.interests)
+    }
+
+    {:reply, status, state}
   end
 
   def handle_call({:join, username}, _from, state) do
@@ -228,6 +302,15 @@ defmodule GameCore.Chunk do
     # an Agent it owns has stopped). Swallow any error so we still terminate.
     try do
       flush_all(state)
+    catch
+      _, _ -> :ok
+    end
+
+    # Drop our Registry entry synchronously: the partition's DOWN handler is
+    # async, so without this a successor `start_link` under the same `:via`
+    # name can collide with our dead pid for a short window after we exit.
+    try do
+      Registry.unregister(GameCore.Chunks, state.coord)
     catch
       _, _ -> :ok
     end

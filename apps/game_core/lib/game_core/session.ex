@@ -9,7 +9,12 @@ defmodule GameCore.Session do
   Chunks (via `on_migrated/2`) so it can pan its warm window to follow.
   """
 
-  use GenServer
+  # A Session's lifetime is bounded by its owning channel — when the channel
+  # dies, the Session is supposed to follow it down. `restart: :temporary`
+  # tells `SessionSupervisor` not to bring a Session back after it exits;
+  # otherwise the default (`:permanent`) would spawn phantom Sessions that
+  # outlive the players they represent and conflict with reconnects.
+  use GenServer, restart: :temporary
 
   alias GameCore.{Chunk, Chunks, Sessions}
 
@@ -17,7 +22,37 @@ defmodule GameCore.Session do
 
   def start_link(opts) do
     username = Keyword.fetch!(opts, :username)
-    GenServer.start_link(__MODULE__, opts, name: Sessions.via(username))
+    start_with_retry(opts, [name: Sessions.via(username)], 50)
+  end
+
+  # Same Registry-DOWN race as `Chunk.start_link/1` — see that module for the
+  # explanation.
+  defp start_with_retry(opts, gen_opts, retries_left) do
+    case GenServer.start_link(__MODULE__, opts, gen_opts) do
+      {:error, {:already_started, pid}} when retries_left > 0 ->
+        wait_for_clear(pid, 50)
+        start_with_retry(opts, gen_opts, retries_left - 1)
+
+      result ->
+        result
+    end
+  end
+
+  defp wait_for_clear(pid, timeout_ms) do
+    if Process.alive?(pid) do
+      ref = Process.monitor(pid)
+
+      receive do
+        {:DOWN, ^ref, :process, _, _} -> :ok
+      after
+        timeout_ms ->
+          Process.demonitor(ref, [:flush])
+          :timeout
+      end
+    else
+      Process.sleep(2)
+      :ok
+    end
   end
 
   @doc "Called by a Chunk after it migrates a Player's entity to a neighbor."
@@ -43,11 +78,14 @@ defmodule GameCore.Session do
       warm: MapSet.new()
     }
 
-    {:ok, state, {:continue, :warm_up}}
+    # Warm synchronously so the Session is fully initialized when start_link
+    # returns. If we deferred this to `handle_continue`, the warm-up could
+    # race a fast caller's termination — the original owner chunk might be
+    # gone by the time we try to express interest, causing us to spawn a
+    # fresh chunk under `ChunkSupervisor` that nobody is then responsible
+    # for cleaning up.
+    {:ok, sync_warm_set(state)}
   end
-
-  @impl true
-  def handle_continue(:warm_up, state), do: {:noreply, sync_warm_set(state)}
 
   @impl true
   def handle_call(:current_chunk, _from, state) do
@@ -69,6 +107,14 @@ defmodule GameCore.Session do
   end
 
   @impl true
+  def handle_info({:EXIT, _from, _reason}, state) do
+    # The owner channel linked to us and has exited — Session lifetime is
+    # bounded by the channel's, so follow it down. `terminate/2` will run
+    # and release warm-set interests + deregister from Sessions Registry.
+    {:stop, :normal, state}
+  end
+
+  @impl true
   def terminate(_reason, state) do
     for coord <- state.warm do
       case Chunks.whereis(coord) do
@@ -76,6 +122,9 @@ defmodule GameCore.Session do
         _ -> :ok
       end
     end
+
+    # See the same comment in `GameCore.Chunk.terminate/2`.
+    safe(fn -> Registry.unregister(Sessions, state.username) end)
 
     :ok
   end

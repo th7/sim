@@ -42,6 +42,14 @@ The transition of a **Chunk** from cold (state-on-disk-only) to hot (live GenSer
 **Chunk deactivation**:
 The reverse — snapshot the live state to durable storage and terminate the GenServer. Triggered by sustained absence of players.
 
+**Warm set**:
+The set of **Chunks** a connected **Player**'s session keeps hot on their behalf — currently the 5×5 grid centered on the **Chunk** the Player occupies. A **Chunk** stays hot as long as at least one session has it in its warm set.
+_Avoid_: Warm zone, warm radius (the radius is a parameter; the set is the concept).
+
+**View window**:
+The set of **Chunks** a connected client subscribes to for snapshot streams — currently the 3×3 grid centered on the **Chunk** the Player occupies. Strictly smaller than the **Warm set**; the outer ring of the warm set is pre-activated to hide chunk-activation latency when the Player crosses a boundary into it.
+_Avoid_: Visible chunks, subscription window, AOI (AOI is the general concept; the view window is our specific implementation).
+
 ## Relationships
 
 - A **World** is composed of one **Overworld** and zero-or-more live **Instances**
@@ -53,6 +61,8 @@ The reverse — snapshot the live state to durable storage and terminate the Gen
 - A **Chunk** holds zero-or-more **Resource nodes** and zero-or-more **Structures**
 - A **Structure** belongs to the **Chunk** it sits in; ownership is per-Structure (a Player owns the Structure)
 - A **Chunk** is either hot (running) or cold (state in durable storage only)
+- Each connected **Player** has a **Warm set** (kept hot) and a **View window** (snapshots subscribed); the View window is a strict subset of the Warm set
+- A **Chunk** stays hot while it is in any session's **Warm set**; **Chunk deactivation** fires after the last interested session releases it
 
 ## Example dialogue
 

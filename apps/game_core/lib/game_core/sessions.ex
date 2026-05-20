@@ -15,4 +15,8 @@ defmodule GameCore.Sessions do
       [] -> nil
     end
   end
+
+  @doc "Number of currently running Sessions across the world."
+  @spec count() :: non_neg_integer()
+  def count, do: Registry.count(@registry)
 end

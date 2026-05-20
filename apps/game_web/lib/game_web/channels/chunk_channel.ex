@@ -46,6 +46,8 @@ defmodule GameWeb.ChunkChannel do
 
     case Sessions.whereis(username) do
       pid when is_pid(pid) ->
+        # Existing reconnect: tie our lifetime to it too.
+        Process.link(pid)
         assign(socket, :session_pid, pid)
 
       nil ->
@@ -57,6 +59,12 @@ defmodule GameWeb.ChunkChannel do
             warm_radius: warm_radius
           )
 
+        # Linking ensures the Session terminates synchronously with the
+        # owner channel — without this the channel's `terminate/2` (which
+        # GenServer.stops the Session) might not run promptly enough on
+        # abrupt channel exits (e.g. a connection drop), leaving the
+        # Session — and the Chunks it warmed — alive past the channel.
+        Process.link(pid)
         assign(socket, :session_pid, pid)
     end
   end
