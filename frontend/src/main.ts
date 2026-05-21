@@ -2,10 +2,48 @@ import * as THREE from 'three';
 import { Socket, type Channel } from 'phoenix';
 
 type PlayerPos = { x: number; y: number };
-type Snapshot = { players: Record<string, PlayerPos> };
+type ResourceNode = { type: string; x: number; y: number; depleted: boolean };
+type StructureEntry = { type: string; x: number; y: number; hp: number; owner: string };
+// Server snapshots carry positions in **sub-units** (1 world unit = 1000
+// sub-units); we divide at the channel boundary so the rest of the
+// frontend works in world-unit floats for Three.js.
+type WireSnapshot = {
+  players: Record<string, { x: number; y: number }>;
+  resource_nodes: Record<string, { type: string; x: number; y: number; depleted: boolean }>;
+  structures: Record<string, { type: string; x: number; y: number; hp: number; owner: string }>;
+};
+type Snapshot = {
+  players: Record<string, PlayerPos>;
+  resource_nodes: Record<string, ResourceNode>;
+  structures: Record<string, StructureEntry>;
+};
 type Coord = readonly [number, number];
+type Inventory = Record<string, number>;
 
+const SUB_UNITS_PER_UNIT = 1000;
 const CHUNK_SIZE = 16;
+const INTERACT_RANGE = 1.0;
+const WALL_COST = 5;
+const SUB = SUB_UNITS_PER_UNIT;
+
+function fromSubUnits(snap: WireSnapshot): Snapshot {
+  const players: Record<string, PlayerPos> = {};
+  for (const [name, p] of Object.entries(snap.players ?? {})) {
+    players[name] = { x: p.x / SUB, y: p.y / SUB };
+  }
+
+  const resource_nodes: Record<string, ResourceNode> = {};
+  for (const [id, n] of Object.entries(snap.resource_nodes ?? {})) {
+    resource_nodes[id] = { type: n.type, x: n.x / SUB, y: n.y / SUB, depleted: n.depleted };
+  }
+
+  const structures: Record<string, StructureEntry> = {};
+  for (const [id, s] of Object.entries(snap.structures ?? {})) {
+    structures[id] = { type: s.type, x: s.x / SUB, y: s.y / SUB, hp: s.hp, owner: s.owner };
+  }
+
+  return { players, resource_nodes, structures };
+}
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const urlParams = new URLSearchParams(window.location.search);
@@ -66,6 +104,14 @@ function colorFor(name: string): number {
 
 // One snapshot map per subscribed chunk. The rendered set is the union.
 const channelSnapshots = new Map<string, Map<string, PlayerPos>>();
+const channelNodes = new Map<string, Map<string, ResourceNode>>();
+const channelStructures = new Map<string, Map<string, StructureEntry>>();
+const nodeMeshes = new Map<string, THREE.Mesh>();
+const structureMeshes = new Map<string, THREE.Mesh>();
+
+const NODE_GATHERABLE_COLOR = 0x2e7d32;
+const NODE_DEPLETED_COLOR = 0x6d4c41;
+const WALL_COLOR = 0x90a4ae;
 
 function updateRenderedFromMerge(): void {
   const union = new Map<string, PlayerPos>();
@@ -90,10 +136,76 @@ function updateRenderedFromMerge(): void {
       playerMeshes.delete(name);
     }
   }
+
+  // Resource nodes (trees + stumps).
+  const nodeUnion = new Map<string, ResourceNode>();
+  for (const m of channelNodes.values()) {
+    for (const [id, n] of m) nodeUnion.set(id, n);
+  }
+  for (const [id, n] of nodeUnion) {
+    let mesh = nodeMeshes.get(id);
+    if (!mesh) {
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.8, n.depleted ? 0.2 : 1.5, 0.8),
+        new THREE.MeshBasicMaterial({
+          color: n.depleted ? NODE_DEPLETED_COLOR : NODE_GATHERABLE_COLOR,
+        }),
+      );
+      mesh.userData = { kind: 'node', id };
+      scene.add(mesh);
+      nodeMeshes.set(id, mesh);
+    } else {
+      const mat = mesh.material as THREE.MeshBasicMaterial;
+      mat.color.setHex(n.depleted ? NODE_DEPLETED_COLOR : NODE_GATHERABLE_COLOR);
+      const h = n.depleted ? 0.2 : 1.5;
+      mesh.geometry.dispose();
+      mesh.geometry = new THREE.BoxGeometry(0.8, h, 0.8);
+    }
+    const h = n.depleted ? 0.2 : 1.5;
+    mesh.position.set(n.x, h / 2, n.y);
+    mesh.userData.depleted = n.depleted;
+    mesh.userData.x = n.x;
+    mesh.userData.y = n.y;
+  }
+  for (const [id, mesh] of nodeMeshes) {
+    if (!nodeUnion.has(id)) {
+      scene.remove(mesh);
+      nodeMeshes.delete(id);
+    }
+  }
+
+  // Structures (walls).
+  const structUnion = new Map<string, StructureEntry>();
+  for (const m of channelStructures.values()) {
+    for (const [id, s] of m) structUnion.set(id, s);
+  }
+  for (const [id, s] of structUnion) {
+    let mesh = structureMeshes.get(id);
+    if (!mesh) {
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.9, 1, 0.9),
+        new THREE.MeshBasicMaterial({ color: WALL_COLOR }),
+      );
+      mesh.userData = { kind: 'structure', id };
+      scene.add(mesh);
+      structureMeshes.set(id, mesh);
+    }
+    mesh.position.set(s.x, 0.5, s.y);
+    mesh.userData.x = s.x;
+    mesh.userData.y = s.y;
+  }
+  for (const [id, mesh] of structureMeshes) {
+    if (!structUnion.has(id)) {
+      scene.remove(mesh);
+      structureMeshes.delete(id);
+    }
+  }
 }
 
 function ingestChunkSnapshot(key: string, snap: Snapshot): void {
   channelSnapshots.set(key, new Map(Object.entries(snap.players)));
+  channelNodes.set(key, new Map(Object.entries(snap.resource_nodes)));
+  channelStructures.set(key, new Map(Object.entries(snap.structures)));
 
   // The local cube may have migrated to a different chunk than it joined
   // through; follow it wherever the server reports it.
@@ -133,6 +245,8 @@ function maybeShiftWindow({ x, y }: PlayerPos): void {
       ch.leave();
       channels.delete(k);
       channelSnapshots.delete(k);
+      channelNodes.delete(k);
+      channelStructures.delete(k);
     }
   }
 
@@ -146,6 +260,33 @@ function maybeShiftWindow({ x, y }: PlayerPos): void {
   windowCenter = newCenter;
 }
 
+let ownInventory: Inventory = {};
+
+const invHudEl = document.createElement('div');
+invHudEl.id = 'inv-hud';
+Object.assign(invHudEl.style, {
+  position: 'fixed',
+  top: '8px',
+  right: '8px',
+  padding: '6px 10px',
+  background: 'rgba(0, 0, 0, 0.6)',
+  color: '#eee',
+  font: '12px ui-monospace, monospace',
+  whiteSpace: 'pre',
+  pointerEvents: 'none',
+  zIndex: '5',
+});
+document.body.appendChild(invHudEl);
+
+function refreshHudInventory(): void {
+  const lines = Object.entries(ownInventory)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${k.padEnd(8)} ${n}`);
+  invHudEl.textContent = lines.length ? lines.join('\n') : '(empty)';
+}
+
+refreshHudInventory();
+
 (window as unknown as { __game: unknown }).__game = {
   username,
   homeChunk,
@@ -155,6 +296,35 @@ function maybeShiftWindow({ x, y }: PlayerPos): void {
       out[name] = { x: mesh.position.x, y: mesh.position.z };
     }
     return out;
+  },
+  inventory(): Inventory {
+    return { ...ownInventory };
+  },
+  structures(): Record<string, { x: number; y: number; hp: number; owner: string }> {
+    const out: Record<string, { x: number; y: number; hp: number; owner: string }> = {};
+    for (const m of channelStructures.values()) {
+      for (const [id, s] of m) out[id] = { x: s.x, y: s.y, hp: s.hp, owner: s.owner };
+    }
+    return out;
+  },
+  resourceNodes(): Record<string, ResourceNode> {
+    const out: Record<string, ResourceNode> = {};
+    for (const m of channelNodes.values()) {
+      for (const [id, n] of m) out[id] = n;
+    }
+    return out;
+  },
+  click(worldX: number, worldY: number): void {
+    handleWorldClick(worldX, worldY);
+  },
+  harvest(subX: number, subY: number): void {
+    ownerChannel.push('harvest', { x: subX, y: subY });
+  },
+  build(type: string, subX: number, subY: number): void {
+    ownerChannel.push('build', { type, x: subX, y: subY });
+  },
+  damage(subX: number, subY: number): void {
+    ownerChannel.push('damage', { x: subX, y: subY });
   },
 };
 
@@ -170,7 +340,15 @@ function subscribeChunk(coord: Coord, role: 'owner' | 'observer'): Channel {
   const key = chunkKey(coord);
   const topic = `chunk:${coord[0]}:${coord[1]}`;
   const channel = socket.channel(topic, { username, role });
-  channel.on('snapshot', (snap: Snapshot) => ingestChunkSnapshot(key, snap));
+  channel.on('snapshot', (snap: WireSnapshot) =>
+    ingestChunkSnapshot(key, fromSubUnits(snap)),
+  );
+  if (role === 'owner') {
+    channel.on('self', (payload: { inventory: Inventory }) => {
+      ownInventory = payload.inventory ?? {};
+      refreshHudInventory();
+    });
+  }
   channel
     .join()
     .receive('error', (e: unknown) => console.error(`join ${topic} failed`, e));
@@ -185,6 +363,58 @@ for (const coord of windowCoords(homeChunk)) {
   if (chunkKey(coord) === homeKey) continue;
   subscribeChunk(coord, 'observer');
 }
+
+function handleWorldClick(worldX: number, worldY: number): void {
+  const me = findOwnCube();
+  if (!me) return;
+
+  // 1) tree at the click position?
+  for (const [, m] of channelNodes) {
+    for (const [, n] of m) {
+      if (n.depleted) continue;
+      if (Math.abs(n.x - worldX) < 0.5 && Math.abs(n.y - worldY) < 0.5) {
+        ownerChannel.push('harvest', {
+          x: Math.round(n.x * SUB),
+          y: Math.round(n.y * SUB),
+        });
+        return;
+      }
+    }
+  }
+
+  // 2) structure at the click position?
+  for (const [, m] of channelStructures) {
+    for (const [, s] of m) {
+      if (Math.abs(s.x - worldX) < 0.5 && Math.abs(s.y - worldY) < 0.5) {
+        ownerChannel.push('damage', { x: Math.round(s.x * SUB), y: Math.round(s.y * SUB) });
+        return;
+      }
+    }
+  }
+
+  // 3) build on an empty cell (1.0u grid-snap, anchored at integer world units)
+  //    if we have materials.
+  const have = ownInventory.wood ?? 0;
+  if (have < WALL_COST) return;
+  const cellX = Math.floor(worldX) * SUB + SUB / 2;
+  const cellY = Math.floor(worldY) * SUB + SUB / 2;
+  const dx = me.x - cellX / SUB;
+  const dy = me.y - cellY / SUB;
+  if (dx * dx + dy * dy > INTERACT_RANGE * INTERACT_RANGE) return;
+  ownerChannel.push('build', { type: 'wall', x: cellX, y: cellY });
+}
+
+renderer.domElement.addEventListener('click', (ev) => {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const ndcX = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  const ndcY = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const point = new THREE.Vector3();
+  raycaster.ray.intersectPlane(plane, point);
+  handleWorldClick(point.x, point.z);
+});
 
 const keys = { w: false, a: false, s: false, d: false };
 let lastIntent = { dx: 0, dy: 0 };

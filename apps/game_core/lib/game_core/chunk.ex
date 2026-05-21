@@ -26,8 +26,21 @@ defmodule GameCore.Chunk do
   # current_chunk — silently losing movement.
   use GenServer, restart: :transient
 
-  alias GameCore.{ChunkLifecycle, ChunkMigration, World}
-  alias GameCore.Components.{Position, Velocity, Renderable, PlayerControlled}
+  alias GameCore.{ChunkLifecycle, ChunkMigration, Worldgen, World}
+
+  alias GameCore.Components.{
+    Depleted,
+    Gatherable,
+    Inventory,
+    PlayerControlled,
+    Position,
+    Renderable,
+    Structure,
+    Velocity
+  }
+
+  alias GameCore.Structure.Catalogue
+
   alias GameCore.Systems.{MovementSystem, BroadcastSystem}
 
   @type coord :: {integer(), integer()}
@@ -35,8 +48,12 @@ defmodule GameCore.Chunk do
   @type intent :: {number(), number()}
 
   @default_tick_ms 50
-  @default_speed 4.0
+  # 4 world units/sec = 4000 sub-units/sec (positions are in sub-units).
+  @default_speed 4_000.0
   @default_flush_ms 5_000
+
+  # 1.0 world unit, squared, in sub-units. Used by all interact verbs.
+  @interact_range_sq 1_000 * 1_000
 
   def start_link(opts) do
     {name, opts} = Keyword.pop(opts, :name)
@@ -94,6 +111,40 @@ defmodule GameCore.Chunk do
     GenServer.call(server, {:set_intent, username, {dx * 1.0, dy * 1.0}})
   end
 
+  @spec harvest(GenServer.server(), username(), {integer(), integer()}) ::
+          :ok | {:error, :too_far | :no_target | :depleted}
+  def harvest(server, username, {x, y}) when is_integer(x) and is_integer(y) do
+    GenServer.call(server, {:harvest, username, {x, y}})
+  end
+
+  @doc "Read-only query for a Player's current Inventory. Empty map if none."
+  @spec player_inventory(GenServer.server(), username()) :: %{atom() => non_neg_integer()}
+  def player_inventory(server, username),
+    do: GenServer.call(server, {:player_inventory, username})
+
+  @doc """
+  Admin/test-only: overwrite a Player's Inventory in this Chunk. Production
+  paths mutate Inventory only through `harvest` / `build` / `damage`.
+  """
+  @spec set_inventory(GenServer.server(), username(), %{atom() => non_neg_integer()}) :: :ok
+  def set_inventory(server, username, items) when is_map(items),
+    do: GenServer.call(server, {:set_inventory, username, items})
+
+  @spec build(GenServer.server(), username(), atom(), {integer(), integer()}) ::
+          :ok | {:error, atom()}
+  def build(server, username, type, {x, y})
+      when is_atom(type) and is_integer(x) and is_integer(y) do
+    GenServer.call(server, {:build, username, type, {x, y}})
+  end
+
+  @damage_per_click 25
+
+  @spec damage(GenServer.server(), username(), {integer(), integer()}) ::
+          :ok | {:error, atom()}
+  def damage(server, username, {x, y}) when is_integer(x) and is_integer(y) do
+    GenServer.call(server, {:damage, username, {x, y}})
+  end
+
   @doc """
   Read-only diagnostic of this Chunk's runtime state — lifecycle, idle
   countdown, entity count, interest count. Pure read; never mutates state
@@ -146,7 +197,10 @@ defmodule GameCore.Chunk do
 
     state = %{
       coord: coord,
-      world: World.new(),
+      world:
+        World.new()
+        |> seed_resource_nodes(coord)
+        |> seed_structures(coord, repo),
       tick_ms: tick_ms,
       speed: speed,
       auto_tick: auto_tick,
@@ -162,6 +216,124 @@ defmodule GameCore.Chunk do
     {:ok, state}
   end
 
+  defp seed_resource_nodes(world, coord) do
+    Enum.reduce(Worldgen.resource_nodes(coord), world, fn %{type: type, x: x, y: y}, w ->
+      eid = node_eid(type, x, y)
+
+      w
+      |> World.add_component(eid, Position, %{x: x, y: y})
+      |> World.add_component(eid, Renderable, %{})
+      |> World.add_component(eid, Gatherable, %{type: type, yields: yield_for(type)})
+    end)
+  end
+
+  defp node_eid(type, x, y), do: "#{type}:#{x}:#{y}"
+
+  defp seed_structures(world, coord, repo) do
+    Enum.reduce(repo.fetch_structures(coord), world, fn s, w ->
+      eid = structure_eid(s.id)
+
+      w
+      |> World.add_component(eid, Position, %{x: s.x, y: s.y})
+      |> World.add_component(eid, Renderable, %{})
+      |> World.add_component(eid, Structure, %{type: s.type, owner: s.owner, hp: s.hp})
+    end)
+  end
+
+  defp yield_for(:tree), do: :wood
+
+  defp check_in_range(px, py, tx, ty) do
+    dx = px - tx
+    dy = py - ty
+
+    if dx * dx + dy * dy <= @interact_range_sq do
+      :ok
+    else
+      {:error, :too_far}
+    end
+  end
+
+  defp fetch_gatherable(world, eid) do
+    case World.fetch(world, eid, Gatherable) do
+      {:ok, data} ->
+        {:ok, data}
+
+      :error ->
+        case World.fetch(world, eid, Depleted) do
+          {:ok, _} -> {:error, :depleted}
+          :error -> {:error, :no_target}
+        end
+    end
+  end
+
+  defp remove_component(%World{components: cs} = world, mod, eid) do
+    case Map.fetch(cs, mod) do
+      {:ok, inner} ->
+        %{world | components: Map.put(cs, mod, Map.delete(inner, eid))}
+
+      :error ->
+        world
+    end
+  end
+
+  defp ok_or(true, _reason), do: :ok
+  defp ok_or(false, reason), do: {:error, reason}
+
+  defp check_in_chunk(coord, x, y) do
+    if GameCore.ChunkGeometry.coord_for(x, y) == coord do
+      :ok
+    else
+      {:error, :out_of_chunk}
+    end
+  end
+
+  defp check_cell_empty(%World{components: cs}, x, y) do
+    structures = Map.get(cs, Structure, %{})
+    positions = Map.get(cs, Position, %{})
+
+    collision? =
+      Enum.any?(structures, fn {eid, _} ->
+        case Map.fetch(positions, eid) do
+          {:ok, %{x: ^x, y: ^y}} -> true
+          _ -> false
+        end
+      end)
+
+    if collision?, do: {:error, :cell_occupied}, else: :ok
+  end
+
+  defp subtract_cost(items, cost) do
+    Enum.reduce_while(cost, {:ok, items}, fn {item, qty}, {:ok, acc} ->
+      case Map.get(acc, item, 0) do
+        n when n >= qty -> {:cont, {:ok, Map.put(acc, item, n - qty)}}
+        _ -> {:halt, {:error, :insufficient_materials}}
+      end
+    end)
+  end
+
+  defp structure_eid(id) when is_integer(id), do: Integer.to_string(id)
+  defp structure_eid(id) when is_binary(id), do: id
+
+  defp publish_self(username, items) do
+    Phoenix.PubSub.broadcast(
+      GameCore.PubSub,
+      "self:#{username}",
+      {:self, %{inventory: items}}
+    )
+  end
+
+  defp find_structure_at(%World{components: cs}, x, y) do
+    structs = Map.get(cs, Structure, %{})
+    positions = Map.get(cs, Position, %{})
+
+    Enum.find_value(structs, {:error, :no_target}, fn {eid, data} ->
+      case Map.fetch(positions, eid) do
+        {:ok, %{x: ^x, y: ^y}} -> {:ok, {eid, data}}
+        _ -> false
+      end
+    end)
+  end
+
   @impl true
   def handle_call(:snapshot, _from, state) do
     {:reply, BroadcastSystem.snapshot(state.world), state}
@@ -174,7 +346,7 @@ defmodule GameCore.Chunk do
   end
 
   def handle_call({:join, username}, _from, state) do
-    {x, y} = hydrate_position(state, username)
+    {x, y, items} = hydrate_player(state, username)
 
     world =
       state.world
@@ -182,6 +354,7 @@ defmodule GameCore.Chunk do
       |> World.add_component(username, Velocity, %{vx: 0.0, vy: 0.0})
       |> World.add_component(username, Renderable, %{})
       |> World.add_component(username, PlayerControlled, %{})
+      |> World.add_component(username, Inventory, %{items: items})
 
     {:reply, :ok, %{state | world: world}}
   end
@@ -216,6 +389,102 @@ defmodule GameCore.Chunk do
 
   def handle_call({:release_interest, pid}, _from, state) do
     {:reply, :ok, %{state | lifecycle: ChunkLifecycle.release(state.lifecycle, pid)}}
+  end
+
+  def handle_call({:harvest, username, {tx, ty}}, _from, state) do
+    eid = node_eid(:tree, tx, ty)
+
+    with {:ok, %{x: px, y: py}} <- World.fetch(state.world, username, Position),
+         :ok <- check_in_range(px, py, tx, ty),
+         {:ok, %{yields: item}} <- fetch_gatherable(state.world, eid),
+         {:ok, %{items: items}} <- World.fetch(state.world, username, Inventory) do
+      new_items = Map.update(items, item, 1, &(&1 + 1))
+
+      world =
+        state.world
+        |> World.add_component(username, Inventory, %{items: new_items})
+        |> remove_component(Gatherable, eid)
+        |> World.add_component(eid, Depleted, %{type: :tree, depleted_until: nil})
+
+      publish_self(username, new_items)
+      {:reply, :ok, %{state | world: world}}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:player_inventory, username}, _from, state) do
+    items =
+      case World.fetch(state.world, username, Inventory) do
+        {:ok, %{items: items}} -> items
+        :error -> %{}
+      end
+
+    {:reply, items, state}
+  end
+
+  def handle_call({:set_inventory, username, items}, _from, state) do
+    case World.fetch(state.world, username, Inventory) do
+      {:ok, _} ->
+        world = World.add_component(state.world, username, Inventory, %{items: items})
+        publish_self(username, items)
+        {:reply, :ok, %{state | world: world}}
+
+      :error ->
+        {:reply, {:error, :no_player}, state}
+    end
+  end
+
+  def handle_call({:damage, username, {x, y}}, _from, state) do
+    with {:ok, %{x: px, y: py}} <- World.fetch(state.world, username, Position),
+         :ok <- check_in_range(px, py, x, y),
+         {:ok, {eid, struct}} <- find_structure_at(state.world, x, y) do
+      new_hp = struct.hp - @damage_per_click
+
+      if new_hp > 0 do
+        world =
+          World.add_component(state.world, eid, Structure, %{struct | hp: new_hp})
+
+        {:reply, :ok, %{state | world: world}}
+      else
+        with {sid, ""} <- Integer.parse(eid),
+             :ok <- state.repo.destroy_structure(sid) do
+          world = World.remove_entity(state.world, eid)
+          {:reply, :ok, %{state | world: world}}
+        else
+          _ -> {:reply, {:error, :destroy_failed}, state}
+        end
+      end
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:build, username, type, {x, y}}, _from, state) do
+    with :ok <- Catalogue.valid?(type) |> ok_or(:invalid_type),
+         :ok <- check_in_chunk(state.coord, x, y),
+         :ok <- check_cell_empty(state.world, x, y),
+         {:ok, %{items: items}} <- World.fetch(state.world, username, Inventory),
+         {:ok, new_items} <- subtract_cost(items, Catalogue.cost(type)),
+         {:ok, sid} <- state.repo.build_structure(state.coord, username, type, x, y, new_items) do
+      eid = structure_eid(sid)
+
+      world =
+        state.world
+        |> World.add_component(username, Inventory, %{items: new_items})
+        |> World.add_component(eid, Position, %{x: x, y: y})
+        |> World.add_component(eid, Renderable, %{})
+        |> World.add_component(eid, Structure, %{
+          type: type,
+          owner: username,
+          hp: Catalogue.max_hp(type)
+        })
+
+      publish_self(username, new_items)
+      {:reply, :ok, %{state | world: world}}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call({:migrate_in, eid, components}, _from, state) do
@@ -292,22 +561,32 @@ defmodule GameCore.Chunk do
     :ok
   end
 
-  defp hydrate_position(state, username) do
+  defp hydrate_player(state, username) do
     case state.repo.fetch_player(username) do
-      %{chunk_x: cx, chunk_y: cy, x: x, y: y} when {cx, cy} == state.coord -> {x, y}
-      _ -> chunk_center(state.coord)
+      %{chunk_x: cx, chunk_y: cy, x: x, y: y} = saved when {cx, cy} == state.coord ->
+        {x, y, Map.get(saved, :inventory, %{})}
+
+      saved ->
+        {cx, cy} = chunk_center(state.coord)
+        items = if is_map(saved), do: Map.get(saved, :inventory, %{}), else: %{}
+        {cx, cy, items}
     end
   end
 
   defp chunk_center({cx, cy}) do
     size = GameCore.ChunkGeometry.chunk_size()
-    {cx * size + size / 2, cy * size + size / 2}
+    half = div(size, 2)
+    {cx * size + half, cy * size + half}
   end
 
   defp flush_one(state, username) do
     case World.fetch(state.world, username, Position) do
       {:ok, %{x: x, y: y}} ->
-        state.repo.flush_players(state.coord, [%{username: username, x: x, y: y}])
+        items = player_items(state.world, username)
+
+        state.repo.flush_players(state.coord, [
+          %{username: username, x: x, y: y, inventory: items}
+        ])
 
       :error ->
         :ok
@@ -321,14 +600,24 @@ defmodule GameCore.Chunk do
     players =
       Enum.flat_map(player_eids, fn eid ->
         case Map.fetch(positions, eid) do
-          {:ok, %{x: x, y: y}} -> [%{username: eid, x: x, y: y}]
-          :error -> []
+          {:ok, %{x: x, y: y}} ->
+            [%{username: eid, x: x, y: y, inventory: player_items(world, eid)}]
+
+          :error ->
+            []
         end
       end)
 
     case players do
       [] -> :ok
       _ -> repo.flush_players(coord, players)
+    end
+  end
+
+  defp player_items(world, username) do
+    case World.fetch(world, username, Inventory) do
+      {:ok, %{items: items}} -> items
+      :error -> %{}
     end
   end
 

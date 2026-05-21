@@ -30,18 +30,18 @@ defmodule GameCore.ChunkDevStatusTest do
     assert status.interest_count == 0
   end
 
-  test "entity_count counts the players present in the chunk" do
+  test "entity_count counts every Positioned entity (players + Worldgen resource nodes)" do
     chunk = start_supervised!({Chunk, coord: {0, 0}, auto_tick: false, auto_flush: false})
 
-    assert Chunk.dev_status(chunk).entity_count == 0
+    base = Chunk.dev_status(chunk).entity_count
 
     :ok = Chunk.join(chunk, "alice")
     :ok = Chunk.join(chunk, "bob")
 
-    assert Chunk.dev_status(chunk).entity_count == 2
+    assert Chunk.dev_status(chunk).entity_count == base + 2
 
     :ok = Chunk.leave(chunk, "alice")
 
-    assert Chunk.dev_status(chunk).entity_count == 1
+    assert Chunk.dev_status(chunk).entity_count == base + 1
   end
 end

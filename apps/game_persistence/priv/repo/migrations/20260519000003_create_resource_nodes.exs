@@ -6,8 +6,8 @@ defmodule GamePersistence.Repo.Migrations.CreateResourceNodes do
       add :chunk_x, :integer, null: false
       add :chunk_y, :integer, null: false
       add :type, :string, null: false
-      add :x, :float, null: false
-      add :y, :float, null: false
+      add :x, :integer, null: false
+      add :y, :integer, null: false
       add :depleted_until, :utc_datetime_usec
 
       timestamps(type: :utc_datetime_usec)

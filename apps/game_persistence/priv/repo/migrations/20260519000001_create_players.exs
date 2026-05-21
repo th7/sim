@@ -6,8 +6,8 @@ defmodule GamePersistence.Repo.Migrations.CreatePlayers do
       add :username, :string, null: false
       add :chunk_x, :integer, null: false, default: 0
       add :chunk_y, :integer, null: false, default: 0
-      add :x, :float, null: false, default: 0.0
-      add :y, :float, null: false, default: 0.0
+      add :x, :integer, null: false, default: 0
+      add :y, :integer, null: false, default: 0
 
       timestamps(type: :utc_datetime_usec)
     end

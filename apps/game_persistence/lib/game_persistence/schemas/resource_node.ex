@@ -8,8 +8,8 @@ defmodule GamePersistence.Schemas.ResourceNode do
     field(:chunk_x, :integer)
     field(:chunk_y, :integer)
     field(:type, :string)
-    field(:x, :float)
-    field(:y, :float)
+    field(:x, :integer)
+    field(:y, :integer)
     field(:depleted_until, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)

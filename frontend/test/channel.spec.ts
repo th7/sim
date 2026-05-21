@@ -18,28 +18,31 @@ describe('chunk:0:0 channel', () => {
     return s;
   }
 
-  it('a joined player appears in a snapshot at the origin', async () => {
+  it('a joined player appears in a snapshot at chunk-(0,0) centre', async () => {
     const me = await join('origin');
     const snap = await me.waitFor((s) => me.username in s.players);
-    expect(snap.players[me.username]).toEqual({ x: 0, y: 0 });
+    // 8000 sub-units == half a 16000-sub-unit chunk. Positions are integers
+    // on the wire; the dev frontend divides by 1000 for rendering.
+    expect(snap.players[me.username]).toEqual({ x: 8_000, y: 8_000 });
   });
 
   it('intent moves the player; zero intent halts it', async () => {
     const me = await join('mover');
-    await me.waitFor((s) => me.username in s.players);
+    const start = await me.waitFor((s) => me.username in s.players);
+    const startX = start.players[me.username].x;
+    const startY = start.players[me.username].y;
 
     me.channel.push('move', { dx: 1, dy: 0 });
-    const moved = await me.waitFor((s) => (s.players[me.username]?.x ?? 0) > 0.1);
-    expect(moved.players[me.username].x).toBeGreaterThan(0.1);
-    expect(moved.players[me.username].y).toBeCloseTo(0, 5);
+    const moved = await me.waitFor((s) => (s.players[me.username]?.x ?? 0) > startX);
+    expect(moved.players[me.username].x).toBeGreaterThan(startX);
+    expect(moved.players[me.username].y).toBe(startY);
 
     me.channel.push('move', { dx: 0, dy: 0 });
-    // Let the halt take effect (the snapshot still in flight may reflect motion).
     await me.waitForNext();
     await me.waitForNext();
     const baseline = (await me.waitForNext()).players[me.username].x;
     const later = (await me.waitForNext()).players[me.username].x;
-    expect(later).toBeCloseTo(baseline, 5);
+    expect(later).toBe(baseline);
   });
 
   it('two players each see the other in the same snapshots', async () => {

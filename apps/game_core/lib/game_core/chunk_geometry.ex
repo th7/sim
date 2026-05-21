@@ -1,19 +1,26 @@
 defmodule GameCore.ChunkGeometry do
   @moduledoc """
-  Single source of truth for chunk dimensions in world units. Chunk `(cx, cy)`
-  owns world positions in `[cx * size, cx * size + size)` × `[cy * size, ...)`.
+  Single source of truth for chunk dimensions, in **sub-units**.
+  1 world unit = `@sub_units_per_unit` sub-units. Chunk `(cx, cy)`
+  owns sub-unit positions in
+  `[cx * chunk_size, cx * chunk_size + chunk_size)` × `[cy * ...)`.
   """
 
   @type coord :: {integer(), integer()}
 
-  @chunk_size 16.0
+  @sub_units_per_unit 1_000
+  @chunk_size_units 16
+  @chunk_size @chunk_size_units * @sub_units_per_unit
 
-  @spec chunk_size() :: float()
+  @spec sub_units_per_unit() :: pos_integer()
+  def sub_units_per_unit, do: @sub_units_per_unit
+
+  @spec chunk_size() :: pos_integer()
   def chunk_size, do: @chunk_size
 
-  @spec coord_for(float(), float()) :: coord()
-  def coord_for(x, y) when is_number(x) and is_number(y) do
-    {floor(x / @chunk_size), floor(y / @chunk_size)}
+  @spec coord_for(integer(), integer()) :: coord()
+  def coord_for(x, y) when is_integer(x) and is_integer(y) do
+    {Integer.floor_div(x, @chunk_size), Integer.floor_div(y, @chunk_size)}
   end
 
   @doc """

@@ -1,5 +1,9 @@
 defmodule GameCore.Systems.MovementSystem do
-  @moduledoc "Integrates Velocity into Position for every entity that has both."
+  @moduledoc """
+  Integrates Velocity into Position for every entity that has both.
+  Position is integer sub-units; Velocity is float sub-units/sec; the
+  integrated step is rounded back to integer at each tick.
+  """
 
   alias GameCore.World
   alias GameCore.Components.{Position, Velocity}
@@ -11,7 +15,10 @@ defmodule GameCore.Systems.MovementSystem do
     Enum.reduce(velocities, world, fn {eid, %{vx: vx, vy: vy}}, acc ->
       case World.fetch(acc, eid, Position) do
         {:ok, %{x: x, y: y}} ->
-          World.add_component(acc, eid, Position, %{x: x + vx * dt, y: y + vy * dt})
+          World.add_component(acc, eid, Position, %{
+            x: x + round(vx * dt),
+            y: y + round(vy * dt)
+          })
 
         :error ->
           acc

@@ -9,8 +9,8 @@ defmodule GamePersistence.Schemas.Structure do
     field(:chunk_y, :integer)
     field(:owner_username, :string)
     field(:type, :string)
-    field(:x, :float)
-    field(:y, :float)
+    field(:x, :integer)
+    field(:y, :integer)
     field(:hp, :integer, default: 100)
 
     timestamps(type: :utc_datetime_usec)

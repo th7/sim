@@ -3,12 +3,17 @@ defmodule GameCore.ChunkGeometryTest do
 
   alias GameCore.ChunkGeometry
 
-  test "coord_for divides world space into 16-unit cells" do
-    assert ChunkGeometry.coord_for(0.0, 0.0) == {0, 0}
-    assert ChunkGeometry.coord_for(15.99, 0.0) == {0, 0}
-    assert ChunkGeometry.coord_for(16.0, 0.0) == {1, 0}
-    assert ChunkGeometry.coord_for(-0.01, 0.0) == {-1, 0}
-    assert ChunkGeometry.coord_for(17.0, -17.0) == {1, -2}
+  test "coord_for divides world space into 16-unit cells (sub-unit input)" do
+    assert ChunkGeometry.coord_for(0, 0) == {0, 0}
+    assert ChunkGeometry.coord_for(15_999, 0) == {0, 0}
+    assert ChunkGeometry.coord_for(16_000, 0) == {1, 0}
+    assert ChunkGeometry.coord_for(-1, 0) == {-1, 0}
+    assert ChunkGeometry.coord_for(17_000, -17_000) == {1, -2}
+  end
+
+  test "chunk_size and sub_units_per_unit expose the integer-scale constants" do
+    assert ChunkGeometry.sub_units_per_unit() == 1_000
+    assert ChunkGeometry.chunk_size() == 16_000
   end
 
   test "neighborhood/2 returns the Chebyshev-radius square around a coord" do

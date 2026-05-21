@@ -36,6 +36,18 @@ _Avoid_: Resource (ambiguous — also means inventory material), node (too gener
 A persistent object placed in the **Overworld** by a Player (building, wall, crafting station, fence). Survives indefinitely until destroyed. Anchored to a specific **Chunk**.
 _Avoid_: Building (only one kind of Structure), object, placeable.
 
+**Item**:
+A *kind* of gatherable, stackable substance — wood, stone, iron ore. Abstract: an Item is a type, never a quantity. Items are produced by harvesting **Resource nodes** and consumed when **Players** build **Structures**.
+_Avoid_: Material (collides with "crafting material" once recipes exist), Resource (already forbidden — see Resource node).
+
+**ItemStack**:
+A typed quantity of one **Item** — e.g. `{wood, 14}`. The unit inside an **Inventory** and the unit in which harvest yields and build costs are expressed.
+_Avoid_: Item (Item is the type, ItemStack is the quantity — keep them distinct).
+
+**Inventory**:
+The **ItemStacks** carried by a **Player**. Filled by harvesting **Resource nodes**; drained by placing **Structures**. Persists across sessions — what you carry at logout is what you carry on login.
+_Avoid_: Bag, backpack, container (Container may earn a glossary entry later if a second kind of container appears — chest, bank — but v1 has only the Inventory).
+
 **Chunk activation**:
 The transition of a **Chunk** from cold (state-on-disk-only) to hot (live GenServer holding state in memory). Triggered by player proximity.
 
@@ -64,6 +76,8 @@ _Avoid_: Visible chunks, subscription window, AOI (AOI is the general concept; t
 - A username uniquely identifies a **Player**; there is no separate account or character roster
 - A **Chunk** holds zero-or-more **Resource nodes** and zero-or-more **Structures**
 - A **Structure** belongs to the **Chunk** it sits in; ownership is per-Structure (a Player owns the Structure)
+- Each **Player** has exactly one **Inventory**; an **Inventory** holds zero-or-more **ItemStacks**; each **ItemStack** is a quantity of exactly one **Item**
+- A **Resource node** yields one or more **ItemStacks** when harvested; a **Structure**'s build cost is expressed as one or more **ItemStacks** drawn from the placing Player's **Inventory**
 - A **Chunk** is either hot (running) or cold (state in durable storage only)
 - Each connected **Player** has a **Warm set** (kept hot) and a **View window** (snapshots subscribed); the View window is a strict subset of the Warm set
 - A **Chunk** stays hot while it is in any session's **Warm set**; **Chunk deactivation** fires after the last interested session releases it

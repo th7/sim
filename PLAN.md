@@ -117,15 +117,34 @@ Originally planned as the cross-node distribution layer; deferred during the Pha
 
 ## Phase 8 — Gameplay slice: gathering and building
 
-**Goal**: the first real "game" content. Players gather and place Structures.
+**Goal**: the first real game content. Players harvest **Items** and place **Structures**; placed Structures persist; placed Structures can be damaged and destroyed.
 
-- Add `Inventory` component to Players
-- Add `Gatherable` component to Resource Nodes; harvest action transfers items
-- Build action: client sends `build` with type + position; server validates (in chunk, position clear, has materials), INSERTs into `structures` table, adds entity to chunk's ECS, broadcasts
-- Destroy action: HP system on Structures, damage events, deletion on death
-- Frontend: HUD for inventory (basic React or Svelte overlay on Three.js canvas — decide here)
+Phase begins with a small foundational refactor — positions across `game_core`, `game_persistence`, the snapshot wire, and the frontend boundary switch from floats to scaled integers. Done first so the new gameplay verbs reason in integer terms from the start.
 
-**Done when**: log in, chop a tree, place a wall. Log out. Log back in. Wall is still there.
+- **Integer positions, scale = 1000.** 1 world unit = 1000 sub-units. `Position`, `Velocity`, `ChunkGeometry`, and `MovementSystem` become integer-typed; three migrations convert float columns to integer on `players`, `structures`, `resource_nodes`. Snapshot payload emits integers; frontend divides by 1000 at the channel boundary so Three.js stays float-native. Interaction checks compare squared integer distances to avoid `sqrt`.
+
+- **Closed catalogue.** Compile-time enums: `Item` :: `:wood`, Resource node type :: `:tree`, Structure type :: `:wall`. `GameCore.Item.valid?/1` for Inventory key validation; `GameCore.Structure.Catalogue` exposes `cost/1` (`:wall → [{:wood, 5}]`) and `max_hp/1` (`:wall → 100`). Damage per click is a fixed `25`.
+
+- **Worldgen for Resource nodes.** `GameCore.Worldgen.resource_nodes({cx, cy})` is a pure deterministic function returning the positions of all trees in a chunk. The `resource_nodes` table is repurposed as a **depletion-state cache**: a row exists iff a node is currently depleted; identity is the spatial signature `(chunk_x, chunk_y, type, x, y)` with a unique constraint; `depleted_until` is the only mutable column.
+
+- **Resource node ECS shape.** `Position`, `Renderable`, and exactly one of `Gatherable` or `Depleted` (mutually exclusive). Hydration on chunk activation: call Worldgen, LEFT JOIN the depletion cache, add components accordingly; for each currently-depleted node schedule a respawn via `Process.send_after/3` for the remaining time; nodes whose `depleted_until` has already passed hydrate as Gatherable directly.
+
+- **Inventory.** New `GameCore.Components.Inventory` — `defstruct items: %{}` — atom-keyed, validated against `Item.valid?/1`. New `players.inventory :: jsonb default '{}'` column; string-keyed JSON at rest, atom-keyed in memory, converted at the Repo boundary. Unbounded in v1. Hydrated on chunk join alongside position; flushed on the existing paths (5s heartbeat, leave, terminate).
+
+- **Snapshot extension.** Parallel keys: `%{players: …, resource_nodes: …, structures: …}`. Resource node wire id = `"<type>:<x>:<y>"` (e.g. `"tree:5000:8000"`); Structure wire id = stringified DB id. Depleted nodes stay in the snapshot with `depleted: true` so the client can render stumps.
+
+- **Self event.** New per-owner PubSub topic `"self:<username>"` subscribed only by that player's owner channel. Chunk publishes `{:self, %{inventory: %{...}}}` to it on inventory change; channel pushes a `self` event to the client.
+
+- **Verbs.** All three use one constant `@interact_range_sq = 1_000_000` (1.0 world unit, in squared sub-units).
+  - `harvest %{x, y}` — validate target is a Gatherable in this chunk within range; transfer `{wood, 1}`; flip to Depleted with `depleted_until = now + 30s`; schedule respawn; broadcast; publish self event. Async persistence rides the heartbeat.
+  - `build %{type, x, y}` — validate in-chunk, cell empty (1.0u grid-snap, 1×1 footprint, no rotation), has materials. Single `Repo.transaction` (INSERT structure + UPDATE player inventory); on commit add to ECS; broadcast; publish self event. On any failure no state changes; client gets `{:error, reason}`.
+  - `damage %{x, y}` — validate Structure at cell, player in range. Decrement HP by 25. If HP > 0 broadcast updated snapshot; if HP ≤ 0 `Repo.transaction` to DELETE the row, remove from ECS, broadcast. No material refund. Anyone can damage anyone's Structure (no PvP rules yet).
+
+- **Frontend.** Plain DOM HUD — `<div id="hud">` in the top-right, monospace, inventory counts; updates on `self` push. Click handler raycasts and dispatches target-inferred: Gatherable → `harvest`, Structure → `damage`, empty cell within range AND player has materials → `build` (a translucent ghost cube renders at the snap-cell while these conditions hold). No hotbar.
+
+- **Tests.** ExUnit for Item / Catalogue / Worldgen pure-function tests; all three verbs (happy paths + rejection cases: out-of-range, depleted, cell-occupied, insufficient materials, no-target); build atomicity (a forced DB failure must leave the Inventory untouched); respawn-on-hydration (depleted-then-time-passed hydrates as Gatherable; in-progress depletion gets a timer for the remaining time); Inventory round-trip across logout. Playwright `phase8.spec.ts`: chop a tree (HUD updates), place a wall (snapshot includes it, inventory decremented), damage to destruction (wall disappears), restart Phoenix, log back in, walls and inventory intact.
+
+**Done when**: log in, chop a tree (HUD shows wood), place a wall, damage another player's wall to destruction. Log out. Log back in. Your Inventory and any surviving walls are exactly as you left them.
 
 ## Phase 9 — Instances
 

@@ -13,7 +13,7 @@ defmodule GameCore.ChunkMigrationTest do
          auto_tick: false,
          auto_flush: false,
          tick_ms: 50,
-         speed: 4.0},
+         speed: 4_000.0},
         id: :src_chunk
       )
 
@@ -25,7 +25,7 @@ defmodule GameCore.ChunkMigrationTest do
          auto_tick: false,
          auto_flush: false,
          tick_ms: 50,
-         speed: 4.0},
+         speed: 4_000.0},
         id: :dst_chunk
       )
 
@@ -36,8 +36,8 @@ defmodule GameCore.ChunkMigrationTest do
     :ok = Chunk.join(src, "alice")
     :ok = Chunk.set_intent(src, "alice", {1.0, 0.0})
 
-    # Need to walk from chunk center (8, 8) past x=16; that's 8 units at
-    # speed 4.0 = 2.0s = 40 ticks of 50ms. Do 41 to be safe.
+    # Walk from chunk center (8000, 8000) past x=16000; that's 8000 sub-units
+    # at speed 4000 sub-units/sec = 2.0s = 40 ticks of 50ms. Do 41 to be safe.
     Enum.each(1..41, fn _ ->
       send(src, :tick)
       _ = :sys.get_state(src)

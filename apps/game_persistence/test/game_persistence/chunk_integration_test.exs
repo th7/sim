@@ -30,13 +30,13 @@ defmodule GamePersistence.ChunkIntegrationTest do
     :ok = Chunk.leave(chunk1, "alice")
 
     saved = GamePersistence.Players.get_or_create("alice")
-    assert saved.x > 0.0
+    assert saved.x > 0
     expected = saved.x
 
     chunk2 = start_chunk({0, 0}, :chunk2)
     :ok = Chunk.join(chunk2, "alice")
 
     assert %{players: %{"alice" => %{x: x2}}} = Chunk.snapshot(chunk2)
-    assert_in_delta x2, expected, 1.0e-9
+    assert x2 == expected
   end
 end

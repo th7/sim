@@ -24,6 +24,9 @@ defmodule GameWeb.ChunkChannel do
     with {:ok, coord} <- parse_coord(coord_str),
          {:ok, pid} <- Chunks.ensure_started(coord, repo),
          :ok <- enter(pid, role, username) do
+      if role == "owner",
+        do: Phoenix.PubSub.subscribe(GameCore.PubSub, "self:#{username}")
+
       socket =
         socket
         |> assign(:coord, coord)
@@ -87,10 +90,60 @@ defmodule GameWeb.ChunkChannel do
     {:noreply, socket}
   end
 
+  def handle_in("harvest", %{"x" => x, "y" => y}, socket)
+      when is_integer(x) and is_integer(y) do
+    reply = with_owner_chunk(socket, fn pid -> Chunk.harvest(pid, socket.assigns.username, {x, y}) end)
+    {:reply, to_reply(reply), socket}
+  end
+
+  def handle_in("build", %{"type" => type, "x" => x, "y" => y}, socket)
+      when is_binary(type) and is_integer(x) and is_integer(y) do
+    case parse_type(type) do
+      {:ok, t} ->
+        reply =
+          with_owner_chunk(socket, fn pid -> Chunk.build(pid, socket.assigns.username, t, {x, y}) end)
+
+        {:reply, to_reply(reply), socket}
+
+      :error ->
+        {:reply, {:error, %{reason: "invalid_type"}}, socket}
+    end
+  end
+
+  def handle_in("damage", %{"x" => x, "y" => y}, socket)
+      when is_integer(x) and is_integer(y) do
+    reply = with_owner_chunk(socket, fn pid -> Chunk.damage(pid, socket.assigns.username, {x, y}) end)
+    {:reply, to_reply(reply), socket}
+  end
+
+  defp with_owner_chunk(%{assigns: %{role: "owner", coord: coord}}, fun) do
+    case Chunks.whereis(coord) do
+      pid when is_pid(pid) -> fun.(pid)
+      _ -> {:error, :no_chunk}
+    end
+  end
+
+  defp with_owner_chunk(_socket, _fun), do: {:error, :not_owner}
+
+  defp to_reply(:ok), do: :ok
+  defp to_reply({:error, reason}), do: {:error, %{reason: Atom.to_string(reason)}}
+
+  defp parse_type("wall"), do: {:ok, :wall}
+  defp parse_type(_), do: :error
+
   @impl true
   def handle_info({:snapshot, snap}, socket) do
     push(socket, "snapshot", snap)
     {:noreply, socket}
+  end
+
+  def handle_info({:self, payload}, socket) do
+    push(socket, "self", stringify_inventory(payload))
+    {:noreply, socket}
+  end
+
+  defp stringify_inventory(%{inventory: items} = payload) do
+    %{payload | inventory: for({k, v} <- items, into: %{}, do: {Atom.to_string(k), v})}
   end
 
   @impl true

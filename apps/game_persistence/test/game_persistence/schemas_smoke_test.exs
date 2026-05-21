@@ -10,8 +10,8 @@ defmodule GamePersistence.SchemasSmokeTest do
         chunk_y: 0,
         owner_username: "alice",
         type: "wall",
-        x: 1.0,
-        y: 2.0
+        x: 1_000,
+        y: 2_000
       })
       |> Repo.insert()
 
@@ -25,8 +25,8 @@ defmodule GamePersistence.SchemasSmokeTest do
         chunk_x: 1,
         chunk_y: -1,
         type: "tree",
-        x: 5.0,
-        y: 6.0
+        x: 5_000,
+        y: 6_000
       })
       |> Repo.insert()
 

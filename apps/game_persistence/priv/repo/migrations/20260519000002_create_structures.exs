@@ -7,8 +7,8 @@ defmodule GamePersistence.Repo.Migrations.CreateStructures do
       add :chunk_y, :integer, null: false
       add :owner_username, :string, null: false
       add :type, :string, null: false
-      add :x, :float, null: false
-      add :y, :float, null: false
+      add :x, :integer, null: false
+      add :y, :integer, null: false
       add :hp, :integer, null: false, default: 100
 
       timestamps(type: :utc_datetime_usec)
