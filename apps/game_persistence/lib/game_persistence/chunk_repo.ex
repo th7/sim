@@ -59,7 +59,7 @@ defmodule GamePersistence.ChunkRepo do
   def fetch_structures({chunk_x, chunk_y}) do
     import Ecto.Query
 
-    Repo.all(from s in Structure, where: s.chunk_x == ^chunk_x and s.chunk_y == ^chunk_y)
+    Repo.all(from(s in Structure, where: s.chunk_x == ^chunk_x and s.chunk_y == ^chunk_y))
     |> Enum.map(fn s ->
       %{
         id: s.id,

@@ -253,6 +253,20 @@ defmodule GameCore.Chunk do
     end
   end
 
+  defp player_pos(world, username) do
+    case World.fetch(world, username, Position) do
+      {:ok, %{x: x, y: y}} -> {:ok, {x, y}}
+      :error -> {:error, :no_player}
+    end
+  end
+
+  defp player_inv(world, username) do
+    case World.fetch(world, username, Inventory) do
+      {:ok, %{items: items}} -> {:ok, items}
+      :error -> {:error, :no_player}
+    end
+  end
+
   defp fetch_gatherable(world, eid) do
     case World.fetch(world, eid, Gatherable) do
       {:ok, data} ->
@@ -394,10 +408,10 @@ defmodule GameCore.Chunk do
   def handle_call({:harvest, username, {tx, ty}}, _from, state) do
     eid = node_eid(:tree, tx, ty)
 
-    with {:ok, %{x: px, y: py}} <- World.fetch(state.world, username, Position),
+    with {:ok, {px, py}} <- player_pos(state.world, username),
          :ok <- check_in_range(px, py, tx, ty),
          {:ok, %{yields: item}} <- fetch_gatherable(state.world, eid),
-         {:ok, %{items: items}} <- World.fetch(state.world, username, Inventory) do
+         {:ok, items} <- player_inv(state.world, username) do
       new_items = Map.update(items, item, 1, &(&1 + 1))
 
       world =
@@ -436,7 +450,7 @@ defmodule GameCore.Chunk do
   end
 
   def handle_call({:damage, username, {x, y}}, _from, state) do
-    with {:ok, %{x: px, y: py}} <- World.fetch(state.world, username, Position),
+    with {:ok, {px, py}} <- player_pos(state.world, username),
          :ok <- check_in_range(px, py, x, y),
          {:ok, {eid, struct}} <- find_structure_at(state.world, x, y) do
       new_hp = struct.hp - @damage_per_click
@@ -464,7 +478,7 @@ defmodule GameCore.Chunk do
     with :ok <- Catalogue.valid?(type) |> ok_or(:invalid_type),
          :ok <- check_in_chunk(state.coord, x, y),
          :ok <- check_cell_empty(state.world, x, y),
-         {:ok, %{items: items}} <- World.fetch(state.world, username, Inventory),
+         {:ok, items} <- player_inv(state.world, username),
          {:ok, new_items} <- subtract_cost(items, Catalogue.cost(type)),
          {:ok, sid} <- state.repo.build_structure(state.coord, username, type, x, y, new_items) do
       eid = structure_eid(sid)

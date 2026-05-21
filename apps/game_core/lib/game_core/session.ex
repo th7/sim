@@ -73,6 +73,24 @@ defmodule GameCore.Session do
   @spec set_intent(GenServer.server(), {number(), number()}) :: :ok
   def set_intent(server, {_, _} = intent), do: GenServer.call(server, {:set_intent, intent})
 
+  @doc """
+  Forward an interact verb (harvest / build / damage) to whichever Chunk
+  currently owns the Player's entity. The home channel's coord is stale
+  after a Boundary crossing — clients must route through the Session
+  rather than directly to the home chunk.
+  """
+  @spec harvest(GenServer.server(), {integer(), integer()}) :: :ok | {:error, atom()}
+  def harvest(server, {x, y}) when is_integer(x) and is_integer(y),
+    do: GenServer.call(server, {:harvest, {x, y}})
+
+  @spec build(GenServer.server(), atom(), {integer(), integer()}) :: :ok | {:error, atom()}
+  def build(server, type, {x, y}) when is_atom(type) and is_integer(x) and is_integer(y),
+    do: GenServer.call(server, {:build, type, {x, y}})
+
+  @spec damage(GenServer.server(), {integer(), integer()}) :: :ok | {:error, atom()}
+  def damage(server, {x, y}) when is_integer(x) and is_integer(y),
+    do: GenServer.call(server, {:damage, {x, y}})
+
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -111,6 +129,28 @@ defmodule GameCore.Session do
     end
 
     {:reply, :ok, state}
+  end
+
+  def handle_call({:harvest, coords}, _from, state) do
+    reply = forward_to_current(state, &Chunk.harvest(&1, state.username, coords))
+    {:reply, reply, state}
+  end
+
+  def handle_call({:build, type, coords}, _from, state) do
+    reply = forward_to_current(state, &Chunk.build(&1, state.username, type, coords))
+    {:reply, reply, state}
+  end
+
+  def handle_call({:damage, coords}, _from, state) do
+    reply = forward_to_current(state, &Chunk.damage(&1, state.username, coords))
+    {:reply, reply, state}
+  end
+
+  defp forward_to_current(state, fun) do
+    case Chunks.whereis(state.current_chunk) do
+      pid when is_pid(pid) -> fun.(pid)
+      _ -> {:error, :no_chunk}
+    end
   end
 
   @impl true

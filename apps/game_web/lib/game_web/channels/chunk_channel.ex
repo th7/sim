@@ -13,6 +13,7 @@ defmodule GameWeb.ChunkChannel do
 
   alias GameCore.Chunk
   alias GameCore.Chunks
+  alias GameCore.Session
   alias GameCore.Sessions
 
   @impl true
@@ -92,7 +93,11 @@ defmodule GameWeb.ChunkChannel do
 
   def handle_in("harvest", %{"x" => x, "y" => y}, socket)
       when is_integer(x) and is_integer(y) do
-    reply = with_owner_chunk(socket, fn pid -> Chunk.harvest(pid, socket.assigns.username, {x, y}) end)
+    reply =
+      via_session(socket, &Session.harvest(&1, {x, y}), fn pid ->
+        Chunk.harvest(pid, socket.assigns.username, {x, y})
+      end)
+
     {:reply, to_reply(reply), socket}
   end
 
@@ -101,7 +106,9 @@ defmodule GameWeb.ChunkChannel do
     case parse_type(type) do
       {:ok, t} ->
         reply =
-          with_owner_chunk(socket, fn pid -> Chunk.build(pid, socket.assigns.username, t, {x, y}) end)
+          via_session(socket, &Session.build(&1, t, {x, y}), fn pid ->
+            Chunk.build(pid, socket.assigns.username, t, {x, y})
+          end)
 
         {:reply, to_reply(reply), socket}
 
@@ -112,18 +119,31 @@ defmodule GameWeb.ChunkChannel do
 
   def handle_in("damage", %{"x" => x, "y" => y}, socket)
       when is_integer(x) and is_integer(y) do
-    reply = with_owner_chunk(socket, fn pid -> Chunk.damage(pid, socket.assigns.username, {x, y}) end)
+    reply =
+      via_session(socket, &Session.damage(&1, {x, y}), fn pid ->
+        Chunk.damage(pid, socket.assigns.username, {x, y})
+      end)
+
     {:reply, to_reply(reply), socket}
   end
 
-  defp with_owner_chunk(%{assigns: %{role: "owner", coord: coord}}, fun) do
-    case Chunks.whereis(coord) do
-      pid when is_pid(pid) -> fun.(pid)
+  # Route interact verbs through the Session so post-migration clicks reach
+  # whichever Chunk currently owns the entity. Falls back to a direct
+  # home-chunk call if no Session is attached (test seams; never in prod
+  # owner channels).
+  defp via_session(%{assigns: %{role: "owner", session_pid: spid}}, session_fun, _chunk_fun)
+       when is_pid(spid) do
+    if Process.alive?(spid), do: session_fun.(spid), else: {:error, :no_session}
+  end
+
+  defp via_session(%{assigns: %{role: "owner"}} = socket, _session_fun, chunk_fun) do
+    case Chunks.whereis(socket.assigns.coord) do
+      pid when is_pid(pid) -> chunk_fun.(pid)
       _ -> {:error, :no_chunk}
     end
   end
 
-  defp with_owner_chunk(_socket, _fun), do: {:error, :not_owner}
+  defp via_session(_socket, _session_fun, _chunk_fun), do: {:error, :not_owner}
 
   defp to_reply(:ok), do: :ok
   defp to_reply({:error, reason}), do: {:error, %{reason: Atom.to_string(reason)}}

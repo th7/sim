@@ -53,6 +53,7 @@ defmodule GameCore.ChunkBuildTest do
 
   setup do
     {:ok, _} = StubRepo.start_link()
+
     on_exit(fn ->
       try do
         if Process.whereis(StubRepo), do: Agent.stop(StubRepo)
@@ -60,6 +61,7 @@ defmodule GameCore.ChunkBuildTest do
         _, _ -> :ok
       end
     end)
+
     :ok
   end
 
