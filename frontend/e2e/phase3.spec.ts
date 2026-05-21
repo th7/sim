@@ -49,7 +49,7 @@ test('phase 3: a Player\'s position survives a BEAM restart', async ({ browser }
   await new Promise((r) => setTimeout(r, 500));
 
   // 2) Restart phx.server.
-  await exec(resolve(__dirname, '../../bin/restart-phx.sh'), [], { timeout: 90_000 });
+  await exec(resolve(__dirname, '../../bin/restart-e2e.sh'), [], { timeout: 90_000 });
 
   // 3) Reconnect; the new chunk hydrates from Postgres and our cube should
   //    appear at savedX, not at the origin.

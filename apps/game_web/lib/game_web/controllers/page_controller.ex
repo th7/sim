@@ -1,7 +1,11 @@
 defmodule GameWeb.PageController do
   use GameWeb, :controller
 
-  @spa_shell """
+  # Dev hits Vite on :3000, which serves its own index.html with /src/main.ts
+  # and HMR. Any env without Vite (e2e, prod) hits Phoenix directly: serve
+  # the Vite-built index.html from priv/static, which references the hashed
+  # bundle that Plug.Static handles.
+  @dev_shell """
   <!DOCTYPE html>
   <html lang="en">
     <head>
@@ -16,6 +20,14 @@ defmodule GameWeb.PageController do
   """
 
   def index(conn, _params) do
-    html(conn, @spa_shell)
+    built = Path.join(:code.priv_dir(:game_web), "static/index.html")
+
+    if File.exists?(built) do
+      conn
+      |> put_resp_content_type("text/html")
+      |> send_file(200, built)
+    else
+      html(conn, @dev_shell)
+    end
   end
 end

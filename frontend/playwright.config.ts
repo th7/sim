@@ -1,9 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// Default to talking to Vite (which proxies /socket to Phoenix on :4000),
-// but allow E2E_BASE_URL=http://localhost:4000 to skip Vite — useful when
-// debugging WebSocket flakes that originate in the proxy.
-const BASE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
+// E2e talks to its own isolated Phoenix on :4001 (MIX_ENV=e2e, sim_e2e DB),
+// independent from dev's :4000/:3000. Override with E2E_BASE_URL if pointing
+// at an already-running BEAM.
+const BASE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:4001';
 
 export default defineConfig({
   testDir: './e2e',
@@ -20,4 +20,13 @@ export default defineConfig({
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   ],
+  webServer: {
+    command:
+      'cd .. && MIX_ENV=e2e PORT=4001 mix do assets.deploy + ecto.drop --quiet + ecto.create --quiet + ecto.migrate --quiet + phx.server',
+    url: 'http://localhost:4001',
+    reuseExistingServer: false,
+    timeout: 120_000,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  },
 });

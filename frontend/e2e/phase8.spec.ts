@@ -8,7 +8,6 @@ import './types';
 const exec = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const SUB = 1000;
 const CHUNK_SUB = 16_000;
 
 function uniq(prefix: string): string {
@@ -92,7 +91,7 @@ test('phase 8: gather → build → persistence round-trip', async ({ browser })
   await new Promise((r) => setTimeout(r, 500));
 
   // Restart Phoenix; the wall row is in Postgres and inventory has flushed.
-  await exec(resolve(__dirname, '../../bin/restart-phx.sh'), [], { timeout: 90_000 });
+  await exec(resolve(__dirname, '../../bin/restart-e2e.sh'), [], { timeout: 90_000 });
 
   // Reconnect as the same user and verify the wall + inventory hydrate.
   const ctx2 = await browser.newContext();
