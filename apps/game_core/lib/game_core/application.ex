@@ -8,6 +8,7 @@ defmodule GameCore.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      {Phoenix.PubSub, name: GameCore.PubSub},
       {Registry, keys: :unique, name: GameCore.Chunks},
       {Registry, keys: :unique, name: GameCore.Sessions},
       {DynamicSupervisor, name: GameCore.ChunkSupervisor, strategy: :one_for_one},

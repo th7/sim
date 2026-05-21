@@ -62,8 +62,8 @@ defmodule GameCore.ChunkTest do
   end
 
   test "subscribers receive a snapshot every other tick" do
-    chunk = start_supervised!({Chunk, coord: {0, 0}, auto_tick: false})
-    :ok = Chunk.subscribe(chunk, self())
+    chunk = start_supervised!({Chunk, coord: {77, 77}, auto_tick: false})
+    :ok = Phoenix.PubSub.subscribe(GameCore.PubSub, "chunk:77:77")
     :ok = Chunk.join(chunk, "alice")
 
     send(chunk, :tick)

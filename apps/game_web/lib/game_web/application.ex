@@ -10,10 +10,6 @@ defmodule GameWeb.Application do
     children = [
       GameWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:game_web, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: GameWeb.PubSub},
-      # Start a worker by calling: GameWeb.Worker.start_link(arg)
-      # {GameWeb.Worker, arg},
-      # Start to serve requests, typically the last entry
       GameWeb.Endpoint
     ]
 

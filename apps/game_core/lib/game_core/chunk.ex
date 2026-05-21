@@ -94,9 +94,6 @@ defmodule GameCore.Chunk do
     GenServer.call(server, {:set_intent, username, {dx * 1.0, dy * 1.0}})
   end
 
-  @spec subscribe(GenServer.server(), pid()) :: :ok
-  def subscribe(server, pid), do: GenServer.call(server, {:subscribe, pid})
-
   @doc """
   Read-only diagnostic of this Chunk's runtime state — lifecycle, idle
   countdown, entity count, interest count. Pure read; never mutates state
@@ -156,7 +153,6 @@ defmodule GameCore.Chunk do
       auto_flush: auto_flush,
       flush_ms: flush_ms,
       repo: repo,
-      subscribers: [],
       tick_count: 0,
       lifecycle: ChunkLifecycle.new(Keyword.take(opts, [:idle_timeout_ms]))
     }
@@ -214,10 +210,6 @@ defmodule GameCore.Chunk do
     end
   end
 
-  def handle_call({:subscribe, pid}, _from, state) do
-    {:reply, :ok, %{state | subscribers: [pid | state.subscribers]}}
-  end
-
   def handle_call({:express_interest, pid}, _from, state) do
     {:reply, :ok, %{state | lifecycle: ChunkLifecycle.express(state.lifecycle, pid)}}
   end
@@ -233,7 +225,8 @@ defmodule GameCore.Chunk do
       end)
 
     snap = BroadcastSystem.snapshot(world)
-    Enum.each(state.subscribers, &send(&1, {:snapshot, snap}))
+    {cx, cy} = state.coord
+    Phoenix.PubSub.broadcast(GameCore.PubSub, "chunk:#{cx}:#{cy}", {:snapshot, snap})
 
     {:reply, :ok, %{state | world: world}}
   end
@@ -248,7 +241,8 @@ defmodule GameCore.Chunk do
 
     if migrated? or rem(tick_count, 2) == 0 do
       snap = BroadcastSystem.snapshot(world)
-      Enum.each(state.subscribers, &send(&1, {:snapshot, snap}))
+      {cx, cy} = state.coord
+      Phoenix.PubSub.broadcast(GameCore.PubSub, "chunk:#{cx}:#{cy}", {:snapshot, snap})
     end
 
     if state.auto_tick, do: schedule_tick(state.tick_ms)

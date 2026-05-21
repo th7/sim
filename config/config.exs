@@ -36,7 +36,7 @@ config :game_web, GameWeb.Endpoint,
     formats: [json: GameWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: GameWeb.PubSub,
+  pubsub_server: GameCore.PubSub,
   live_view: [signing_salt: "FBzDB4hD"]
 
 # Configure Elixir's Logger

@@ -84,9 +84,8 @@ defmodule GameCore.ChunkMigrationTest do
     assert Map.has_key?(Chunk.snapshot(dst).players, "alice")
   end
 
-  test "destination broadcasts a snapshot immediately on migrate_in",
-       %{source: src, dest: dst} do
-    :ok = Chunk.subscribe(dst, self())
+  test "destination broadcasts a snapshot immediately on migrate_in", %{source: src} do
+    :ok = Phoenix.PubSub.subscribe(GameCore.PubSub, "chunk:1:0")
     :ok = Chunk.join(src, "alice")
     :ok = Chunk.set_intent(src, "alice", {1.0, 0.0})
 
@@ -95,9 +94,9 @@ defmodule GameCore.ChunkMigrationTest do
       _ = :sys.get_state(src)
     end)
 
-    # Drain mailbox; we want to see at least one snapshot containing alice
-    # delivered to dst's subscriber as a result of the migration (NOT as a
-    # result of a separate dst tick — we never ticked dst).
+    # We want to see at least one snapshot containing alice delivered to
+    # dst's topic as a result of the migration (NOT as a result of a
+    # separate dst tick — we never ticked dst).
     assert_received {:snapshot, %{players: %{"alice" => _}}}
   end
 end

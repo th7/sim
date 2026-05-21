@@ -23,8 +23,7 @@ defmodule GameWeb.ChunkChannel do
 
     with {:ok, coord} <- parse_coord(coord_str),
          {:ok, pid} <- Chunks.ensure_started(coord, repo),
-         :ok <- enter(pid, role, username),
-         :ok <- Chunk.subscribe(pid, self()) do
+         :ok <- enter(pid, role, username) do
       socket =
         socket
         |> assign(:coord, coord)

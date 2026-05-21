@@ -5,10 +5,9 @@ defmodule UmbrellaBoundariesTest do
     project_module.project()[:deps] |> Enum.map(&elem(&1, 0))
   end
 
-  test "game_core stays pure: no Phoenix or Ecto dependency" do
+  test "game_core has no full Phoenix or Ecto dependency (phoenix_pubsub is allowed as a fan-out primitive)" do
     deps = deps_of(GameCore.MixProject)
     refute :phoenix in deps
-    refute :phoenix_pubsub in deps
     refute :ecto in deps
     refute :ecto_sql in deps
   end
