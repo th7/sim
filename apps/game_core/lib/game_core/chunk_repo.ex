@@ -63,4 +63,28 @@ defmodule GameCore.ChunkRepo do
 
   @doc "List all persisted Structures for the given chunk coord."
   @callback fetch_structures(coord()) :: [structure_row()]
+
+  @type depletion :: %{
+          type: atom(),
+          x: integer(),
+          y: integer(),
+          depleted_until: DateTime.t()
+        }
+
+  @doc """
+  List all currently-persisted depletions for `coord`. A row exists only
+  while a node is depleted; on respawn the row is removed by the next
+  `flush_depletions/2`. Past-due rows may still appear (the pruner runs
+  on its own cadence) — the chunk hydration is expected to skip them.
+  """
+  @callback fetch_depletions(coord()) :: [depletion()]
+
+  @doc """
+  Reconcile the persisted depletions for `coord` with `depleted_now`,
+  which is the complete current in-memory Depleted set for this chunk.
+  Implementations INSERT rows present in `depleted_now` but missing from
+  the DB and DELETE rows present in the DB but absent from `depleted_now`.
+  Called on the chunk's heartbeat (`:flush_db`).
+  """
+  @callback flush_depletions(coord(), [depletion()]) :: :ok
 end

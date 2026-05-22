@@ -85,6 +85,12 @@ defmodule GameCore.ChunkHarvestTest do
 
     @impl true
     def fetch_structures(_coord), do: []
+
+    @impl true
+    def fetch_depletions(_coord), do: []
+
+    @impl true
+    def flush_depletions(_coord, _depleted_now), do: :ok
   end
 
   test "Inventory survives leave + rejoin via the repo" do

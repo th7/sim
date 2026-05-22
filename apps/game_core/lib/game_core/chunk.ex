@@ -51,6 +51,7 @@ defmodule GameCore.Chunk do
   # 4 world units/sec = 4000 sub-units/sec (positions are in sub-units).
   @default_speed 4_000.0
   @default_flush_ms 5_000
+  @default_respawn_ms 30_000
 
   # 1.0 world unit, squared, in sub-units. Used by all interact verbs.
   @interact_range_sq 1_000 * 1_000
@@ -191,21 +192,26 @@ defmodule GameCore.Chunk do
     auto_tick = Keyword.get(opts, :auto_tick, true)
     auto_flush = Keyword.get(opts, :auto_flush, true)
     flush_ms = Keyword.get(opts, :flush_ms, @default_flush_ms)
+    respawn_ms = Keyword.get(opts, :respawn_ms, @default_respawn_ms)
     repo = Keyword.get(opts, :repo, GameCore.ChunkRepo.Null)
 
     Process.flag(:trap_exit, true)
 
+    world =
+      World.new()
+      |> seed_resource_nodes(coord)
+      |> seed_structures(coord, repo)
+      |> hydrate_depletions(coord, repo)
+
     state = %{
       coord: coord,
-      world:
-        World.new()
-        |> seed_resource_nodes(coord)
-        |> seed_structures(coord, repo),
+      world: world,
       tick_ms: tick_ms,
       speed: speed,
       auto_tick: auto_tick,
       auto_flush: auto_flush,
       flush_ms: flush_ms,
+      respawn_ms: respawn_ms,
       repo: repo,
       tick_count: 0,
       lifecycle: ChunkLifecycle.new(Keyword.take(opts, [:idle_timeout_ms]))
@@ -214,6 +220,31 @@ defmodule GameCore.Chunk do
     if auto_tick, do: schedule_tick(tick_ms)
     if auto_flush, do: schedule_flush(flush_ms)
     {:ok, state}
+  end
+
+  defp hydrate_depletions(world, coord, repo) do
+    now = DateTime.utc_now()
+
+    Enum.reduce(repo.fetch_depletions(coord), world, fn d, w ->
+      case DateTime.compare(d.depleted_until, now) do
+        :gt ->
+          eid = node_eid(d.type, d.x, d.y)
+          remaining_ms = DateTime.diff(d.depleted_until, now, :millisecond)
+          Process.send_after(self(), {:respawn, eid}, remaining_ms)
+
+          w
+          |> remove_component(Gatherable, eid)
+          |> World.add_component(eid, Depleted, %{
+            type: d.type,
+            depleted_until: d.depleted_until
+          })
+
+        _ ->
+          # Past-due: leave the Worldgen-seeded Gatherable in place. The
+          # next flush_db will DELETE the stale row.
+          w
+      end
+    end)
   end
 
   defp seed_resource_nodes(world, coord) do
@@ -410,15 +441,18 @@ defmodule GameCore.Chunk do
 
     with {:ok, {px, py}} <- player_pos(state.world, username),
          :ok <- check_in_range(px, py, tx, ty),
-         {:ok, %{yields: item}} <- fetch_gatherable(state.world, eid),
+         {:ok, %{type: gtype, yields: item}} <- fetch_gatherable(state.world, eid),
          {:ok, items} <- player_inv(state.world, username) do
       new_items = Map.update(items, item, 1, &(&1 + 1))
+      depleted_until = DateTime.add(DateTime.utc_now(), state.respawn_ms, :millisecond)
 
       world =
         state.world
         |> World.add_component(username, Inventory, %{items: new_items})
         |> remove_component(Gatherable, eid)
-        |> World.add_component(eid, Depleted, %{type: :tree, depleted_until: nil})
+        |> World.add_component(eid, Depleted, %{type: gtype, depleted_until: depleted_until})
+
+      Process.send_after(self(), {:respawn, eid}, state.respawn_ms)
 
       publish_self(username, new_items)
       {:reply, :ok, %{state | world: world}}
@@ -534,8 +568,28 @@ defmodule GameCore.Chunk do
 
   def handle_info(:flush_db, state) do
     flush_all(state)
+    flush_depletions(state)
     if state.auto_flush, do: schedule_flush(state.flush_ms)
     {:noreply, state}
+  end
+
+  def handle_info({:respawn, eid}, state) do
+    case World.fetch(state.world, eid, Depleted) do
+      {:ok, %{type: type}} ->
+        world =
+          state.world
+          |> remove_component(Depleted, eid)
+          |> World.add_component(eid, Gatherable, %{type: type, yields: yield_for(type)})
+
+        snap = BroadcastSystem.snapshot(world)
+        {cx, cy} = state.coord
+        Phoenix.PubSub.broadcast(GameCore.PubSub, "chunk:#{cx}:#{cy}", {:snapshot, snap})
+
+        {:noreply, %{state | world: world}}
+
+      :error ->
+        {:noreply, state}
+    end
   end
 
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
@@ -605,6 +659,19 @@ defmodule GameCore.Chunk do
       :error ->
         :ok
     end
+  end
+
+  defp flush_depletions(%{world: world, coord: coord, repo: repo}) do
+    positions = Map.get(world.components, Position, %{})
+    depleteds = Map.get(world.components, Depleted, %{})
+
+    rows =
+      for {eid, %{type: type, depleted_until: %DateTime{} = until}} <- depleteds,
+          {:ok, %{x: x, y: y}} <- [Map.fetch(positions, eid)] do
+        %{type: type, x: x, y: y, depleted_until: until}
+      end
+
+    repo.flush_depletions(coord, rows)
   end
 
   defp flush_all(%{world: world, coord: coord, repo: repo}) do

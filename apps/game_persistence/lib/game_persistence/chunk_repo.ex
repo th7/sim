@@ -4,7 +4,7 @@ defmodule GamePersistence.ChunkRepo do
   @behaviour GameCore.ChunkRepo
 
   alias GamePersistence.{Players, Repo}
-  alias GamePersistence.Schemas.Structure
+  alias GamePersistence.Schemas.{ResourceNode, Structure}
 
   @impl true
   def fetch_player(username) when is_binary(username), do: Players.get_or_create(username)
@@ -70,5 +70,59 @@ defmodule GamePersistence.ChunkRepo do
         hp: s.hp
       }
     end)
+  end
+
+  @impl true
+  def fetch_depletions({chunk_x, chunk_y}) do
+    import Ecto.Query
+
+    Repo.all(
+      from(r in ResourceNode,
+        where:
+          r.chunk_x == ^chunk_x and r.chunk_y == ^chunk_y and not is_nil(r.depleted_until)
+      )
+    )
+    |> Enum.map(fn r ->
+      %{
+        type: String.to_existing_atom(r.type),
+        x: r.x,
+        y: r.y,
+        depleted_until: r.depleted_until
+      }
+    end)
+  end
+
+  @impl true
+  def flush_depletions({chunk_x, chunk_y}, depleted_now) when is_list(depleted_now) do
+    import Ecto.Query
+
+    # The chunk's GenServer serializes all writes to its own rows, so the
+    # cheapest correct reconcile is DELETE-all + INSERT-all inside one
+    # transaction. The set is tiny (a handful of trees per chunk).
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    rows =
+      Enum.map(depleted_now, fn d ->
+        %{
+          chunk_x: chunk_x,
+          chunk_y: chunk_y,
+          type: Atom.to_string(d.type),
+          x: d.x,
+          y: d.y,
+          depleted_until: DateTime.truncate(d.depleted_until, :microsecond),
+          inserted_at: now,
+          updated_at: now
+        }
+      end)
+
+    Repo.transaction(fn ->
+      Repo.delete_all(
+        from(r in ResourceNode, where: r.chunk_x == ^chunk_x and r.chunk_y == ^chunk_y)
+      )
+
+      if rows != [], do: Repo.insert_all(ResourceNode, rows)
+    end)
+
+    :ok
   end
 end

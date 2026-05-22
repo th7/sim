@@ -8,7 +8,8 @@ defmodule GamePersistence.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      GamePersistence.Repo
+      GamePersistence.Repo,
+      GamePersistence.DepletionPruner
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

@@ -29,6 +29,12 @@ defmodule GameCore.ChunkBuildTest do
     def fetch_structures(_coord), do: []
 
     @impl true
+    def fetch_depletions(_coord), do: []
+
+    @impl true
+    def flush_depletions(_coord, _depleted_now), do: :ok
+
+    @impl true
     def build_structure(coord, owner, type, x, y, inventory) do
       next_id =
         Agent.get_and_update(__MODULE__, fn st ->
@@ -149,6 +155,12 @@ defmodule GameCore.ChunkBuildTest do
 
     @impl true
     def fetch_structures(_coord), do: []
+
+    @impl true
+    def fetch_depletions(_coord), do: []
+
+    @impl true
+    def flush_depletions(_coord, _depleted_now), do: :ok
   end
 
   test "atomicity: a failing build_structure leaves inventory and ECS untouched" do
