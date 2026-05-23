@@ -105,13 +105,11 @@ app.appendChild(renderer.domElement);
 scene.add(new THREE.GridHelper(CHUNK_SIZE * 5, CHUNK_SIZE * 5, 0x404040, 0x202020));
 
 const playerMeshes = new Map<string, THREE.Mesh>();
-// Latest snapshot position per Player, plus a per-mesh "from" snapshot used to
-// interpolate during animation frames. Snapshots arrive at ~10 Hz; lerping
-// between consecutive ones over the snapshot interval (~100 ms) eliminates
-// visible jitter without introducing client-side prediction.
-const playerTargets = new Map<string, PlayerPos>();
-const playerLerpFrom = new Map<string, PlayerPos>();
-const playerLerpStart = new Map<string, number>();
+// Per-mesh interpolation state. Snapshots arrive at ~10 Hz; lerping from the
+// mesh's current visible position toward the latest snapshot target over the
+// snapshot interval (~100 ms) eliminates jitter without client-side prediction.
+type LerpState = { from: PlayerPos; target: PlayerPos; start: number };
+const playerLerps = new Map<string, LerpState>();
 const SNAPSHOT_INTERVAL_MS = 100;
 const palette = [0x4caf50, 0x2196f3, 0xff9800, 0xe91e63, 0x9c27b0, 0xffeb3b];
 
@@ -142,34 +140,31 @@ function updateRenderedFromMerge(): void {
     for (const [name, pos] of m) union.set(name, pos);
   }
   const now = performance.now();
-  for (const [name, pos] of union) {
+  for (const [name, target] of union) {
     let mesh = playerMeshes.get(name);
+    let from: PlayerPos;
     if (!mesh) {
       mesh = new THREE.Mesh(
         new THREE.BoxGeometry(1, 1, 1),
         new THREE.MeshBasicMaterial({ color: colorFor(name) }),
       );
-      mesh.position.set(pos.x, 0.5, pos.y);
+      mesh.position.set(target.x, 0.5, target.y);
       scene.add(mesh);
       playerMeshes.set(name, mesh);
-      playerLerpFrom.set(name, pos);
+      from = target;
     } else {
-      // Capture the mesh's current visible position as the start of the
-      // next lerp segment (not the previous target — using the actual
-      // visible position keeps motion continuous even if a snapshot
-      // arrived mid-segment).
-      playerLerpFrom.set(name, { x: mesh.position.x, y: mesh.position.z });
+      // Capture the mesh's current visible position (not the previous
+      // target) as the lerp start so motion stays continuous when a
+      // snapshot arrives mid-segment.
+      from = { x: mesh.position.x, y: mesh.position.z };
     }
-    playerTargets.set(name, pos);
-    playerLerpStart.set(name, now);
+    playerLerps.set(name, { from, target, start: now });
   }
   for (const [name, mesh] of playerMeshes) {
     if (!union.has(name)) {
       scene.remove(mesh);
       playerMeshes.delete(name);
-      playerTargets.delete(name);
-      playerLerpFrom.delete(name);
-      playerLerpStart.delete(name);
+      playerLerps.delete(name);
     }
   }
 
@@ -566,15 +561,13 @@ renderer.setAnimationLoop(() => {
   // capped at 1.0 so late frames don't overshoot.
   const now = performance.now();
   for (const [name, mesh] of playerMeshes) {
-    const target = playerTargets.get(name);
-    const from = playerLerpFrom.get(name);
-    const start = playerLerpStart.get(name);
-    if (!target || !from || start === undefined) continue;
-    const t = Math.min(1, (now - start) / SNAPSHOT_INTERVAL_MS);
+    const lerp = playerLerps.get(name);
+    if (!lerp) continue;
+    const t = Math.min(1, (now - lerp.start) / SNAPSHOT_INTERVAL_MS);
     mesh.position.set(
-      from.x + (target.x - from.x) * t,
+      lerp.from.x + (lerp.target.x - lerp.from.x) * t,
       0.5,
-      from.y + (target.y - from.y) * t,
+      lerp.from.y + (lerp.target.y - lerp.from.y) * t,
     );
   }
   renderer.render(scene, camera);
