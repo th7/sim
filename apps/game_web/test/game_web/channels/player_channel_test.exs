@@ -1,18 +1,10 @@
 defmodule GameWeb.PlayerChannelTest do
   use GameWeb.ChannelCase, async: false
+  import GameWeb.ChunkCleanup, only: [reset_chunks_and_instances: 1]
 
   alias GameCore.{Chunk, Chunks, Sessions}
 
-  setup do
-    on_exit(fn ->
-      for {_, pid, _, _} <- DynamicSupervisor.which_children(GameCore.ChunkSupervisor),
-          is_pid(pid) do
-        DynamicSupervisor.terminate_child(GameCore.ChunkSupervisor, pid)
-      end
-    end)
-
-    :ok
-  end
+  setup :reset_chunks_and_instances
 
   defp join_as(username, initial_chunk) do
     GameWeb.UserSocket
