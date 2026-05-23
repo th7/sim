@@ -135,7 +135,7 @@ defmodule GamePersistence.Datastore do
     results =
       for {{x, y}, entry} <- state.pending.structure,
           entry != :tombstone,
-          GameCore.ChunkGeometry.coord_for(x, y) == coord,
+          coord_for(x, y) == coord,
           do: entry
 
     {:reply, results, state}
@@ -301,6 +301,12 @@ defmodule GamePersistence.Datastore do
   end
 
   defp empty_pending, do: %{player: %{}, structure: %{}, depletion: %{}}
+
+  # Mirrors `GameCore.ChunkGeometry.chunk_size/0` (16_000 sub-units). The
+  # constant is duplicated here to avoid a back-dep on game_core; the
+  # natural-key flush API requires resolving a chunk coord from (x, y).
+  @chunk_size 16_000
+  defp coord_for(x, y), do: {Integer.floor_div(x, @chunk_size), Integer.floor_div(y, @chunk_size)}
 
   defp upsert_player_row(repo, entry) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

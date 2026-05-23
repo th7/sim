@@ -37,9 +37,10 @@ defmodule GamePersistence.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:game_core, in_umbrella: true},
       {:ecto_sql, "~> 3.12"},
-      {:postgrex, "~> 0.19"}
+      {:postgrex, "~> 0.19"},
+      # Postgrex uses Jason to encode :map fields into JSONB.
+      {:jason, "~> 1.2"}
     ]
   end
 end

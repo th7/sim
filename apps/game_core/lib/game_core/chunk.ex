@@ -857,7 +857,7 @@ defmodule GameCore.Chunk do
     case World.fetch(state.world, username, Position) do
       {:ok, %{x: x, y: y}} ->
         items = player_items(state.world, username)
-        :ok = Datastore.upsert_player(username, state.coord, x, y, items)
+        safe_emit(fn -> Datastore.upsert_player(username, state.coord, x, y, items) end)
 
       :error ->
         :ok
@@ -873,12 +873,26 @@ defmodule GameCore.Chunk do
     Enum.each(player_eids, fn eid ->
       case Map.fetch(positions, eid) do
         {:ok, %{x: x, y: y}} ->
-          :ok = Datastore.upsert_player(eid, coord, x, y, player_items(world, eid))
+          safe_emit(fn ->
+            Datastore.upsert_player(eid, coord, x, y, player_items(world, eid))
+          end)
 
         :error ->
           :ok
       end
     end)
+  end
+
+  # Suppress exits from `Datastore.upsert_player/...` callers. The
+  # Datastore being unavailable is either a transient test-shutdown
+  # race (the supervisor pulled it before the chunk's leave/heartbeat)
+  # or a catastrophic failure that has already triggered the
+  # game_core cascade. Either way, swallowing here keeps the chunk's
+  # own teardown clean.
+  defp safe_emit(fun) do
+    fun.()
+  catch
+    _, _ -> :ok
   end
 
   defp player_items(world, username) do

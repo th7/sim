@@ -9,7 +9,7 @@ defmodule GameCore.ChunkPostMigrationHarvestTest do
   receives a `harvest` for a username whose Position has been removed
   from its World.
   """
-  use ExUnit.Case, async: false
+  use GameCore.ChunkCase, async: false
 
   alias GameCore.{Chunk, Chunks}
 

@@ -31,10 +31,11 @@ defmodule GameCore.MixProject do
   defp deps do
     [
       {:phoenix_pubsub, "~> 2.2"},
-      # Test-only: chunk tests run an `Ecto.Adapters.SQL.Sandbox` checkout
-      # to isolate Datastore writes per test. The Datastore module itself
-      # is loaded at runtime via the umbrella.
-      {:ecto_sql, "~> 3.12", only: :test}
+      # game_persistence hosts the Datastore that chunks emit through and
+      # owns the Repo. Compile dep so chunks can name `GamePersistence.Datastore`
+      # directly; the dep direction used to be the reverse (via ChunkRepo)
+      # but that's been removed.
+      {:game_persistence, in_umbrella: true}
     ]
   end
 end
