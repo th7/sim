@@ -121,13 +121,13 @@ defmodule GameCore.Chunk do
   @spec set_intent(GenServer.server(), username(), intent()) :: :ok
   def set_intent(server, username, {dx, dy})
       when is_number(dx) and is_number(dy) do
-    GenServer.call(server, {:set_intent, username, {dx * 1.0, dy * 1.0}})
+    GenServer.call(server, {:set_intent, username, {dx * 1.0, dy * 1.0}}, :infinity)
   end
 
   @spec harvest(GenServer.server(), username(), {integer(), integer()}) ::
           :ok | {:error, :too_far | :no_target | :depleted}
   def harvest(server, username, {x, y}) when is_integer(x) and is_integer(y) do
-    GenServer.call(server, {:harvest, username, {x, y}})
+    GenServer.call(server, {:harvest, username, {x, y}}, :infinity)
   end
 
   @doc "Read-only query for a Player's current Inventory. Empty map if none."
@@ -147,7 +147,7 @@ defmodule GameCore.Chunk do
           :ok | {:error, atom()}
   def build(server, username, type, {x, y})
       when is_atom(type) and is_integer(x) and is_integer(y) do
-    GenServer.call(server, {:build, username, type, {x, y}})
+    GenServer.call(server, {:build, username, type, {x, y}}, :infinity)
   end
 
   @damage_per_click 25
@@ -155,7 +155,7 @@ defmodule GameCore.Chunk do
   @spec damage(GenServer.server(), username(), {integer(), integer()}) ::
           :ok | {:error, atom()}
   def damage(server, username, {x, y}) when is_integer(x) and is_integer(y) do
-    GenServer.call(server, {:damage, username, {x, y}})
+    GenServer.call(server, {:damage, username, {x, y}}, :infinity)
   end
 
   @doc """
@@ -193,7 +193,7 @@ defmodule GameCore.Chunk do
   @doc false
   @spec migrate_in(GenServer.server(), GameCore.World.eid(), %{module() => any()}) :: :ok
   def migrate_in(server, eid, components) do
-    GenServer.call(server, {:migrate_in, eid, components})
+    GenServer.call(server, {:migrate_in, eid, components}, :infinity)
   end
 
   @doc """
@@ -215,7 +215,7 @@ defmodule GameCore.Chunk do
         ) :: %{module() => any()}
   def take_components_for(server, eid, dest_pos, save_pos)
       when is_tuple(dest_pos) and is_tuple(save_pos) do
-    GenServer.call(server, {:take_components_for, eid, dest_pos, save_pos})
+    GenServer.call(server, {:take_components_for, eid, dest_pos, save_pos}, :infinity)
   end
 
   @impl true
@@ -883,16 +883,17 @@ defmodule GameCore.Chunk do
     end)
   end
 
-  # Suppress exits from `Datastore.upsert_player/...` callers. The
-  # Datastore being unavailable is either a transient test-shutdown
-  # race (the supervisor pulled it before the chunk's leave/heartbeat)
-  # or a catastrophic failure that has already triggered the
-  # game_core cascade. Either way, swallowing here keeps the chunk's
-  # own teardown clean.
+  # Lifecycle flushes (`:flush_db` heartbeat, `terminate`, `leave`) are
+  # best-effort. They must NOT block the chunk's mailbox: under Datastore
+  # backpressure, the verb-path wrappers wait `:infinity` (see
+  # `CONTEXT.md` → Backpressure), so a synchronous call here would hang
+  # the chunk's `:flush_db` tick or, worse, its `terminate/2` — past
+  # which the supervisor force-kills with a noisy log. Spawn so the
+  # upsert lands when the Datastore drains, decoupled from the chunk's
+  # lifecycle.
   defp safe_emit(fun) do
-    fun.()
-  catch
-    _, _ -> :ok
+    spawn(fun)
+    :ok
   end
 
   defp player_items(world, username) do

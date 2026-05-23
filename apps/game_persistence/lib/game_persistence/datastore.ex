@@ -27,7 +27,11 @@ defmodule GamePersistence.Datastore do
   def upsert_player(username, {chunk_x, chunk_y}, x, y, inventory)
       when is_binary(username) and is_integer(chunk_x) and is_integer(chunk_y) and
              is_integer(x) and is_integer(y) and is_map(inventory) do
-    GenServer.call(__MODULE__, {:upsert_player, username, {chunk_x, chunk_y}, x, y, inventory})
+    GenServer.call(
+      __MODULE__,
+      {:upsert_player, username, {chunk_x, chunk_y}, x, y, inventory},
+      :infinity
+    )
   end
 
   def fetch_player(username) when is_binary(username) do
@@ -37,7 +41,7 @@ defmodule GamePersistence.Datastore do
   def upsert_structure({_, _} = coord, owner, type, x, y, hp)
       when is_binary(owner) and is_atom(type) and is_integer(x) and is_integer(y) and
              is_integer(hp) do
-    GenServer.call(__MODULE__, {:upsert_structure, coord, owner, type, x, y, hp})
+    GenServer.call(__MODULE__, {:upsert_structure, coord, owner, type, x, y, hp}, :infinity)
   end
 
   def fetch_structures({_, _} = coord) do
@@ -45,20 +49,21 @@ defmodule GamePersistence.Datastore do
   end
 
   def delete_structure(x, y) when is_integer(x) and is_integer(y) do
-    GenServer.call(__MODULE__, {:delete_structure, x, y})
+    GenServer.call(__MODULE__, {:delete_structure, x, y}, :infinity)
   end
 
   def upsert_depletion(realm, {_, _} = coord, type, x, y, %DateTime{} = depleted_until)
       when is_atom(type) and is_integer(x) and is_integer(y) do
     GenServer.call(
       __MODULE__,
-      {:upsert_depletion, realm, coord, type, x, y, depleted_until}
+      {:upsert_depletion, realm, coord, type, x, y, depleted_until},
+      :infinity
     )
   end
 
   def delete_depletion(realm, {_, _} = coord, type, x, y)
       when is_atom(type) and is_integer(x) and is_integer(y) do
-    GenServer.call(__MODULE__, {:delete_depletion, realm, coord, type, x, y})
+    GenServer.call(__MODULE__, {:delete_depletion, realm, coord, type, x, y}, :infinity)
   end
 
   def fetch_depletions(realm, {_, _} = coord) do

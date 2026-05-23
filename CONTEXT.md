@@ -87,7 +87,7 @@ The **Datastore**'s in-memory buffer of state changes that have been emitted by 
 _Avoid_: WAL (the buffer is not a log — it's a keyed map of effective state), write queue, dirty set.
 
 **Backpressure**:
-The **Datastore**'s overload-protection mode. When **pending writes** exceed a size threshold or any entry has aged past a time threshold, the Datastore stops replying to incoming write calls — caller `GenServer.call`s block. Upstream **Chunks** (and the **Players** whose verbs route through them) freeze. The mode clears when the Datastore drains — usually because the DB recovered, or an operator deployed a fix via hot code reload for a stuck flush. Parked callers then receive their replies in FIFO order and upstream resumes naturally.
+The **Datastore**'s overload-protection mode. When **pending writes** exceed a size threshold or any entry has aged past a time threshold, the Datastore stops replying to incoming write calls — caller `GenServer.call`s block. Upstream **Chunks** freeze whole-mailbox — every **Player** colocated in a frozen **Chunk**, not only the one whose verb triggered the park, freezes with it. The mode clears when the Datastore drains — usually because the DB recovered, or an operator deployed a fix via hot code reload for a stuck flush. Parked callers then receive their replies in FIFO order and upstream resumes naturally.
 
 ## Relationships
 

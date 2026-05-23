@@ -68,7 +68,8 @@ defmodule GameCore.Session do
 
   @doc "Forward input to whichever Chunk currently owns the Player's entity."
   @spec set_intent(GenServer.server(), {number(), number()}) :: :ok
-  def set_intent(server, {_, _} = intent), do: GenServer.call(server, {:set_intent, intent})
+  def set_intent(server, {_, _} = intent),
+    do: GenServer.call(server, {:set_intent, intent}, :infinity)
 
   @doc """
   Enter an Instance from an Overworld Portal at `portal_pos`. Spawns a
@@ -79,7 +80,7 @@ defmodule GameCore.Session do
           :ok | {:error, atom()}
   def enter_instance(server, from_coord, {px, py})
       when is_integer(px) and is_integer(py) do
-    GenServer.call(server, {:enter_instance, from_coord, {px, py}})
+    GenServer.call(server, {:enter_instance, from_coord, {px, py}}, :infinity)
   end
 
   @doc """
@@ -88,19 +89,19 @@ defmodule GameCore.Session do
   and terminate the Instance.
   """
   @spec exit_instance(GenServer.server()) :: :ok | {:error, atom()}
-  def exit_instance(server), do: GenServer.call(server, :exit_instance)
+  def exit_instance(server), do: GenServer.call(server, :exit_instance, :infinity)
 
   @spec harvest(GenServer.server(), {integer(), integer()}) :: :ok | {:error, atom()}
   def harvest(server, {x, y}) when is_integer(x) and is_integer(y),
-    do: GenServer.call(server, {:harvest, {x, y}})
+    do: GenServer.call(server, {:harvest, {x, y}}, :infinity)
 
   @spec build(GenServer.server(), atom(), {integer(), integer()}) :: :ok | {:error, atom()}
   def build(server, type, {x, y}) when is_atom(type) and is_integer(x) and is_integer(y),
-    do: GenServer.call(server, {:build, type, {x, y}})
+    do: GenServer.call(server, {:build, type, {x, y}}, :infinity)
 
   @spec damage(GenServer.server(), {integer(), integer()}) :: :ok | {:error, atom()}
   def damage(server, {x, y}) when is_integer(x) and is_integer(y),
-    do: GenServer.call(server, {:damage, {x, y}})
+    do: GenServer.call(server, {:damage, {x, y}}, :infinity)
 
   @impl true
   def init(opts) do

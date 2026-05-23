@@ -1,4 +1,4 @@
-ExUnit.start()
+ExUnit.start(exclude: [:slow])
 
 # Chunk tests start a per-test `GamePersistence.Datastore` (see ChunkCase)
 # under an Ecto SQL sandbox checkout. Ensure the persistence app and its

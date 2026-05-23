@@ -342,4 +342,34 @@ defmodule GamePersistence.DatastoreTest do
         do_eventually(fun, deadline)
       end
   end
+
+  # The Datastore's write wrappers must call with `:infinity` so backpressure
+  # holds the caller indefinitely (per CONTEXT.md's Backpressure entry — the
+  # design says "Upstream Chunks freeze," not "crash at 5s"). The test waits
+  # past the default 5_000ms `GenServer.call` timeout to prove the wrapper
+  # doesn't propagate it. ~5.5s wall-clock; tagged :slow.
+  @tag :slow
+  test "upsert_player wrapper waits :infinity for a backpressured Datastore to drain" do
+    # trap_exit: Task.async is linked to the test process; without trap_exit
+    # the Task's eventual `:timeout` EXIT would kill the test before the
+    # refute assertion can run, masking the real failure.
+    Process.flag(:trap_exit, true)
+
+    stop_supervised!(Datastore)
+    start_supervised!({Datastore, n_high: 2, n_low: 1, flush_interval_ms: 0})
+
+    :ok = Datastore.upsert_player("seed1", {0, 0}, 1, 2, %{})
+    :ok = Datastore.upsert_player("seed2", {0, 0}, 3, 4, %{})
+    assert :backpressured = Datastore.mode()
+
+    task =
+      Task.async(fn -> Datastore.upsert_player("alice", {0, 0}, 5, 6, %{wood: 1}) end)
+
+    refute Task.yield(task, 5_500),
+           "expected :infinity timeout to keep the call parked past the default 5_000ms"
+
+    :ok = Datastore.flush_now()
+
+    assert {:ok, :ok} = Task.yield(task, 1_000) || Task.shutdown(task)
+  end
 end
