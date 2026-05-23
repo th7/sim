@@ -345,6 +345,7 @@ document.body.appendChild(invHudEl);
 function refreshHudInventory(): void {
   const lines = Object.entries(ownInventory)
     .filter(([, n]) => n > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
     .map(([k, n]) => `${k.padEnd(8)} ${n}`);
   invHudEl.textContent = lines.length ? lines.join('\n') : '(empty)';
 }
