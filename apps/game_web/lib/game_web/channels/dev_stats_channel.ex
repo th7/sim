@@ -54,7 +54,7 @@ defmodule GameWeb.DevStatsChannel do
   end
 
   defp entry_for({cx, cy} = coord) do
-    case Chunks.whereis(coord) do
+    case Chunks.whereis(:overworld, coord) do
       pid when is_pid(pid) ->
         s = Chunk.dev_status(pid)
 

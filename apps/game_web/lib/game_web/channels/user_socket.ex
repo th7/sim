@@ -2,6 +2,7 @@ defmodule GameWeb.UserSocket do
   use Phoenix.Socket
 
   channel "chunk:*", GameWeb.ChunkChannel
+  channel "player:*", GameWeb.PlayerChannel
   channel "dev:stats", GameWeb.DevStatsChannel
 
   @impl true

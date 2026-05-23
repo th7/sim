@@ -25,7 +25,7 @@ defmodule GameCore.ChunkMigration do
           repo :: module()
         ) :: :ok
   def cross(eid, _from_coord, to_coord, components, repo) do
-    {:ok, dest} = Chunks.ensure_started(to_coord, repo)
+    {:ok, dest} = Chunks.ensure_started(:overworld, to_coord, repo)
     :ok = Chunk.migrate_in(dest, eid, components)
 
     case Sessions.whereis(eid) do

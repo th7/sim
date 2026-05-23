@@ -101,7 +101,7 @@ defmodule GameWeb.DevStatsChannelTest do
     assert_receive {:DOWN, ^bob_ref, :process, ^bob_pid, _}
 
     # Let the chunk process the release_interest call.
-    case GameCore.Chunks.whereis({3, 0}) do
+    case GameCore.Chunks.whereis(:overworld, {3, 0}) do
       pid when is_pid(pid) -> _ = :sys.get_state(pid)
       _ -> :ok
     end

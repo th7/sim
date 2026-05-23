@@ -11,7 +11,8 @@ defmodule GameCore do
   """
   def start_chunk(opts) do
     coord = Keyword.fetch!(opts, :coord)
-    opts = Keyword.put_new(opts, :name, GameCore.Chunks.via(coord))
+    realm = Keyword.get(opts, :realm, :overworld)
+    opts = Keyword.put_new(opts, :name, GameCore.Chunks.via(realm, coord))
     DynamicSupervisor.start_child(GameCore.ChunkSupervisor, {GameCore.Chunk, opts})
   end
 

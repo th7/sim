@@ -4,6 +4,7 @@ import { Socket, type Channel } from 'phoenix';
 type PlayerPos = { x: number; y: number };
 type ResourceNode = { type: string; x: number; y: number; depleted: boolean };
 type StructureEntry = { type: string; x: number; y: number; hp: number; owner: string };
+type PortalEntry = { type: string; direction: string; x: number; y: number };
 // Server snapshots carry positions in **sub-units** (1 world unit = 1000
 // sub-units); we divide at the channel boundary so the rest of the
 // frontend works in world-unit floats for Three.js.
@@ -11,11 +12,13 @@ type WireSnapshot = {
   players: Record<string, { x: number; y: number }>;
   resource_nodes: Record<string, { type: string; x: number; y: number; depleted: boolean }>;
   structures: Record<string, { type: string; x: number; y: number; hp: number; owner: string }>;
+  portals: Record<string, { type: string; direction: string; x: number; y: number }>;
 };
 type Snapshot = {
   players: Record<string, PlayerPos>;
   resource_nodes: Record<string, ResourceNode>;
   structures: Record<string, StructureEntry>;
+  portals: Record<string, PortalEntry>;
 };
 type Coord = readonly [number, number];
 type Inventory = Record<string, number>;
@@ -42,7 +45,12 @@ function fromSubUnits(snap: WireSnapshot): Snapshot {
     structures[id] = { type: s.type, x: s.x / SUB, y: s.y / SUB, hp: s.hp, owner: s.owner };
   }
 
-  return { players, resource_nodes, structures };
+  const portals: Record<string, PortalEntry> = {};
+  for (const [id, p] of Object.entries(snap.portals ?? {})) {
+    portals[id] = { type: p.type, direction: p.direction, x: p.x / SUB, y: p.y / SUB };
+  }
+
+  return { players, resource_nodes, structures, portals };
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -106,12 +114,16 @@ function colorFor(name: string): number {
 const channelSnapshots = new Map<string, Map<string, PlayerPos>>();
 const channelNodes = new Map<string, Map<string, ResourceNode>>();
 const channelStructures = new Map<string, Map<string, StructureEntry>>();
+const channelPortals = new Map<string, Map<string, PortalEntry>>();
 const nodeMeshes = new Map<string, THREE.Mesh>();
 const structureMeshes = new Map<string, THREE.Mesh>();
+const portalMeshes = new Map<string, THREE.Mesh>();
 
 const NODE_GATHERABLE_COLOR = 0x2e7d32;
 const NODE_DEPLETED_COLOR = 0x6d4c41;
 const WALL_COLOR = 0x90a4ae;
+const PORTAL_INTO_COLOR = 0x7e57c2;
+const PORTAL_OUT_COLOR = 0xff7043;
 
 function updateRenderedFromMerge(): void {
   const union = new Map<string, PlayerPos>();
@@ -200,12 +212,42 @@ function updateRenderedFromMerge(): void {
       structureMeshes.delete(id);
     }
   }
+
+  // Portals.
+  const portalUnion = new Map<string, PortalEntry>();
+  for (const m of channelPortals.values()) {
+    for (const [id, p] of m) portalUnion.set(id, p);
+  }
+  for (const [id, p] of portalUnion) {
+    let mesh = portalMeshes.get(id);
+    if (!mesh) {
+      mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.5, 0.5, 1.5, 16),
+        new THREE.MeshBasicMaterial({
+          color: p.direction === 'into_instance' ? PORTAL_INTO_COLOR : PORTAL_OUT_COLOR,
+          transparent: true,
+          opacity: 0.7,
+        }),
+      );
+      mesh.userData = { kind: 'portal', id };
+      scene.add(mesh);
+      portalMeshes.set(id, mesh);
+    }
+    mesh.position.set(p.x, 0.75, p.y);
+  }
+  for (const [id, mesh] of portalMeshes) {
+    if (!portalUnion.has(id)) {
+      scene.remove(mesh);
+      portalMeshes.delete(id);
+    }
+  }
 }
 
 function ingestChunkSnapshot(key: string, snap: Snapshot): void {
   channelSnapshots.set(key, new Map(Object.entries(snap.players)));
   channelNodes.set(key, new Map(Object.entries(snap.resource_nodes)));
   channelStructures.set(key, new Map(Object.entries(snap.structures)));
+  channelPortals.set(key, new Map(Object.entries(snap.portals)));
 
   // The local cube may have migrated to a different chunk than it joined
   // through; follow it wherever the server reports it.
@@ -225,7 +267,6 @@ function findOwnCube(): PlayerPos | undefined {
 }
 
 let windowCenter: Coord = homeChunk;
-const homeKey0 = chunkKey(homeChunk);
 
 function maybeShiftWindow({ x, y }: PlayerPos): void {
   const [cx, cy] = [Math.floor(x / CHUNK_SIZE), Math.floor(y / CHUNK_SIZE)];
@@ -235,11 +276,9 @@ function maybeShiftWindow({ x, y }: PlayerPos): void {
   const oldKeys = new Set(windowCoords(windowCenter).map(chunkKey));
   const newKeys = new Set(windowCoords(newCenter).map(chunkKey));
 
-  // Drop stale observer subscriptions, but never leave the home chunk —
-  // it's the channel that owns the local Player.
+  // Drop stale snapshot subscriptions.
   for (const k of oldKeys) {
     if (newKeys.has(k)) continue;
-    if (k === homeKey0) continue;
     const ch = channels.get(k);
     if (ch) {
       ch.leave();
@@ -247,14 +286,15 @@ function maybeShiftWindow({ x, y }: PlayerPos): void {
       channelSnapshots.delete(k);
       channelNodes.delete(k);
       channelStructures.delete(k);
+      channelPortals.delete(k);
     }
   }
 
-  // Subscribe to newly-in-window chunks as observers.
+  // Subscribe to newly-in-window chunks.
   for (const k of newKeys) {
     if (channels.has(k)) continue;
     const [ncx, ncy] = k.split(':').map((s) => parseInt(s, 10));
-    subscribeChunk([ncx, ncy], 'observer');
+    subscribeChunk([ncx, ncy]);
   }
 
   windowCenter = newCenter;
@@ -318,13 +358,13 @@ refreshHudInventory();
     handleWorldClick(worldX, worldY);
   },
   harvest(subX: number, subY: number): void {
-    ownerChannel.push('harvest', { x: subX, y: subY });
+    playerChannel.push('harvest', { x: subX, y: subY });
   },
   build(type: string, subX: number, subY: number): void {
-    ownerChannel.push('build', { type, x: subX, y: subY });
+    playerChannel.push('build', { type, x: subX, y: subY });
   },
   damage(subX: number, subY: number): void {
-    ownerChannel.push('damage', { x: subX, y: subY });
+    playerChannel.push('damage', { x: subX, y: subY });
   },
 };
 
@@ -336,19 +376,13 @@ socket.connect();
 
 const channels = new Map<string, Channel>();
 
-function subscribeChunk(coord: Coord, role: 'owner' | 'observer'): Channel {
+function subscribeChunk(coord: Coord): Channel {
   const key = chunkKey(coord);
   const topic = `chunk:${coord[0]}:${coord[1]}`;
-  const channel = socket.channel(topic, { username, role });
+  const channel = socket.channel(topic, { username });
   channel.on('snapshot', (snap: WireSnapshot) =>
     ingestChunkSnapshot(key, fromSubUnits(snap)),
   );
-  if (role === 'owner') {
-    channel.on('self', (payload: { inventory: Inventory }) => {
-      ownInventory = payload.inventory ?? {};
-      refreshHudInventory();
-    });
-  }
   channel
     .join()
     .receive('error', (e: unknown) => console.error(`join ${topic} failed`, e));
@@ -356,12 +390,21 @@ function subscribeChunk(coord: Coord, role: 'owner' | 'observer'): Channel {
   return channel;
 }
 
-const homeKey = chunkKey(homeChunk);
-const ownerChannel = subscribeChunk(homeChunk, 'owner');
+// One persistent player channel hosts all input verbs and per-Player events.
+const playerChannel = socket.channel(`player:${username}`, {
+  username,
+  initial_chunk: [homeChunk[0], homeChunk[1]],
+});
+playerChannel.on('self', (payload: { inventory: Inventory }) => {
+  ownInventory = payload.inventory ?? {};
+  refreshHudInventory();
+});
+playerChannel
+  .join()
+  .receive('error', (e: unknown) => console.error(`join player:${username} failed`, e));
 
 for (const coord of windowCoords(homeChunk)) {
-  if (chunkKey(coord) === homeKey) continue;
-  subscribeChunk(coord, 'observer');
+  subscribeChunk(coord);
 }
 
 function handleWorldClick(worldX: number, worldY: number): void {
@@ -373,7 +416,7 @@ function handleWorldClick(worldX: number, worldY: number): void {
     for (const [, n] of m) {
       if (n.depleted) continue;
       if (Math.abs(n.x - worldX) < 0.5 && Math.abs(n.y - worldY) < 0.5) {
-        ownerChannel.push('harvest', {
+        playerChannel.push('harvest', {
           x: Math.round(n.x * SUB),
           y: Math.round(n.y * SUB),
         });
@@ -386,7 +429,7 @@ function handleWorldClick(worldX: number, worldY: number): void {
   for (const [, m] of channelStructures) {
     for (const [, s] of m) {
       if (Math.abs(s.x - worldX) < 0.5 && Math.abs(s.y - worldY) < 0.5) {
-        ownerChannel.push('damage', { x: Math.round(s.x * SUB), y: Math.round(s.y * SUB) });
+        playerChannel.push('damage', { x: Math.round(s.x * SUB), y: Math.round(s.y * SUB) });
         return;
       }
     }
@@ -401,7 +444,7 @@ function handleWorldClick(worldX: number, worldY: number): void {
   const dx = me.x - cellX / SUB;
   const dy = me.y - cellY / SUB;
   if (dx * dx + dy * dy > INTERACT_RANGE * INTERACT_RANGE) return;
-  ownerChannel.push('build', { type: 'wall', x: cellX, y: cellY });
+  playerChannel.push('build', { type: 'wall', x: cellX, y: cellY });
 }
 
 renderer.domElement.addEventListener('click', (ev) => {
@@ -429,7 +472,7 @@ function currentIntent(): { dx: number; dy: number } {
 function maybePushIntent(): void {
   const intent = currentIntent();
   if (intent.dx !== lastIntent.dx || intent.dy !== lastIntent.dy) {
-    ownerChannel.push('move', intent);
+    playerChannel.push('move', intent);
     lastIntent = intent;
   }
 }

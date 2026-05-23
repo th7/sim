@@ -19,6 +19,7 @@ defmodule GameCore.WarmSet do
   @default_radius 2
 
   @type t :: %__MODULE__{
+          realm: Chunks.realm(),
           center: Chunk.coord(),
           radius: non_neg_integer(),
           members: MapSet.t(Chunk.coord()),
@@ -26,15 +27,18 @@ defmodule GameCore.WarmSet do
           repo: module()
         }
 
-  defstruct [:center, :radius, :members, :holder, :repo]
+  defstruct [:realm, :center, :radius, :members, :holder, :repo]
 
   @doc """
   Build a new WarmSet centered on `center`, held by `holder`. Synchronously
-  activates every Chunk in the initial window and expresses interest.
+  activates every Chunk in the initial window and expresses interest. The
+  WarmSet is realm-scoped: `:recenter` only pans within the realm; a realm
+  change is a tear-down (`release_all`) plus a fresh `new`.
   """
   @spec new(Chunk.coord(), pid(), keyword()) :: t()
   def new(center, holder, opts \\ []) when is_pid(holder) do
     ws = %__MODULE__{
+      realm: Keyword.get(opts, :realm, :overworld),
       center: center,
       radius: Keyword.get(opts, :radius, @default_radius),
       members: MapSet.new(),
@@ -77,7 +81,7 @@ defmodule GameCore.WarmSet do
   defp warm_up(_coord, _ws, 0), do: :ok
 
   defp warm_up(coord, ws, retries) do
-    {:ok, pid} = Chunks.ensure_started(coord, ws.repo)
+    {:ok, pid} = Chunks.ensure_started(ws.realm, coord, ws.repo)
 
     try do
       Chunk.express_interest(pid, ws.holder)
@@ -87,7 +91,7 @@ defmodule GameCore.WarmSet do
   end
 
   defp cool_down(coord, ws) do
-    case Chunks.whereis(coord) do
+    case Chunks.whereis(ws.realm, coord) do
       pid when is_pid(pid) -> safe(fn -> Chunk.release_interest(pid, ws.holder) end)
       _ -> :ok
     end

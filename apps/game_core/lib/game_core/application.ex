@@ -11,8 +11,10 @@ defmodule GameCore.Application do
       {Phoenix.PubSub, name: GameCore.PubSub},
       {Registry, keys: :unique, name: GameCore.Chunks},
       {Registry, keys: :unique, name: GameCore.Sessions},
+      {Registry, keys: :unique, name: GameCore.InstanceSupervisors},
       {DynamicSupervisor, name: GameCore.ChunkSupervisor, strategy: :one_for_one},
-      {DynamicSupervisor, name: GameCore.SessionSupervisor, strategy: :one_for_one}
+      {DynamicSupervisor, name: GameCore.SessionSupervisor, strategy: :one_for_one},
+      {DynamicSupervisor, name: GameCore.InstancesSupervisor, strategy: :one_for_one}
     ]
 
     opts = [strategy: :one_for_one, name: GameCore.Supervisor]

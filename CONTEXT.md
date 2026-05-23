@@ -13,7 +13,7 @@ The single shared, persistent, free-positioned 2D space that all players inhabit
 _Avoid_: Map, world map, overland.
 
 **Instance**:
-An ephemeral, private 2D region spawned on demand for a Party entering a dungeon. Lives in memory only — no persistence. Destroyed when the Party leaves or disconnects. In v1, dungeons are the only kind of Instance; no player housing, no persistent dungeons, no guild halls.
+An ephemeral, private 2D region spawned on demand for a Party entering a dungeon. Lives in memory only — no persistence. Destroyed when the Party leaves or disconnects. In v1, dungeons are the only kind of Instance; no player housing, no persistent dungeons, no guild halls. Internally, an Instance is partitioned into its own private grid of **Chunks** — the same Chunk machinery as the **Overworld** (ECS, ticks, **Boundary crossing**, **Warm set**, **View window**) — distinct only by Registry scope, absence of persistence, and bounded extent.
 _Avoid_: Dungeon (a dungeon is the *content* hosted by an Instance), private map, room.
 
 **Party**:
@@ -36,6 +36,10 @@ _Avoid_: Resource (ambiguous — also means inventory material), node (too gener
 A persistent object placed in the **Overworld** by a Player (building, wall, crafting station, fence). Survives indefinitely until destroyed. Anchored to a specific **Chunk**.
 _Avoid_: Building (only one kind of Structure), object, placeable.
 
+**Portal**:
+A fixed Overworld entity that marks the entry point to an **Instance**. Placed deterministically by worldgen — not built by **Players**, not stored in the **Structure** table. Anchored to a specific **Chunk**. Interacting with a Portal triggers **Instance entry**.
+_Avoid_: Structure (a Portal is not a Structure — Structures are player-placed; see the Structure entry), gate, dungeon entrance.
+
 **Item**:
 A *kind* of gatherable, stackable substance — wood, stone, iron ore. Abstract: an Item is a type, never a quantity. Items are produced by harvesting **Resource nodes** and consumed when **Players** build **Structures**.
 _Avoid_: Material (collides with "crafting material" once recipes exist), Resource (already forbidden — see Resource node).
@@ -55,15 +59,23 @@ The transition of a **Chunk** from cold (state-on-disk-only) to hot (live GenSer
 The reverse — snapshot the live state to durable storage and terminate the GenServer. Triggered by sustained absence of players.
 
 **Boundary crossing**:
-A **Player**'s entity exits the bounds of its owning **Chunk** and enters a neighbor. The entity is handed off from the source's process to the destination's; the Player's session updates its **Warm set** to the new center; the entity continues in the destination process on the next tick.
+A **Player**'s entity exits the bounds of its owning **Chunk** and enters a neighbor **in the same realm** (i.e. an adjacent Chunk of the same **Overworld** or the same **Instance**). The entity is handed off from the source's process to the destination's; the Player's session updates its **Warm set** to the new center; the entity continues in the destination process on the next tick. **Instance entry** and **Instance exit** are *not* Boundary crossings — they cross realms.
 _Avoid_: Migration (an implementation term — `ChunkMigration` is the module that performs the handoff; the event itself is a boundary crossing), chunk transfer, hop.
+
+**Instance entry**:
+A **Player**'s entity leaves the **Overworld** and enters an **Instance** by overlapping a **Portal**. Mechanically a process handoff like a **Boundary crossing**, but distinct: the Player's **Warm set** is torn down and a fresh one is built around the Instance's center, the **View window** switches to the Instance's topic space, and on disconnect any in-Instance state is lost.
+_Avoid_: Portal travel, teleport, dungeon enter, zone-in.
+
+**Instance exit**:
+The reverse — a **Player**'s entity overlaps the Instance's return-**Portal** and returns to the **Overworld Chunk** they entered from, at (a small offset from) the Portal cell. The **Instance** is destroyed when no Players remain.
+_Avoid_: Portal exit, dungeon leave, zone-out.
 
 **Warm set**:
 The set of **Chunks** a connected **Player**'s session keeps hot on their behalf — currently the 5×5 grid centered on the **Chunk** the Player occupies. A **Chunk** stays hot as long as at least one session has it in its warm set.
 _Avoid_: Warm zone, warm radius (the radius is a parameter; the set is the concept).
 
 **View window**:
-The set of **Chunks** a connected client subscribes to for snapshot streams — currently the 3×3 grid centered on the **Chunk** the Player occupies. Strictly smaller than the **Warm set**; the outer ring of the warm set is pre-activated to hide chunk-activation latency when the Player crosses a boundary into it.
+The set of **Chunks** a connected client subscribes to for snapshot streams — currently the 3×3 grid centered on the **Chunk** the Player occupies. Strictly smaller than (or equal to, inside an **Instance**) the **Warm set**; the outer ring of the warm set is pre-activated to hide chunk-activation latency when the Player crosses a boundary into it.
 _Avoid_: Visible chunks, subscription window, AOI (AOI is the general concept; the view window is our specific implementation).
 
 ## Relationships
@@ -71,10 +83,10 @@ _Avoid_: Visible chunks, subscription window, AOI (AOI is the general concept; t
 - A **World** is composed of one **Overworld** and zero-or-more live **Instances**
 - The **Overworld** is partitioned into a grid of **Chunks**
 - Each **Chunk** is owned by exactly one process at a time (sharding)
-- An **Instance** is not partitioned into **Chunks** (it's small enough to live in one process)
+- An **Instance** is partitioned into its own private grid of **Chunks**, scoped to that Instance and disjoint from the **Overworld**'s grid
 - A **Player** exists in exactly one **Chunk** (if in the **Overworld**) or one **Instance** at a time
 - A username uniquely identifies a **Player**; there is no separate account or character roster
-- A **Chunk** holds zero-or-more **Resource nodes** and zero-or-more **Structures**
+- A **Chunk** holds zero-or-more **Resource nodes**, zero-or-more **Structures**, and zero-or-more **Portals**
 - A **Structure** belongs to the **Chunk** it sits in; ownership is per-Structure (a Player owns the Structure)
 - Each **Player** has exactly one **Inventory**; an **Inventory** holds zero-or-more **ItemStacks**; each **ItemStack** is a quantity of exactly one **Item**
 - A **Resource node** yields one or more **ItemStacks** when harvested; a **Structure**'s build cost is expressed as one or more **ItemStacks** drawn from the placing Player's **Inventory**

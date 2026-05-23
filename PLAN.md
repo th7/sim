@@ -148,16 +148,46 @@ Phase begins with a small foundational refactor — positions across `game_core`
 
 ## Phase 9 — Instances
 
-**Goal**: Party-spawned ephemeral dungeon Instances.
+**Goal**: solo-player, ephemeral dungeon **Instances** — walk in via a **Portal**, walk around inside, walk back out. No combat, no Resource nodes, no in-Instance state changes; Phase 9 delivers the *container*, not content. **Parties** are deliberately deferred — solo only for v1.
 
-- Add `Party` GenServer (lives until last member leaves)
-- Add `Instance` GenServer (one per active dungeon run); not in the chunk Registry
-- Dungeon portal: a Structure in the overworld; interacting offers "enter as party"
-- Entering: Players unsub from their chunk window, sub to the Instance's single topic
-- Leaving / disconnection: Player rejoins their last-known overworld Chunk; Instance destroyed if Party empty
-- No persistence — Instance state is pure in-memory
+Phase begins with two foundational refactors so the Instance work doesn't have to special-case channel topology or Chunk lookup.
 
-**Done when**: party of 2+, enter a dungeon, fight something, leave, instance is gone.
+- **`Chunks.whereis/1` → `/2` realm parameter.** One global `GameCore.Chunks` Registry keyed by `{realm, cx, cy}` where `realm :: :overworld | {:instance, id}`. All existing call sites pass `:overworld` explicitly. `Chunk.start_link/1` registers under the tagged key. `Session.state` gains `realm`; `current_chunk` is renamed `coord`. `WarmSet` becomes realm-scoped — a realm transition tears down and rebuilds the warm set rather than recentering it.
+
+- **`PlayerChannel` extraction.** A new persistent `player:<username>` channel joined once per socket — hosts the Session, receives all input verbs (move/harvest/build/damage), subscribes to `self:<username>`. `ChunkChannel` is reduced to a single-responsibility observer-only snapshot pipe (no role param, no Session ownership). The Channel layer becomes realm-agnostic: realm transitions are a `relocated` push on the persistent player channel, with the new 9-topic list; the player channel doesn't restart.
+
+Then the Instance work itself:
+
+- **Portal as a new entity type.** Not a Structure (Structures are player-placed; Portals are not). New `Portal` component with a `direction :: :into_instance | :out_of_instance` field. `GameCore.Worldgen.portals/1` is a pure deterministic function returning the positions of all Portals in a chunk — v1 places exactly one `{:into_instance, :dungeon}` Portal at the center `(8000, 8000)` of Overworld chunk `{0, 0}` and `[]` everywhere else. Chunks hydrate Portals on activation alongside Resource nodes. Snapshot extension: new `portals: %{...}` key parallel to `resource_nodes` / `structures`; wire id format `"portal:<type>:<x>:<y>"`. No DB rows — Portals are stateless.
+
+- **Instance topology — Chunk-shaped, 3×3 grid.** An Instance is internally partitioned into its own private grid of **Chunks**, reusing `GameCore.Chunk` (ECS, ticks, Boundary crossing, Warm set, View window) but with realm `{:instance, id}` and the **Null** ChunkRepo. The grid is exactly 3×3 in v1, so the View window equals the Instance — the Player always sees the whole dungeon. `MovementSystem` gains a per-host `bounds :: nil | {x_min, y_min, x_max, y_max}` field; `nil` for Overworld (unbounded), the integer sub-unit rect of the 3×3 for Instance. Out-of-bounds movement is **clamped** at the perimeter (no migration attempt, no error).
+
+- **Per-Instance supervision.** New `GameCore.Instances` module + `InstancesSupervisor` (DynamicSupervisor). `Instances.start_new()` spawns a per-Instance `DynamicSupervisor` (`:one_for_all`) which in turn starts the 9 chunks; returns `{id, instance_sup_pid}`. `Instances.terminate(id)` stops the per-Instance supervisor — all 9 chunks die in dependency order, Registry entries clean up automatically. Identity is `System.unique_integer([:positive, :monotonic])`.
+
+- **`InstanceWorldgen.portals/1` for the return-Portal.** Pure function placing one `{:out_of_instance, :dungeon}` Portal at the center of chunk `{1, 1}` of the Instance grid. Instance chunks hydrate it on activation, same path as Overworld Portals.
+
+- **Movement-driven entry.** After `MovementSystem` integrates Position, each Chunk runs a Portal-overlap check: for every (Player, Portal-at-same-cell) pair, fire `Session.enter_instance(session, return_to)` (Overworld → Instance) or `Session.exit_instance(session)` (Instance → Overworld). The Chunk publishes the intent; the Session is the lifecycle owner.
+
+- **Entry sequence.**
+  1. Overworld chunk `A` detects overlap, calls `Session.enter_instance(session, {:overworld, A_coord, A_portal_pos})`.
+  2. Session calls `Instances.start_new()` → fresh per-Instance supervisor + 9 Instance chunks with Null repo.
+  3. Session calls `ChunkMigration.cross(eid, A_coord, {{:instance, id}, {1, 1}}, components, NullRepo)`. Position is **overridden by the destination** Instance center chunk to a hardcoded spawn point one cell off the return-Portal (avoid immediate re-trigger).
+  4. Session updates state: `realm: {:instance, id}, coord: {1, 1}, return_to: {:overworld, A_coord, A_portal_pos}`.
+  5. Session tears down Overworld WarmSet, builds an Instance WarmSet covering all 9 Instance chunks.
+  6. Session signals `PlayerChannel` with `{:relocated, %{realm: {:instance, id}, coord: {1, 1}, topics: [...]}}`; channel pushes `relocated` to the client.
+  7. Client unsubs the 9 Overworld snapshot topics, subs the 9 Instance topics `instance:<id>:chunk:0:0` … `instance:<id>:chunk:2:2`.
+
+- **Exit sequence.** Symmetric. Instance chunk's overlap check fires `Session.exit_instance(session)`; Session migrates the entity back to the cached `return_to` chunk with Position overridden to `A_portal_pos + one-cell offset`; WarmSet rebuilt around the Overworld entry chunk; `Instances.terminate(id)` stops the per-Instance supervisor; client cycles snapshot subscriptions back to the 9 Overworld topics.
+
+- **Disconnect mid-Instance.** `Session.terminate/2` extended: if `realm` matches `{:instance, id}`, call `Instances.terminate(id)` **before** `WarmSet.release_all` — eager teardown, no ghost-Instance left to idle out. The DB row for the Player still holds the pre-entry Overworld coord/position because Instance chunks never flushed (Null repo); reconnect places the Player back at the Overworld entry chunk at the last-heartbeat position. **Documented limit**: any in-Instance state change is lost on disconnect — irrelevant for Phase 9 (nothing in the Instance modifies inventory), but future combat/loot phases will need an explicit story.
+
+- **Verb guards.** `Session.build/3` returns `{:error, :no_build_in_instance}` when realm is Instance (Structures are Overworld-only per CONTEXT.md). `harvest` and `damage` degrade naturally to `:no_target` (no Resource nodes / Structures inside).
+
+- **Frontend.** Render `portals` from the snapshot as a distinct visual (placeholder mesh — a tinted cylinder or swirl). Cosmetic dressing for Instance realm — a different ground tint / fog color / overlay text — purely client-side based on the `realm` field of the latest `relocated` push. Refactor `main.ts`: one persistent `player:<username>` channel for input + `self`/`relocated`; a topic-keyed map of snapshot channels that cycles on `relocated`. No new HUD elements, no new input handling.
+
+- **Tests.** ExUnit for `Worldgen.portals/1` and `InstanceWorldgen.portals/1` (pure-function); `Chunks.whereis/2` realm dispatch; `Session.enter_instance/2` and `Session.exit_instance/1` (state transitions, position override, WarmSet rebuild, supervisor lifecycle); `MovementSystem` bounds clamp; `Instances.start_new/0` + `Instances.terminate/1` lifecycle; eager-teardown on `Session.terminate/2` when realm is Instance; `Session.build/3` returns `:no_build_in_instance` in Instance. Playwright `phase9.spec.ts`: walk to Portal at `(8000, 8000)`, assert `relocated` event fires, assert ground tint changes, walk to return-Portal in Instance center, assert second `relocated` event, assert back on Overworld near the Portal cell. Disconnect-mid-Instance regression: open in-Instance, drop the socket, reconnect, assert reappearance at pre-entry Overworld position and the previous Instance's Registry keys are gone.
+
+**Done when**: walk to the Portal at the center of Overworld chunk `{0,0}`, get smoothly migrated into a fresh 3×3 Instance with a distinct visual, walk around (bounded by clamp at the perimeter), step onto the return-Portal, get migrated back to the Overworld at the entry Portal cell. Disconnect mid-Instance, reconnect — you're back at the Portal, the Instance is gone (no leaked processes, no leaked Registry keys).
 
 ## Deferred
 

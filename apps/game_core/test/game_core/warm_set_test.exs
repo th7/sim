@@ -20,7 +20,7 @@ defmodule GameCore.WarmSetTest do
     assert WarmSet.members(ws) == expected
 
     for coord <- expected do
-      pid = Chunks.whereis(coord)
+      pid = Chunks.whereis(:overworld, coord)
       assert is_pid(pid), "expected chunk #{inspect(coord)} to be activated"
       assert Chunk.dev_status(pid).interest_count >= 1
     end
@@ -37,14 +37,14 @@ defmodule GameCore.WarmSetTest do
     assert WarmSet.members(ws) == expected
 
     for coord <- dropped do
-      pid = Chunks.whereis(coord)
+      pid = Chunks.whereis(:overworld, coord)
       # Chunk may already be terminating with no other holders; if still alive,
       # our interest must be gone.
       if is_pid(pid), do: assert(Chunk.dev_status(pid).interest_count == 0)
     end
 
     for coord <- added do
-      pid = Chunks.whereis(coord)
+      pid = Chunks.whereis(:overworld, coord)
       assert is_pid(pid), "expected chunk #{inspect(coord)} to be activated"
       assert Chunk.dev_status(pid).interest_count >= 1
     end
@@ -52,7 +52,7 @@ defmodule GameCore.WarmSetTest do
 
   test "release_all/1 drops every member interest and empties the set" do
     ws = WarmSet.new({0, 0}, self(), radius: 1)
-    warmed = for coord <- WarmSet.members(ws), do: {coord, Chunks.whereis(coord)}
+    warmed = for coord <- WarmSet.members(ws), do: {coord, Chunks.whereis(:overworld, coord)}
 
     ws = WarmSet.release_all(ws)
     assert WarmSet.members(ws) == MapSet.new()

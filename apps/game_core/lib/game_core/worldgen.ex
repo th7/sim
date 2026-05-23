@@ -36,4 +36,26 @@ defmodule GameCore.Worldgen do
       %{type: :tree, x: center_x + dx, y: center_y + dy}
     end
   end
+
+  @type portal_spec :: %{
+          type: :dungeon,
+          direction: :into_instance,
+          x: integer(),
+          y: integer()
+        }
+
+  @doc """
+  Deterministic placement of Overworld Portals for `coord`. v1 places one
+  `:dungeon` Portal in chunk `{0, 0}` and `[]` elsewhere. The Portal sits
+  at a fixed offset from chunk-center so Players, who spawn at
+  chunk-center, don't immediately overlap it on first connect.
+  """
+  @spec portals(ChunkGeometry.coord()) :: [portal_spec()]
+  def portals({0, 0}) do
+    size = ChunkGeometry.chunk_size()
+    quarter = div(size, 4)
+    [%{type: :dungeon, direction: :into_instance, x: quarter, y: quarter}]
+  end
+
+  def portals(_), do: []
 end

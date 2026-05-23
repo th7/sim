@@ -19,6 +19,7 @@ defmodule GameCore.Systems.BroadcastSystem do
     Depleted,
     Gatherable,
     PlayerControlled,
+    Portal,
     Position,
     Structure
   }
@@ -26,7 +27,8 @@ defmodule GameCore.Systems.BroadcastSystem do
   @type snapshot :: %{
           players: %{String.t() => %{x: integer(), y: integer()}},
           resource_nodes: %{String.t() => map()},
-          structures: %{String.t() => map()}
+          structures: %{String.t() => map()},
+          portals: %{String.t() => map()}
         }
 
   @spec snapshot(World.t()) :: snapshot()
@@ -34,8 +36,29 @@ defmodule GameCore.Systems.BroadcastSystem do
     %{
       players: players(world),
       resource_nodes: resource_nodes(world),
-      structures: structures(world)
+      structures: structures(world),
+      portals: portals(world)
     }
+  end
+
+  defp portals(%World{components: components}) do
+    positions = Map.get(components, Position, %{})
+    portals = Map.get(components, Portal, %{})
+
+    Enum.reduce(portals, %{}, fn {eid, %{type: type, direction: dir}}, acc ->
+      case Map.fetch(positions, eid) do
+        {:ok, %{x: x, y: y}} ->
+          Map.put(acc, eid, %{
+            type: Atom.to_string(type),
+            direction: Atom.to_string(dir),
+            x: x,
+            y: y
+          })
+
+        :error ->
+          acc
+      end
+    end)
   end
 
   defp players(%World{components: components}) do

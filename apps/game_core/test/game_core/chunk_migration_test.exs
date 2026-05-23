@@ -9,7 +9,7 @@ defmodule GameCore.ChunkMigrationTest do
       start_supervised!(
         {Chunk,
          coord: {0, 0},
-         name: Chunks.via({0, 0}),
+         name: Chunks.via(:overworld,{0, 0}),
          auto_tick: false,
          auto_flush: false,
          tick_ms: 50,
@@ -21,7 +21,7 @@ defmodule GameCore.ChunkMigrationTest do
       start_supervised!(
         {Chunk,
          coord: {1, 0},
-         name: Chunks.via({1, 0}),
+         name: Chunks.via(:overworld,{1, 0}),
          auto_tick: false,
          auto_flush: false,
          tick_ms: 50,

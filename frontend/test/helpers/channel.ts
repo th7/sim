@@ -23,7 +23,12 @@ export async function joinChunk(
 ): Promise<Session> {
   const socket = new Socket(PHX_WS);
   socket.connect();
-  const channel = socket.channel(topic, { username });
+  const snapshotChannel = socket.channel(topic, { username });
+  const initialChunk = parseChunkTopic(topic);
+  const playerChannel = socket.channel(`player:${username}`, {
+    username,
+    initial_chunk: initialChunk,
+  });
 
   const snapshots: Snapshot[] = [];
   const waiters: {
@@ -31,7 +36,7 @@ export async function joinChunk(
     resolve: (s: Snapshot) => void;
   }[] = [];
 
-  channel.on('snapshot', (snap: Snapshot) => {
+  snapshotChannel.on('snapshot', (snap: Snapshot) => {
     snapshots.push(snap);
     for (let i = waiters.length - 1; i >= 0; i--) {
       if (waiters[i].pred(snap)) {
@@ -41,15 +46,8 @@ export async function joinChunk(
     }
   });
 
-  await new Promise<void>((resolve, reject) => {
-    channel
-      .join()
-      .receive('ok', () => resolve())
-      .receive('error', (e: unknown) =>
-        reject(new Error(`join failed: ${JSON.stringify(e)}`)),
-      )
-      .receive('timeout', () => reject(new Error('join timeout')));
-  });
+  await joinAndWait(playerChannel);
+  await joinAndWait(snapshotChannel);
 
   function waitFor(
     pred: (s: Snapshot) => boolean,
@@ -87,14 +85,47 @@ export async function joinChunk(
   }
 
   async function disconnect(): Promise<void> {
-    await new Promise<void>((resolve) => {
-      channel
-        .leave()
-        .receive('ok', () => resolve())
-        .receive('timeout', () => resolve());
-    });
+    // Leaving the PlayerChannel terminates the Session, which removes the
+    // Player's entity from whichever Chunk currently owns it.
+    await leaveChannel(playerChannel);
+    await leaveChannel(snapshotChannel);
     socket.disconnect();
   }
 
-  return { socket, channel, username, snapshots, waitFor, waitForNext, disconnect };
+  return {
+    socket,
+    channel: playerChannel,
+    username,
+    snapshots,
+    waitFor,
+    waitForNext,
+    disconnect,
+  };
+}
+
+function parseChunkTopic(topic: string): [number, number] {
+  const m = topic.match(/^chunk:(-?\d+):(-?\d+)$/);
+  if (!m) return [0, 0];
+  return [parseInt(m[1], 10), parseInt(m[2], 10)];
+}
+
+function joinAndWait(channel: Channel): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    channel
+      .join()
+      .receive('ok', () => resolve())
+      .receive('error', (e: unknown) =>
+        reject(new Error(`join failed: ${JSON.stringify(e)}`)),
+      )
+      .receive('timeout', () => reject(new Error('join timeout')));
+  });
+}
+
+function leaveChannel(channel: Channel): Promise<void> {
+  return new Promise<void>((resolve) => {
+    channel
+      .leave()
+      .receive('ok', () => resolve())
+      .receive('timeout', () => resolve());
+  });
 }

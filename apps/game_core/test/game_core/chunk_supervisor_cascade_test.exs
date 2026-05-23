@@ -46,7 +46,7 @@ defmodule GameCore.ChunkSupervisorCascadeTest do
           GameCore.ChunkSupervisor,
           {Chunk,
            coord: coord,
-           name: Chunks.via(coord),
+           name: Chunks.via(:overworld, coord),
            auto_tick: false,
            auto_flush: false,
            idle_timeout_ms: 50}
@@ -70,7 +70,7 @@ defmodule GameCore.ChunkSupervisorCascadeTest do
     assert Process.alive?(sup_pid), "ChunkSupervisor crashed under a normal idle cascade"
 
     # And the player can still move on the surviving side of the warm set.
-    new_chunk = Chunks.whereis({1, 0})
+    new_chunk = Chunks.whereis(:overworld, {1, 0})
     assert is_pid(new_chunk)
     Chunk.join(new_chunk, "alice")
     Session.set_intent(sess, {1.0, 0.0})

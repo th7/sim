@@ -6,80 +6,27 @@ defmodule GameWeb.ChunkChannelTest do
   setup do
     chunk =
       start_supervised!(
-        {Chunk, coord: {0, 0}, auto_tick: false, name: GameCore.Chunks.via({0, 0})}
+        {Chunk, coord: {0, 0}, auto_tick: false, name: GameCore.Chunks.via(:overworld, {0, 0})}
       )
 
     %{chunk: chunk}
   end
 
-  defp join_as(username) do
+  defp join_observer(username) do
     GameWeb.UserSocket
     |> socket("user_" <> username, %{})
     |> subscribe_and_join(GameWeb.ChunkChannel, "chunk:0:0", %{"username" => username})
   end
 
-  test "joining chunk:0:0 with a username puts that player in the chunk", %{chunk: chunk} do
-    {:ok, _reply, _socket} = join_as("alice")
-    assert %{players: %{"alice" => _}} = Chunk.snapshot(chunk)
-  end
-
-  test "a `move` event updates the player's intent in the chunk", %{chunk: chunk} do
-    {:ok, _reply, socket} = join_as("alice")
-
-    push(socket, "move", %{"dx" => 1.0, "dy" => 0.0})
-    _ = :sys.get_state(chunk)
-
-    send(chunk, :tick)
-    _ = :sys.get_state(chunk)
-
-    %{players: %{"alice" => %{x: x}}} = Chunk.snapshot(chunk)
-    assert x > 0.0
-  end
-
-  test "the client receives snapshot pushes", %{chunk: chunk} do
-    {:ok, _reply, _socket} = join_as("alice")
-
-    send(chunk, :tick)
-    send(chunk, :tick)
-
-    assert_push "snapshot", %{players: %{"alice" => _}}
-  end
-
-  test "leaving the channel removes the player from the chunk", %{chunk: chunk} do
-    {:ok, _reply, socket} = join_as("alice")
-
-    channel_pid = socket.channel_pid
-    Process.unlink(channel_pid)
-    ref = Process.monitor(channel_pid)
-    leave(socket)
-    assert_receive {:DOWN, ^ref, :process, ^channel_pid, _}
-
+  test "joining a chunk topic does not add the Player to the chunk", %{chunk: chunk} do
+    {:ok, _reply, _socket} = join_observer("alice")
     refute Map.has_key?(Chunk.snapshot(chunk).players, "alice")
   end
 
-  test "joining as an observer does not add the player to the chunk", %{chunk: chunk} do
-    {:ok, _reply, _socket} =
-      GameWeb.UserSocket
-      |> socket("user_obs", %{})
-      |> subscribe_and_join(GameWeb.ChunkChannel, "chunk:0:0", %{
-        "username" => "obs",
-        "role" => "observer"
-      })
+  test "the client receives snapshot pushes", %{chunk: chunk} do
+    {:ok, _reply, _socket} = join_observer("alice")
 
-    refute Map.has_key?(Chunk.snapshot(chunk).players, "obs")
-  end
-
-  test "an observer still receives snapshot pushes", %{chunk: chunk} do
-    {:ok, _reply, _owner} = join_as("alice")
-
-    {:ok, _reply, _obs} =
-      GameWeb.UserSocket
-      |> socket("user_obs", %{})
-      |> subscribe_and_join(GameWeb.ChunkChannel, "chunk:0:0", %{
-        "username" => "obs",
-        "role" => "observer"
-      })
-
+    Chunk.join(chunk, "alice")
     send(chunk, :tick)
     send(chunk, :tick)
 

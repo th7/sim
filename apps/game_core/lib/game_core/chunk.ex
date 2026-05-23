@@ -33,6 +33,7 @@ defmodule GameCore.Chunk do
     Gatherable,
     Inventory,
     PlayerControlled,
+    Portal,
     Position,
     Renderable,
     Structure,
@@ -184,9 +185,23 @@ defmodule GameCore.Chunk do
     GenServer.call(server, {:migrate_in, eid, components})
   end
 
+  @doc """
+  Source side of a cross-realm migration. Removes `eid` from this Chunk's
+  world and returns its component map with `Position` overridden to
+  `{x, y}` (so the destination realm sees the entity at the spawn point,
+  not at its pre-migration coords in a different coordinate space).
+  Returns `%{}` if the entity is unknown.
+  """
+  @spec take_components_for(GenServer.server(), GameCore.World.eid(), {integer(), integer()}) ::
+          %{module() => any()}
+  def take_components_for(server, eid, {x, y}) when is_integer(x) and is_integer(y) do
+    GenServer.call(server, {:take_components_for, eid, {x, y}})
+  end
+
   @impl true
   def init(opts) do
     coord = Keyword.fetch!(opts, :coord)
+    realm = Keyword.get(opts, :realm, :overworld)
     tick_ms = Keyword.get(opts, :tick_ms, @default_tick_ms)
     speed = Keyword.get(opts, :speed, @default_speed)
     auto_tick = Keyword.get(opts, :auto_tick, true)
@@ -202,9 +217,11 @@ defmodule GameCore.Chunk do
       |> seed_resource_nodes(coord)
       |> seed_structures(coord, repo)
       |> hydrate_depletions(coord, repo)
+      |> seed_portals(realm, coord)
 
     state = %{
       coord: coord,
+      realm: realm,
       world: world,
       tick_ms: tick_ms,
       speed: speed,
@@ -259,6 +276,35 @@ defmodule GameCore.Chunk do
   end
 
   defp node_eid(type, x, y), do: "#{type}:#{x}:#{y}"
+
+  defp seed_portals(world, realm, coord) do
+    portals =
+      case realm do
+        :overworld -> Worldgen.portals(coord)
+        {:instance, _} -> GameCore.InstanceWorldgen.portals(coord)
+      end
+
+    Enum.reduce(portals, world, fn %{type: type, direction: dir, x: x, y: y}, w ->
+      eid = portal_eid(type, x, y)
+
+      w
+      |> World.add_component(eid, Position, %{x: x, y: y})
+      |> World.add_component(eid, Renderable, %{})
+      |> World.add_component(eid, Portal, %Portal{type: type, direction: dir})
+    end)
+  end
+
+  defp portal_eid(type, x, y), do: "portal:#{type}:#{x}:#{y}"
+
+  # Overworld is unbounded — `nil` lets `MovementSystem` skip clamping and
+  # rely on `migrate_out` for chunk-edge handling. Instances are bounded
+  # to their 3×3 grid; movement past the perimeter clamps.
+  defp movement_bounds(:overworld), do: nil
+
+  defp movement_bounds({:instance, _}) do
+    size = GameCore.ChunkGeometry.chunk_size()
+    {0, 0, 3 * size, 3 * size}
+  end
 
   defp seed_structures(world, coord, repo) do
     Enum.reduce(repo.fetch_structures(coord), world, fn s, w ->
@@ -542,24 +588,59 @@ defmodule GameCore.Chunk do
       end)
 
     snap = BroadcastSystem.snapshot(world)
-    {cx, cy} = state.coord
-    Phoenix.PubSub.broadcast(GameCore.PubSub, "chunk:#{cx}:#{cy}", {:snapshot, snap})
+    broadcast_snapshot(state, snap)
 
     {:reply, :ok, %{state | world: world}}
   end
 
+  def handle_call({:take_components_for, eid, {x, y}}, _from, state) do
+    components =
+      case Map.get(state.world.components, Position) do
+        %{^eid => _} ->
+          collect_components(state.world, eid)
+          |> Map.put(Position, %{x: x, y: y})
+          |> Map.put(Velocity, %{vx: 0.0, vy: 0.0})
+
+        _ ->
+          %{}
+      end
+
+    new_world = World.remove_entity(state.world, eid)
+    snap = BroadcastSystem.snapshot(new_world)
+    broadcast_snapshot(state, snap)
+
+    {:reply, components, %{state | world: new_world}}
+  end
+
+  defp collect_components(%World{components: components}, eid) do
+    Enum.reduce(components, %{}, fn {mod, by_eid}, acc ->
+      case Map.fetch(by_eid, eid) do
+        {:ok, data} -> Map.put(acc, mod, data)
+        :error -> acc
+      end
+    end)
+  end
+
+  defp broadcast_snapshot(state, snap) do
+    topic = chunk_topic(state.realm, state.coord)
+    Phoenix.PubSub.broadcast(GameCore.PubSub, topic, {:snapshot, snap})
+  end
+
+  defp chunk_topic(:overworld, {cx, cy}), do: "chunk:#{cx}:#{cy}"
+  defp chunk_topic({:instance, id}, {cx, cy}), do: "instance:#{id}:chunk:#{cx}:#{cy}"
+
   @impl true
   def handle_info(:tick, state) do
     dt = state.tick_ms / 1000.0
-    world = MovementSystem.run(state.world, dt)
+    world = MovementSystem.run(state.world, dt, bounds: movement_bounds(state.realm))
     {world, migrated?} = migrate_out(world, state.coord, state.repo)
-    tick_count = state.tick_count + 1
-    state = %{state | world: world, tick_count: tick_count}
+    state = %{state | world: world, tick_count: state.tick_count + 1}
 
-    if migrated? or rem(tick_count, 2) == 0 do
-      snap = BroadcastSystem.snapshot(world)
-      {cx, cy} = state.coord
-      Phoenix.PubSub.broadcast(GameCore.PubSub, "chunk:#{cx}:#{cy}", {:snapshot, snap})
+    check_portal_overlaps(state)
+
+    if migrated? or rem(state.tick_count, 2) == 0 do
+      snap = BroadcastSystem.snapshot(state.world)
+      broadcast_snapshot(state, snap)
     end
 
     if state.auto_tick, do: schedule_tick(state.tick_ms)
@@ -582,8 +663,7 @@ defmodule GameCore.Chunk do
           |> World.add_component(eid, Gatherable, %{type: type, yields: yield_for(type)})
 
         snap = BroadcastSystem.snapshot(world)
-        {cx, cy} = state.coord
-        Phoenix.PubSub.broadcast(GameCore.PubSub, "chunk:#{cx}:#{cy}", {:snapshot, snap})
+        broadcast_snapshot(state, snap)
 
         {:noreply, %{state | world: world}}
 
@@ -603,9 +683,67 @@ defmodule GameCore.Chunk do
     end
   end
 
-  # trap_exit is set so that terminate/2 runs cleanly; ignore EXIT messages
-  # from linked test processes (and similar) that aren't our supervisor.
+  # trap_exit is set so that terminate/2 runs cleanly. A `:shutdown` EXIT
+  # is the standard supervisor-shutdown protocol — propagate as :normal stop
+  # so the chunk dies and Registry cleanup runs. Other EXITs (e.g. a linked
+  # test process exiting cleanly) are non-fatal.
+  def handle_info({:EXIT, _from, :shutdown}, state), do: {:stop, :normal, state}
   def handle_info({:EXIT, _from, _reason}, state), do: {:noreply, state}
+
+  # Portal-overlap range: 0.5 world units squared = 250_000 sub-unit² — close
+  # enough that "stepping on the portal" feels like the trigger, not a wide
+  # proximity check.
+  @portal_overlap_range_sq 250_000
+
+  defp check_portal_overlaps(state) do
+    portals = Map.get(state.world.components, Portal, %{})
+
+    if map_size(portals) > 0 do
+      players = Map.get(state.world.components, PlayerControlled, %{})
+      positions = Map.get(state.world.components, Position, %{})
+
+      for {pid, %{direction: dir}} <- portals,
+          {:ok, %{x: portal_x, y: portal_y}} = Map.fetch(positions, pid),
+          {username, _} <- players,
+          {:ok, %{x: px, y: py}} = Map.fetch(positions, username),
+          dx = px - portal_x,
+          dy = py - portal_y,
+          dx * dx + dy * dy <= @portal_overlap_range_sq do
+        trigger_portal(dir, username, state)
+      end
+    end
+  end
+
+  defp trigger_portal(:into_instance, username, state) do
+    case GameCore.Sessions.whereis(username) do
+      pid when is_pid(pid) ->
+        portal_pos = first_portal_pos(state)
+        spawn_caller(fn -> GameCore.Session.enter_instance(pid, state.coord, portal_pos) end)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp trigger_portal(:out_of_instance, username, _state) do
+    case GameCore.Sessions.whereis(username) do
+      pid when is_pid(pid) -> spawn_caller(fn -> GameCore.Session.exit_instance(pid) end)
+      _ -> :ok
+    end
+  end
+
+  defp first_portal_pos(state) do
+    positions = Map.get(state.world.components, Position, %{})
+    portals = Map.get(state.world.components, Portal, %{})
+    {eid, _} = Enum.at(portals, 0)
+    %{x: x, y: y} = Map.fetch!(positions, eid)
+    {x, y}
+  end
+
+  # Fire-and-forget: an unlinked process makes the synchronous Session call.
+  # Keeps the tick loop responsive and avoids any chance of deadlock if the
+  # Session calls back into this Chunk during the transition.
+  defp spawn_caller(fun), do: spawn(fun)
 
   @impl true
   def terminate(_reason, state) do
@@ -621,7 +759,7 @@ defmodule GameCore.Chunk do
     # async, so without this a successor `start_link` under the same `:via`
     # name can collide with our dead pid for a short window after we exit.
     try do
-      Registry.unregister(GameCore.Chunks, state.coord)
+      Registry.unregister(GameCore.Chunks, {state.realm, state.coord})
     catch
       _, _ -> :ok
     end

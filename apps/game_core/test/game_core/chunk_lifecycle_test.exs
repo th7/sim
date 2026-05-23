@@ -5,8 +5,8 @@ defmodule GameCore.ChunkLifecycleTest do
   alias GameCore.Chunks
 
   test "ensure_started returns the same pid the second time" do
-    {:ok, pid1} = Chunks.ensure_started({100, 200})
-    {:ok, pid2} = Chunks.ensure_started({100, 200})
+    {:ok, pid1} = Chunks.ensure_started(:overworld, {100, 200})
+    {:ok, pid2} = Chunks.ensure_started(:overworld, {100, 200})
     assert pid1 == pid2
 
     # Cleanup
@@ -14,7 +14,7 @@ defmodule GameCore.ChunkLifecycleTest do
   end
 
   test "a chunk with at least one interested pid stays alive" do
-    {:ok, pid} = Chunks.ensure_started({101, 0})
+    {:ok, pid} = Chunks.ensure_started(:overworld, {101, 0})
     ref = Process.monitor(pid)
 
     Chunk.express_interest(pid, self())
@@ -35,7 +35,7 @@ defmodule GameCore.ChunkLifecycleTest do
         GameCore.ChunkSupervisor,
         {Chunk,
          coord: {102, 0},
-         name: Chunks.via({102, 0}),
+         name: Chunks.via(:overworld, {102, 0}),
          auto_tick: false,
          auto_flush: false,
          idle_timeout_ms: 0}
@@ -51,7 +51,7 @@ defmodule GameCore.ChunkLifecycleTest do
   end
 
   test "an interested pid dying releases the interest" do
-    {:ok, pid} = Chunks.ensure_started({103, 0})
+    {:ok, pid} = Chunks.ensure_started(:overworld, {103, 0})
 
     {:ok, transient} = Agent.start(fn -> :ok end)
     Chunk.express_interest(pid, transient)

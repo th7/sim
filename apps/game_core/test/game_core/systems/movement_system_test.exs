@@ -26,4 +26,27 @@ defmodule GameCore.Systems.MovementSystemTest do
 
     assert World.fetch(world, "rock", Position) == {:ok, %{x: 5_000, y: 7_000}}
   end
+
+  test "with bounds, clamps Position to the bounding rect on each tick" do
+    world =
+      World.new()
+      |> World.add_component("alice", Position, %{x: 47_000, y: 8_000})
+      |> World.add_component("alice", Velocity, %{vx: 10_000.0, vy: 0.0})
+
+    # Bounds = 3x3 Instance grid: cx 0..2, cy 0..2 → x ∈ [0, 48_000], y ∈ [0, 48_000].
+    world = MovementSystem.run(world, 1.0, bounds: {0, 0, 48_000, 48_000})
+
+    assert {:ok, %{x: 48_000, y: 8_000}} = World.fetch(world, "alice", Position)
+  end
+
+  test "without bounds, does not clamp" do
+    world =
+      World.new()
+      |> World.add_component("alice", Position, %{x: 47_000, y: 0})
+      |> World.add_component("alice", Velocity, %{vx: 10_000.0, vy: 0.0})
+
+    world = MovementSystem.run(world, 1.0)
+
+    assert {:ok, %{x: 57_000, y: 0}} = World.fetch(world, "alice", Position)
+  end
 end
