@@ -179,11 +179,13 @@ defmodule GameCore.Session do
     center_coord = {1, 1}
     spawn_pos = instance_spawn_pos()
 
-    # Migrate the entity from the Overworld source chunk to the Instance
-    # center chunk, overriding Position to the spawn point.
+    save_pos = offset_from_portal(portal_pos)
+
     case Chunks.whereis(:overworld, from_coord) do
       src_pid when is_pid(src_pid) ->
-        components = Chunk.take_components_for(src_pid, state.username, spawn_pos)
+        components =
+          Chunk.take_components_for(src_pid, state.username, spawn_pos, save_pos)
+
         dest_pid = Chunks.whereis(new_realm, center_coord)
         :ok = Chunk.migrate_in(dest_pid, state.username, components)
 
@@ -202,6 +204,7 @@ defmodule GameCore.Session do
         return_to: {:overworld, from_coord, portal_pos}
     }
 
+    publish_relocated(new_state)
     {:reply, :ok, new_state}
   end
 
@@ -214,7 +217,11 @@ defmodule GameCore.Session do
 
     case Chunks.whereis(state.realm, state.current_chunk) do
       src_pid when is_pid(src_pid) ->
-        components = Chunk.take_components_for(src_pid, state.username, spawn_pos)
+        # `save_pos` is irrelevant here (Instance source uses Null repo and
+        # doesn't persist), but we pass `spawn_pos` to keep the API uniform.
+        components =
+          Chunk.take_components_for(src_pid, state.username, spawn_pos, spawn_pos)
+
         {:ok, dest_pid} = Chunks.ensure_started(:overworld, dest_coord, state.repo)
         :ok = Chunk.migrate_in(dest_pid, state.username, components)
 
@@ -235,6 +242,7 @@ defmodule GameCore.Session do
         return_to: nil
     }
 
+    publish_relocated(new_state)
     {:reply, :ok, new_state}
   end
 
@@ -295,4 +303,23 @@ defmodule GameCore.Session do
   # On Instance exit, re-emerge one world unit west of the entry Portal in
   # the Overworld — symmetric with `instance_spawn_pos`.
   defp offset_from_portal({px, py}), do: {px - 1000, py}
+
+  # Notify the owner PlayerChannel that the Player has changed realm/chunk,
+  # so the client can cycle its snapshot subscriptions to the new realm's
+  # topics. Per-Player PubSub topic mirrors `self:<username>`.
+  defp publish_relocated(state) do
+    payload = %{
+      realm: serialize_realm(state.realm),
+      coord: Tuple.to_list(state.current_chunk)
+    }
+
+    Phoenix.PubSub.broadcast(
+      GameCore.PubSub,
+      "player_events:#{state.username}",
+      {:relocated, payload}
+    )
+  end
+
+  defp serialize_realm(:overworld), do: %{kind: "overworld"}
+  defp serialize_realm({:instance, id}), do: %{kind: "instance", id: id}
 end

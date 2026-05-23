@@ -354,6 +354,16 @@ refreshHudInventory();
     }
     return out;
   },
+  portals(): Record<string, PortalEntry> {
+    const out: Record<string, PortalEntry> = {};
+    for (const m of channelPortals.values()) {
+      for (const [id, p] of m) out[id] = p;
+    }
+    return out;
+  },
+  realm(): Realm {
+    return currentRealm;
+  },
   click(worldX: number, worldY: number): void {
     handleWorldClick(worldX, worldY);
   },
@@ -375,10 +385,18 @@ socket.onError((e: unknown) => console.log('socket:error', e));
 socket.connect();
 
 const channels = new Map<string, Channel>();
+type Realm = { kind: 'overworld' } | { kind: 'instance'; id: number };
+let currentRealm: Realm = { kind: 'overworld' };
+
+function topicFor(realm: Realm, coord: Coord): string {
+  return realm.kind === 'overworld'
+    ? `chunk:${coord[0]}:${coord[1]}`
+    : `instance:${realm.id}:chunk:${coord[0]}:${coord[1]}`;
+}
 
 function subscribeChunk(coord: Coord): Channel {
   const key = chunkKey(coord);
-  const topic = `chunk:${coord[0]}:${coord[1]}`;
+  const topic = topicFor(currentRealm, coord);
   const channel = socket.channel(topic, { username });
   channel.on('snapshot', (snap: WireSnapshot) =>
     ingestChunkSnapshot(key, fromSubUnits(snap)),
@@ -390,6 +408,15 @@ function subscribeChunk(coord: Coord): Channel {
   return channel;
 }
 
+function clearAllChunkSubscriptions(): void {
+  for (const ch of channels.values()) ch.leave();
+  channels.clear();
+  channelSnapshots.clear();
+  channelNodes.clear();
+  channelStructures.clear();
+  channelPortals.clear();
+}
+
 // One persistent player channel hosts all input verbs and per-Player events.
 const playerChannel = socket.channel(`player:${username}`, {
   username,
@@ -398,6 +425,14 @@ const playerChannel = socket.channel(`player:${username}`, {
 playerChannel.on('self', (payload: { inventory: Inventory }) => {
   ownInventory = payload.inventory ?? {};
   refreshHudInventory();
+});
+playerChannel.on('relocated', (payload: { realm: Realm; coord: Coord }) => {
+  currentRealm = payload.realm;
+  windowCenter = payload.coord;
+  clearAllChunkSubscriptions();
+  for (const coord of windowCoords(payload.coord)) {
+    subscribeChunk(coord);
+  }
 });
 playerChannel
   .join()

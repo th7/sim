@@ -20,25 +20,41 @@ defmodule GameWeb.PlayerChannel do
       repo = Application.get_env(:game_core, :chunk_repo, GameCore.ChunkRepo.Null)
       warm_radius = Application.get_env(:game_core, :session_warm_radius, 2)
 
-      session_pid =
-        case Sessions.whereis(username) do
-          pid when is_pid(pid) ->
-            pid
+      # Clean reconnect: tear down any prior Session for this username before
+      # starting a fresh one. A racing client (page-close + page-open in quick
+      # succession) would otherwise inherit the old Session — which may still
+      # be mid-Instance — and the new client wouldn't see the realm reset.
+      case Sessions.whereis(username) do
+        pid when is_pid(pid) ->
+          ref = Process.monitor(pid)
 
-          nil ->
-            {:ok, pid} =
-              GameCore.start_session(
-                username: username,
-                initial_chunk: {cx, cy},
-                repo: repo,
-                warm_radius: warm_radius
-              )
+          try do
+            GenServer.stop(pid, :normal, 1_000)
+          catch
+            :exit, _ -> :ok
+          end
 
-            pid
-        end
+          receive do
+            {:DOWN, ^ref, :process, _, _} -> :ok
+          after
+            500 -> Process.demonitor(ref, [:flush])
+          end
+
+        _ ->
+          :ok
+      end
+
+      {:ok, session_pid} =
+        GameCore.start_session(
+          username: username,
+          initial_chunk: {cx, cy},
+          repo: repo,
+          warm_radius: warm_radius
+        )
 
       Process.link(session_pid)
       Phoenix.PubSub.subscribe(GameCore.PubSub, "self:#{username}")
+      Phoenix.PubSub.subscribe(GameCore.PubSub, "player_events:#{username}")
 
       socket =
         socket
@@ -87,6 +103,11 @@ defmodule GameWeb.PlayerChannel do
   @impl true
   def handle_info({:self, payload}, socket) do
     push(socket, "self", stringify_inventory(payload))
+    {:noreply, socket}
+  end
+
+  def handle_info({:relocated, payload}, socket) do
+    push(socket, "relocated", payload)
     {:noreply, socket}
   end
 

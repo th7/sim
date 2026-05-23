@@ -1,11 +1,14 @@
 defmodule GameWeb.ChunkChannel do
   @moduledoc """
-  Phoenix Channel for a single Chunk's snapshot stream. Topic
-  `chunk:<x>:<y>` for Overworld Chunks, `instance:<id>:chunk:<x>:<y>` for
-  Instance Chunks (routed via the same module). Observer-only: joining
-  ensures the Chunk is hot and subscribes for snapshot pushes. The
-  Player's presence in a Chunk's world, all input verbs, and per-Player
-  events live on `GameWeb.PlayerChannel`.
+  Phoenix Channel for a single Chunk's snapshot stream. Two topic shapes
+  route to this module:
+
+    - `chunk:<x>:<y>` — an Overworld Chunk
+    - `instance:<id>:chunk:<x>:<y>` — an Instance Chunk
+
+  Observer-only: joining ensures the Chunk is hot (via `Chunks.ensure_started`)
+  and the standard Phoenix Channel subscription delivers snapshot broadcasts.
+  All input verbs and per-Player events live on `GameWeb.PlayerChannel`.
   """
 
   use GameWeb, :channel
@@ -14,11 +17,28 @@ defmodule GameWeb.ChunkChannel do
 
   @impl true
   def join("chunk:" <> coord_str, _params, socket) do
-    repo = Application.get_env(:game_core, :chunk_repo, GameCore.ChunkRepo.Null)
+    join_realm_coord(:overworld, coord_str, socket)
+  end
+
+  def join("instance:" <> rest, _params, socket) do
+    with [id_str, "chunk", coord_str] <- String.split(rest, ":", parts: 3),
+         {id, ""} <- Integer.parse(id_str) do
+      join_realm_coord({:instance, id}, coord_str, socket)
+    else
+      _ -> {:error, %{reason: "bad_topic"}}
+    end
+  end
+
+  defp join_realm_coord(realm, coord_str, socket) do
+    repo =
+      case realm do
+        :overworld -> Application.get_env(:game_core, :chunk_repo, GameCore.ChunkRepo.Null)
+        {:instance, _} -> GameCore.ChunkRepo.Null
+      end
 
     with {:ok, coord} <- parse_coord(coord_str),
-         {:ok, _pid} <- Chunks.ensure_started(:overworld, coord, repo) do
-      {:ok, assign(socket, :coord, coord)}
+         {:ok, _pid} <- Chunks.ensure_started(realm, coord, repo) do
+      {:ok, socket |> assign(:realm, realm) |> assign(:coord, coord)}
     else
       _ -> {:error, %{reason: "unavailable"}}
     end

@@ -188,14 +188,23 @@ defmodule GameCore.Chunk do
   @doc """
   Source side of a cross-realm migration. Removes `eid` from this Chunk's
   world and returns its component map with `Position` overridden to
-  `{x, y}` (so the destination realm sees the entity at the spawn point,
-  not at its pre-migration coords in a different coordinate space).
+  `dest_pos` (so the destination realm sees the entity at the spawn point,
+  not at its pre-migration coords in a different coordinate space). Before
+  removal, flushes `save_pos` to this Chunk's persistence — so a mid-realm
+  disconnect lands the Player back at `save_pos` on reconnect, not at the
+  Portal cell that would immediately re-trigger entry.
+
   Returns `%{}` if the entity is unknown.
   """
-  @spec take_components_for(GenServer.server(), GameCore.World.eid(), {integer(), integer()}) ::
-          %{module() => any()}
-  def take_components_for(server, eid, {x, y}) when is_integer(x) and is_integer(y) do
-    GenServer.call(server, {:take_components_for, eid, {x, y}})
+  @spec take_components_for(
+          GenServer.server(),
+          GameCore.World.eid(),
+          {integer(), integer()},
+          {integer(), integer()}
+        ) :: %{module() => any()}
+  def take_components_for(server, eid, dest_pos, save_pos)
+      when is_tuple(dest_pos) and is_tuple(save_pos) do
+    GenServer.call(server, {:take_components_for, eid, dest_pos, save_pos})
   end
 
   @impl true
@@ -593,12 +602,20 @@ defmodule GameCore.Chunk do
     {:reply, :ok, %{state | world: world}}
   end
 
-  def handle_call({:take_components_for, eid, {x, y}}, _from, state) do
+  def handle_call({:take_components_for, eid, {dx, dy}, {sx, sy}}, _from, state) do
     components =
       case Map.get(state.world.components, Position) do
         %{^eid => _} ->
+          # Persist `save_pos` rather than current Position: on Overworld
+          # entry, that means saving the post-exit-offset cell (so a mid-
+          # Instance disconnect reconnects there, not on top of the Portal
+          # they just stepped onto — which would loop back into the Instance).
+          # No-op on Instance source (Null repo).
+          world_with_save = World.add_component(state.world, eid, Position, %{x: sx, y: sy})
+          flush_one(%{state | world: world_with_save}, eid)
+
           collect_components(state.world, eid)
-          |> Map.put(Position, %{x: x, y: y})
+          |> Map.put(Position, %{x: dx, y: dy})
           |> Map.put(Velocity, %{vx: 0.0, vy: 0.0})
 
         _ ->
