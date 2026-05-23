@@ -1,18 +1,7 @@
 defmodule GameCore.WorldgenPortalsTest do
-  use ExUnit.Case, async: false
+  use GameCore.ChunkCase, async: false
 
   alias GameCore.Worldgen
-
-  setup do
-    on_exit(fn ->
-      for {_, pid, _, _} <- DynamicSupervisor.which_children(GameCore.ChunkSupervisor),
-          is_pid(pid) do
-        DynamicSupervisor.terminate_child(GameCore.ChunkSupervisor, pid)
-      end
-    end)
-
-    :ok
-  end
 
   test "portals/1 places one :dungeon Portal at a quarter-offset in chunk {0,0}" do
     # Offset from chunk-center so Players (who spawn at chunk-center on

@@ -1,23 +1,7 @@
 defmodule GameCore.SessionInstanceTransitionsTest do
-  use ExUnit.Case, async: false
+  use GameCore.ChunkCase, async: false
 
   alias GameCore.{Chunk, Chunks, Session}
-
-  setup do
-    on_exit(fn ->
-      for {_, pid, _, _} <- DynamicSupervisor.which_children(GameCore.ChunkSupervisor),
-          is_pid(pid) do
-        DynamicSupervisor.terminate_child(GameCore.ChunkSupervisor, pid)
-      end
-
-      for {_, pid, _, _} <- DynamicSupervisor.which_children(GameCore.InstancesSupervisor),
-          is_pid(pid) do
-        DynamicSupervisor.terminate_child(GameCore.InstancesSupervisor, pid)
-      end
-    end)
-
-    :ok
-  end
 
   defp start_session(username, coord) do
     {:ok, sess} =

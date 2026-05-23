@@ -1,17 +1,7 @@
 defmodule GameCore.WarmSetTest do
-  use ExUnit.Case, async: false
+  use GameCore.ChunkCase, async: false
 
   alias GameCore.{Chunk, Chunks, WarmSet}
-
-  setup do
-    on_exit(fn ->
-      for {_, pid, _, _} <- DynamicSupervisor.which_children(GameCore.ChunkSupervisor) do
-        DynamicSupervisor.terminate_child(GameCore.ChunkSupervisor, pid)
-      end
-    end)
-
-    :ok
-  end
 
   test "new/3 activates every coord in the window and records them as members" do
     ws = WarmSet.new({0, 0}, self(), radius: 1)

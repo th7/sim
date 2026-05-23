@@ -5,27 +5,9 @@ defmodule GameCore.SessionLifecycleTest do
   window pans, releasing chunks behind and activating chunks ahead on
   demand under the DynamicSupervisor.
   """
-  use ExUnit.Case, async: false
+  use GameCore.ChunkCase, async: false
 
   alias GameCore.{Chunk, Chunks, Session}
-
-  setup do
-    on_exit(fn ->
-      # Tear down every chunk this test left behind. Guard against the
-      # ChunkSupervisor not being alive (e.g. when on_exit runs after the
-      # app has already started its own shutdown).
-      try do
-        for {_, pid, _, _} <- DynamicSupervisor.which_children(GameCore.ChunkSupervisor),
-            is_pid(pid) do
-          DynamicSupervisor.terminate_child(GameCore.ChunkSupervisor, pid)
-        end
-      catch
-        _, _ -> :ok
-      end
-    end)
-
-    :ok
-  end
 
   test "moving east activates new chunks ahead and releases interest behind" do
     {:ok, sess} =

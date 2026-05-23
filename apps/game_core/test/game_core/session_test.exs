@@ -1,17 +1,7 @@
 defmodule GameCore.SessionTest do
-  use ExUnit.Case, async: false
+  use GameCore.ChunkCase, async: false
 
   alias GameCore.{Chunk, Chunks, Session}
-
-  setup do
-    on_exit(fn ->
-      for {_, pid, _, _} <- DynamicSupervisor.which_children(GameCore.ChunkSupervisor) do
-        DynamicSupervisor.terminate_child(GameCore.ChunkSupervisor, pid)
-      end
-    end)
-
-    :ok
-  end
 
   test "on start, the Session activates the warm radius around current chunk" do
     {:ok, sess} =
