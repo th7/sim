@@ -81,8 +81,11 @@ function windowCoords([cx, cy]: Coord): Coord[] {
   return out;
 }
 
+const OVERWORLD_BG = 0x101010;
+const INSTANCE_BG = 0x1a1030;
+
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x101010);
+scene.background = new THREE.Color(OVERWORLD_BG);
 
 const camera = new THREE.PerspectiveCamera(
   50,
@@ -429,6 +432,9 @@ playerChannel.on('self', (payload: { inventory: Inventory }) => {
 playerChannel.on('relocated', (payload: { realm: Realm; coord: Coord }) => {
   currentRealm = payload.realm;
   windowCenter = payload.coord;
+  (scene.background as THREE.Color).setHex(
+    currentRealm.kind === 'instance' ? INSTANCE_BG : OVERWORLD_BG,
+  );
   clearAllChunkSubscriptions();
   for (const coord of windowCoords(payload.coord)) {
     subscribeChunk(coord);
@@ -621,9 +627,12 @@ function refreshHud(): void {
   const view = Object.keys((window as unknown as { __game: { players(): Record<string, PlayerPos> } }).__game.players()).length;
   const active = latestStats?.active_chunks ?? '—';
   const total = latestStats?.total_players ?? '—';
+  const realmStr =
+    currentRealm.kind === 'overworld' ? 'overworld' : `instance:${currentRealm.id}`;
 
   hudEl.textContent =
     `user:   ${username}\n` +
+    `realm:  ${realmStr}\n` +
     `pos:    ${pos}  chunk: (${chunkCoord[0]}, ${chunkCoord[1]})\n` +
     `view:   ${view}  active: ${active}  total: ${total}`;
 }

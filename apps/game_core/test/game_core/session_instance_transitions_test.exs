@@ -88,6 +88,55 @@ defmodule GameCore.SessionInstanceTransitionsTest do
     assert {:error, :no_build_in_instance} = Session.build(sess, :wall, {25_000, 24_000})
   end
 
+  test "Inventory survives Instance entry and exit (round-trip)" do
+    sess = start_session("alice", {0, 0})
+
+    overworld_chunk = Chunks.whereis(:overworld, {0, 0})
+    :ok = Chunk.set_inventory(overworld_chunk, "alice", %{wood: 5})
+
+    :ok = Session.enter_instance(sess, {0, 0}, {4000, 4000})
+
+    {:instance, _id} = Session.current_realm(sess)
+    instance_center = Chunks.whereis(Session.current_realm(sess), {1, 1})
+    assert Chunk.player_inventory(instance_center, "alice") == %{wood: 5}
+
+    :ok = Session.exit_instance(sess)
+
+    return_chunk = Chunks.whereis(:overworld, {0, 0})
+    assert Chunk.player_inventory(return_chunk, "alice") == %{wood: 5}
+  end
+
+  test "Multiple Sessions can each occupy their own Instance simultaneously" do
+    alice = start_session("alice", {0, 0})
+    bob = start_session("bob", {0, 0})
+
+    :ok = Session.enter_instance(alice, {0, 0}, {4000, 4000})
+    :ok = Session.enter_instance(bob, {0, 0}, {4000, 4000})
+
+    {:instance, alice_id} = Session.current_realm(alice)
+    {:instance, bob_id} = Session.current_realm(bob)
+    assert alice_id != bob_id, "each Session must get its own Instance"
+
+    # Each Player is in their own Instance's center chunk; no cross-contamination.
+    alice_center = Chunks.whereis({:instance, alice_id}, {1, 1})
+    bob_center = Chunks.whereis({:instance, bob_id}, {1, 1})
+
+    assert alice_center != bob_center
+    assert Map.has_key?(Chunk.snapshot(alice_center).players, "alice")
+    refute Map.has_key?(Chunk.snapshot(alice_center).players, "bob")
+    assert Map.has_key?(Chunk.snapshot(bob_center).players, "bob")
+    refute Map.has_key?(Chunk.snapshot(bob_center).players, "alice")
+
+    :ok = Session.exit_instance(alice)
+    :ok = Session.exit_instance(bob)
+
+    # Both Instances are gone.
+    for cx <- 0..2, cy <- 0..2 do
+      refute Chunks.whereis({:instance, alice_id}, {cx, cy})
+      refute Chunks.whereis({:instance, bob_id}, {cx, cy})
+    end
+  end
+
   test "Session.terminate while inside Instance eagerly tears down the Instance" do
     sess = start_session("alice", {0, 0})
     :ok = Session.enter_instance(sess, {0, 0}, {4000, 4000})

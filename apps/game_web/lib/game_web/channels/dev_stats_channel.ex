@@ -43,18 +43,20 @@ defmodule GameWeb.DevStatsChannel do
   defp around(username) do
     case Sessions.whereis(username) do
       pid when is_pid(pid) ->
-        pid
-        |> Session.current_chunk()
+        realm = Session.current_realm(pid)
+        center = Session.current_chunk(pid)
+
+        center
         |> ChunkGeometry.neighborhood(@ring_radius)
-        |> Enum.map(&entry_for/1)
+        |> Enum.map(&entry_for(realm, &1))
 
       _ ->
         []
     end
   end
 
-  defp entry_for({cx, cy} = coord) do
-    case Chunks.whereis(:overworld, coord) do
+  defp entry_for(realm, {cx, cy} = coord) do
+    case Chunks.whereis(realm, coord) do
       pid when is_pid(pid) ->
         s = Chunk.dev_status(pid)
 
