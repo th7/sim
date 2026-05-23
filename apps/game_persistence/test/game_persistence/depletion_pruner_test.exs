@@ -12,17 +12,30 @@ defmodule GamePersistence.DepletionPrunerTest do
   alias GamePersistence.Schemas.ResourceNode
 
   test "the pruner DELETEs rows whose depleted_until is in the past" do
-    past = DateTime.add(DateTime.utc_now(), -60_000, :millisecond) |> DateTime.truncate(:microsecond)
-    future = DateTime.add(DateTime.utc_now(), 60_000, :millisecond) |> DateTime.truncate(:microsecond)
+    past =
+      DateTime.add(DateTime.utc_now(), -60_000, :millisecond) |> DateTime.truncate(:microsecond)
+
+    future =
+      DateTime.add(DateTime.utc_now(), 60_000, :millisecond) |> DateTime.truncate(:microsecond)
 
     {:ok, _} =
       Repo.insert(%ResourceNode{
-        chunk_x: 0, chunk_y: 0, type: "tree", x: 1, y: 1, depleted_until: past
+        chunk_x: 0,
+        chunk_y: 0,
+        type: "tree",
+        x: 1,
+        y: 1,
+        depleted_until: past
       })
 
     {:ok, _} =
       Repo.insert(%ResourceNode{
-        chunk_x: 0, chunk_y: 0, type: "tree", x: 2, y: 2, depleted_until: future
+        chunk_x: 0,
+        chunk_y: 0,
+        type: "tree",
+        x: 2,
+        y: 2,
+        depleted_until: future
       })
 
     # Drive the pruner synchronously rather than waiting on its schedule.

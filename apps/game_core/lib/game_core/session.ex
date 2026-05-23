@@ -197,7 +197,11 @@ defmodule GameCore.Session do
     {:reply, {:error, :already_in_instance}, state}
   end
 
-  def handle_call(:exit_instance, _from, %{realm: {:instance, id}, return_to: {:overworld, dest_coord, portal_pos}} = state) do
+  def handle_call(
+        :exit_instance,
+        _from,
+        %{realm: {:instance, id}, return_to: {:overworld, dest_coord, portal_pos}} = state
+      ) do
     spawn_pos = offset_from_portal(portal_pos)
 
     new_state =
@@ -273,8 +277,7 @@ defmodule GameCore.Session do
 
   @impl true
   def handle_cast({:relocate, new_coord}, state) do
-    {:noreply,
-     %{state | current_chunk: new_coord, warm: WarmSet.recenter(state.warm, new_coord)}}
+    {:noreply, %{state | current_chunk: new_coord, warm: WarmSet.recenter(state.warm, new_coord)}}
   end
 
   @impl true

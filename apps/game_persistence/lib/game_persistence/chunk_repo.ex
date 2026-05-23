@@ -78,8 +78,7 @@ defmodule GamePersistence.ChunkRepo do
 
     Repo.all(
       from(r in ResourceNode,
-        where:
-          r.chunk_x == ^chunk_x and r.chunk_y == ^chunk_y and not is_nil(r.depleted_until)
+        where: r.chunk_x == ^chunk_x and r.chunk_y == ^chunk_y and not is_nil(r.depleted_until)
       )
     )
     |> Enum.map(fn r ->

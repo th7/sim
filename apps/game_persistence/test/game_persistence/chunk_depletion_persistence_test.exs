@@ -23,7 +23,7 @@ defmodule GamePersistence.ChunkDepletionPersistenceTest do
   end
 
   defp rows({cx, cy}) do
-    Repo.all(from r in ResourceNode, where: r.chunk_x == ^cx and r.chunk_y == ^cy)
+    Repo.all(from(r in ResourceNode, where: r.chunk_x == ^cx and r.chunk_y == ^cy))
   end
 
   test "flush_db INSERTs a depletion row for a harvested tree" do
@@ -98,7 +98,9 @@ defmodule GamePersistence.ChunkDepletionPersistenceTest do
     coord = {11, 11}
     {cx, cy} = coord
     {tx, ty} = {cx * 16_000 + 8_000, cy * 16_000 + 8_000}
-    past = DateTime.add(DateTime.utc_now(), -60_000, :millisecond) |> DateTime.truncate(:microsecond)
+
+    past =
+      DateTime.add(DateTime.utc_now(), -60_000, :millisecond) |> DateTime.truncate(:microsecond)
 
     Repo.insert!(%ResourceNode{
       chunk_x: cx,

@@ -44,8 +44,7 @@ defmodule GameCore.Instances do
         GameCore.InstancesSupervisor,
         %{
           id: realm,
-          start:
-            {Supervisor, :start_link, [children, [strategy: :one_for_all, name: sup_name]]},
+          start: {Supervisor, :start_link, [children, [strategy: :one_for_all, name: sup_name]]},
           type: :supervisor,
           restart: :temporary
         }

@@ -127,11 +127,14 @@ defmodule GameCore.SessionInstanceTransitionsTest do
     {:instance, id} = Session.current_realm(sess)
     assert is_pid(Chunks.whereis({:instance, id}, {1, 1}))
 
+    # `Session.terminate/2` calls `Instances.terminate(id)` which
+    # synchronously waits for the per-Instance supervisor DOWN and the
+    # Registry to clear, so by the time we see the Session's own DOWN
+    # the Instance chunks are guaranteed gone.
     ref = Process.monitor(sess)
     GenServer.stop(sess)
     assert_receive {:DOWN, ^ref, :process, ^sess, _}, 1_000
 
-    Process.sleep(20)
     for cx <- 0..2, cy <- 0..2 do
       refute Chunks.whereis({:instance, id}, {cx, cy})
     end

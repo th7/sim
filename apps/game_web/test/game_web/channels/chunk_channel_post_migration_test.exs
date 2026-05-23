@@ -22,20 +22,14 @@ defmodule GameWeb.PlayerChannelPostMigrationTest do
     src =
       start_supervised!(
         {Chunk,
-         coord: {0, 0},
-         name: Chunks.via(:overworld, {0, 0}),
-         auto_tick: false,
-         auto_flush: false},
+         coord: {0, 0}, name: Chunks.via(:overworld, {0, 0}), auto_tick: false, auto_flush: false},
         id: :src_chunk
       )
 
     dst =
       start_supervised!(
         {Chunk,
-         coord: {1, 0},
-         name: Chunks.via(:overworld, {1, 0}),
-         auto_tick: false,
-         auto_flush: false},
+         coord: {1, 0}, name: Chunks.via(:overworld, {1, 0}), auto_tick: false, auto_flush: false},
         id: :dst_chunk
       )
 
