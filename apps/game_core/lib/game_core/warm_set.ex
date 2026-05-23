@@ -23,11 +23,10 @@ defmodule GameCore.WarmSet do
           center: Chunk.coord(),
           radius: non_neg_integer(),
           members: MapSet.t(Chunk.coord()),
-          holder: pid(),
-          repo: module()
+          holder: pid()
         }
 
-  defstruct [:realm, :center, :radius, :members, :holder, :repo]
+  defstruct [:realm, :center, :radius, :members, :holder]
 
   @doc """
   Build a new WarmSet centered on `center`, held by `holder`. Synchronously
@@ -42,8 +41,7 @@ defmodule GameCore.WarmSet do
       center: center,
       radius: Keyword.get(opts, :radius, @default_radius),
       members: MapSet.new(),
-      holder: holder,
-      repo: Keyword.get(opts, :repo, GameCore.ChunkRepo.Null)
+      holder: holder
     }
 
     recenter(ws, center)
@@ -81,7 +79,7 @@ defmodule GameCore.WarmSet do
   defp warm_up(_coord, _ws, 0), do: :ok
 
   defp warm_up(coord, ws, retries) do
-    {:ok, pid} = Chunks.ensure_started(ws.realm, coord, ws.repo)
+    {:ok, pid} = Chunks.ensure_started(ws.realm, coord)
 
     try do
       Chunk.express_interest(pid, ws.holder)

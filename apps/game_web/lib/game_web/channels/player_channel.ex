@@ -17,7 +17,6 @@ defmodule GameWeb.PlayerChannel do
       {:error, %{reason: "username_mismatch"}}
     else
       [cx, cy] = Map.fetch!(params, "initial_chunk")
-      repo = Application.get_env(:game_core, :chunk_repo, GameCore.ChunkRepo.Null)
       warm_radius = Application.get_env(:game_core, :session_warm_radius, 2)
 
       # Clean reconnect: tear down any prior Session for this username before
@@ -48,7 +47,6 @@ defmodule GameWeb.PlayerChannel do
         GameCore.start_session(
           username: username,
           initial_chunk: {cx, cy},
-          repo: repo,
           warm_radius: warm_radius
         )
 

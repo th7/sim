@@ -18,19 +18,18 @@ defmodule GameCore.ChunkMigration do
 
   @doc """
   Hand `eid` off from `from_coord` to `to_coord` within `realm` with the
-  given components. Starts the destination Chunk if cold (under `repo`).
-  Notifies the entity's Session if one exists. Returns `:ok`.
+  given components. Starts the destination Chunk if cold. Notifies the
+  entity's Session if one exists. Returns `:ok`.
   """
   @spec cross(
           Chunks.realm(),
           GameCore.World.eid(),
           from :: Chunk.coord(),
           to :: Chunk.coord(),
-          components :: %{module() => any()},
-          repo :: module()
+          components :: %{module() => any()}
         ) :: :ok
-  def cross(realm, eid, _from_coord, to_coord, components, repo) do
-    {:ok, dest} = Chunks.ensure_started(realm, to_coord, repo)
+  def cross(realm, eid, _from_coord, to_coord, components) do
+    {:ok, dest} = Chunks.ensure_started(realm, to_coord)
     :ok = Chunk.migrate_in(dest, eid, components)
 
     case Sessions.whereis(eid) do

@@ -15,8 +15,9 @@ defmodule GameCore.Instances do
   """
 
   @doc """
-  Spawn a new Instance: per-Instance supervisor + 9 Chunks (3×3) with
-  the Null repo. Returns the Instance's monotonic id.
+  Spawn a new Instance: per-Instance supervisor + 9 Chunks (3×3). Instance
+  Chunks do not emit to the Datastore — Instance state is in-memory only.
+  Returns the Instance's monotonic id.
   """
   @spec start_new() :: {:ok, integer()}
   def start_new do
@@ -29,10 +30,7 @@ defmodule GameCore.Instances do
 
         Supervisor.child_spec(
           {GameCore.Chunk,
-           realm: realm,
-           coord: coord,
-           repo: GameCore.ChunkRepo.Null,
-           name: GameCore.Chunks.via(realm, coord)},
+           realm: realm, coord: coord, name: GameCore.Chunks.via(realm, coord)},
           id: {:chunk, coord}
         )
       end

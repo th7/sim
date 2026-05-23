@@ -12,14 +12,12 @@ defmodule GameCore.Chunk do
   id; non-player entities (Resource nodes, Structures, Portals) use string
   ids derived from their type and position.
 
-  Persistence is delegated to a pluggable `GameCore.ChunkRepo`
-  implementation. The default `Null` repo (no durability) is used for
-  tests and for Instance chunks (Instance state is in-memory only);
-  Overworld chunks in production use `GamePersistence.ChunkRepo`. Players
-  are hydrated lazily on `join/2` from `fetch_player/1` and flushed on
-  `leave/2`, on a periodic `flush_db` tick, and on chunk terminate. The
-  cross-realm `take_components_for/4` also forces a flush so a mid-realm
-  disconnect persists a sensible Overworld return position.
+  All durable reads and writes route through `GamePersistence.Datastore`.
+  Overworld chunks emit Player / Structure / Depletion upserts on the
+  verbs that mutate that state and on periodic Player heartbeats; they
+  hydrate via `Datastore.fetch_*` on activation. Instance chunks do not
+  emit (Instance state is in-memory only) — the realm guard suppresses
+  emissions on `{:instance, _}` chunks.
 
   Snapshot broadcasts go to a realm-prefixed PubSub topic
   (`chunk:cx:cy` for Overworld, `instance:<id>:chunk:cx:cy` for Instance),
@@ -38,6 +36,8 @@ defmodule GameCore.Chunk do
   use GenServer, restart: :transient
 
   alias GameCore.{ChunkLifecycle, ChunkMigration, Worldgen, World}
+
+  alias GamePersistence.Datastore
 
   alias GameCore.Components.{
     Depleted,
@@ -228,15 +228,14 @@ defmodule GameCore.Chunk do
     auto_flush = Keyword.get(opts, :auto_flush, true)
     flush_ms = Keyword.get(opts, :flush_ms, @default_flush_ms)
     respawn_ms = Keyword.get(opts, :respawn_ms, @default_respawn_ms)
-    repo = Keyword.get(opts, :repo, GameCore.ChunkRepo.Null)
 
     Process.flag(:trap_exit, true)
 
     world =
       World.new()
       |> seed_resource_nodes(coord)
-      |> seed_structures(coord, repo)
-      |> hydrate_depletions(coord, repo)
+      |> seed_structures(realm, coord)
+      |> hydrate_depletions(realm, coord)
       |> seed_portals(realm, coord)
 
     state = %{
@@ -249,7 +248,6 @@ defmodule GameCore.Chunk do
       auto_flush: auto_flush,
       flush_ms: flush_ms,
       respawn_ms: respawn_ms,
-      repo: repo,
       tick_count: 0,
       lifecycle: ChunkLifecycle.new(Keyword.take(opts, [:idle_timeout_ms]))
     }
@@ -259,10 +257,10 @@ defmodule GameCore.Chunk do
     {:ok, state}
   end
 
-  defp hydrate_depletions(world, coord, repo) do
+  defp hydrate_depletions(world, :overworld, coord) do
     now = DateTime.utc_now()
 
-    Enum.reduce(repo.fetch_depletions(coord), world, fn d, w ->
+    Enum.reduce(Datastore.fetch_depletions(:overworld, coord), world, fn d, w ->
       case DateTime.compare(d.depleted_until, now) do
         :gt ->
           eid = node_eid(d.type, d.x, d.y)
@@ -278,11 +276,13 @@ defmodule GameCore.Chunk do
 
         _ ->
           # Past-due: leave the Worldgen-seeded Gatherable in place. The
-          # next flush_db will DELETE the stale row.
+          # respawn handler / DepletionPruner will clean up the DB row.
           w
       end
     end)
   end
+
+  defp hydrate_depletions(world, {:instance, _}, _coord), do: world
 
   defp seed_resource_nodes(world, coord) do
     Enum.reduce(Worldgen.resource_nodes(coord), world, fn %{type: type, x: x, y: y}, w ->
@@ -326,9 +326,9 @@ defmodule GameCore.Chunk do
     {0, 0, 3 * size, 3 * size}
   end
 
-  defp seed_structures(world, coord, repo) do
-    Enum.reduce(repo.fetch_structures(coord), world, fn s, w ->
-      eid = structure_eid(s.id)
+  defp seed_structures(world, :overworld, coord) do
+    Enum.reduce(Datastore.fetch_structures(coord), world, fn s, w ->
+      eid = structure_eid(s.x, s.y)
 
       w
       |> World.add_component(eid, Position, %{x: s.x, y: s.y})
@@ -336,6 +336,8 @@ defmodule GameCore.Chunk do
       |> World.add_component(eid, Structure, %{type: s.type, owner: s.owner, hp: s.hp})
     end)
   end
+
+  defp seed_structures(world, {:instance, _}, _coord), do: world
 
   defp yield_for(:tree), do: :wood
 
@@ -422,8 +424,8 @@ defmodule GameCore.Chunk do
     end)
   end
 
-  defp structure_eid(id) when is_integer(id), do: Integer.to_string(id)
-  defp structure_eid(id) when is_binary(id), do: id
+  defp structure_eid(x, y) when is_integer(x) and is_integer(y),
+    do: "structure:#{x}:#{y}"
 
   defp publish_self(username, items) do
     Phoenix.PubSub.broadcast(
@@ -520,6 +522,11 @@ defmodule GameCore.Chunk do
 
       Process.send_after(self(), {:respawn, eid}, state.respawn_ms)
 
+      if state.realm == :overworld do
+        :ok = Datastore.upsert_player(username, state.coord, px, py, new_items)
+        :ok = Datastore.upsert_depletion(:overworld, state.coord, gtype, tx, ty, depleted_until)
+      end
+
       publish_self(username, new_items)
       {:reply, :ok, %{state | world: world}}
     else
@@ -559,15 +566,18 @@ defmodule GameCore.Chunk do
         world =
           World.add_component(state.world, eid, Structure, %{struct | hp: new_hp})
 
+        if state.realm == :overworld do
+          :ok = Datastore.upsert_structure(state.coord, struct.owner, struct.type, x, y, new_hp)
+        end
+
         {:reply, :ok, %{state | world: world}}
       else
-        with {sid, ""} <- Integer.parse(eid),
-             :ok <- state.repo.destroy_structure(sid) do
-          world = World.remove_entity(state.world, eid)
-          {:reply, :ok, %{state | world: world}}
-        else
-          _ -> {:reply, {:error, :destroy_failed}, state}
+        if state.realm == :overworld do
+          :ok = Datastore.delete_structure(x, y)
         end
+
+        world = World.remove_entity(state.world, eid)
+        {:reply, :ok, %{state | world: world}}
       end
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -580,19 +590,21 @@ defmodule GameCore.Chunk do
          :ok <- check_cell_empty(state.world, x, y),
          {:ok, items} <- player_inv(state.world, username),
          {:ok, new_items} <- subtract_cost(items, Catalogue.cost(type)),
-         {:ok, sid} <- state.repo.build_structure(state.coord, username, type, x, y, new_items) do
-      eid = structure_eid(sid)
+         {:ok, {px, py}} <- player_pos(state.world, username) do
+      eid = structure_eid(x, y)
+      hp = Catalogue.max_hp(type)
+
+      if state.realm == :overworld do
+        :ok = Datastore.upsert_player(username, state.coord, px, py, new_items)
+        :ok = Datastore.upsert_structure(state.coord, username, type, x, y, hp)
+      end
 
       world =
         state.world
         |> World.add_component(username, Inventory, %{items: new_items})
         |> World.add_component(eid, Position, %{x: x, y: y})
         |> World.add_component(eid, Renderable, %{})
-        |> World.add_component(eid, Structure, %{
-          type: type,
-          owner: username,
-          hp: Catalogue.max_hp(type)
-        })
+        |> World.add_component(eid, Structure, %{type: type, owner: username, hp: hp})
 
       publish_self(username, new_items)
       {:reply, :ok, %{state | world: world}}
@@ -606,6 +618,20 @@ defmodule GameCore.Chunk do
       Enum.reduce(components, state.world, fn {mod, data}, w ->
         World.add_component(w, eid, mod, data)
       end)
+
+    # Cross-realm migrations (Instance → Overworld) need the destination
+    # to eagerly emit so the Player's persisted position reflects the new
+    # realm before the next heartbeat. Same-realm migrations also emit
+    # here (cheap; the actor coalesces by username).
+    if state.realm == :overworld do
+      case components do
+        %{Position => %{x: x, y: y}, Inventory => %{items: items}} ->
+          :ok = Datastore.upsert_player(eid, state.coord, x, y, items)
+
+        _ ->
+          :ok
+      end
+    end
 
     snap = BroadcastSystem.snapshot(world)
     broadcast_snapshot(state, snap)
@@ -621,9 +647,11 @@ defmodule GameCore.Chunk do
           # entry, that means saving the post-exit-offset cell (so a mid-
           # Instance disconnect reconnects there, not on top of the Portal
           # they just stepped onto — which would loop back into the Instance).
-          # No-op on Instance source (Null repo).
-          world_with_save = World.add_component(state.world, eid, Position, %{x: sx, y: sy})
-          flush_one(%{state | world: world_with_save}, eid)
+          # No-op on Instance source.
+          if state.realm == :overworld do
+            items = player_items(state.world, eid)
+            :ok = Datastore.upsert_player(eid, state.coord, sx, sy, items)
+          end
 
           collect_components(state.world, eid)
           |> Map.put(Position, %{x: dx, y: dy})
@@ -661,7 +689,7 @@ defmodule GameCore.Chunk do
   def handle_info(:tick, state) do
     dt = state.tick_ms / 1000.0
     world = MovementSystem.run(state.world, dt, bounds: movement_bounds(state.realm))
-    {world, migrated?} = migrate_out(world, state.realm, state.coord, state.repo)
+    {world, migrated?} = migrate_out(world, state.realm, state.coord)
     state = %{state | world: world, tick_count: state.tick_count + 1}
 
     check_portal_overlaps(state)
@@ -677,7 +705,6 @@ defmodule GameCore.Chunk do
 
   def handle_info(:flush_db, state) do
     flush_all(state)
-    flush_depletions(state)
     if state.auto_flush, do: schedule_flush(state.flush_ms)
     {:noreply, state}
   end
@@ -685,6 +712,11 @@ defmodule GameCore.Chunk do
   def handle_info({:respawn, eid}, state) do
     case World.fetch(state.world, eid, Depleted) do
       {:ok, %{type: type}} ->
+        if state.realm == :overworld do
+          {:ok, %{x: x, y: y}} = World.fetch(state.world, eid, Position)
+          :ok = Datastore.delete_depletion(:overworld, state.coord, type, x, y)
+        end
+
         world =
           state.world
           |> remove_component(Depleted, eid)
@@ -778,8 +810,9 @@ defmodule GameCore.Chunk do
 
   @impl true
   def terminate(_reason, state) do
-    # Best-effort: at shutdown the repo may already be gone (e.g. its app or
-    # an Agent it owns has stopped). Swallow any error so we still terminate.
+    # Best-effort: at shutdown the Datastore may already be gone (its app
+    # stopped, or this chunk is part of a wider cascade). Swallow any
+    # error so we still terminate cleanly.
     try do
       flush_all(state)
     catch
@@ -799,11 +832,13 @@ defmodule GameCore.Chunk do
   end
 
   defp hydrate_player(state, username) do
-    case state.repo.fetch_player(username) do
-      %{chunk_x: cx, chunk_y: cy, x: x, y: y} = saved when {cx, cy} == state.coord ->
+    saved = if state.realm == :overworld, do: Datastore.fetch_player(username), else: nil
+
+    case saved do
+      %{chunk_x: cx, chunk_y: cy, x: x, y: y} when {cx, cy} == state.coord ->
         {x, y, Map.get(saved, :inventory, %{})}
 
-      saved ->
+      _ ->
         {cx, cy} = chunk_center(state.coord)
         items = if is_map(saved), do: Map.get(saved, :inventory, %{}), else: %{}
         {cx, cy, items}
@@ -816,52 +851,34 @@ defmodule GameCore.Chunk do
     {cx * size + half, cy * size + half}
   end
 
+  defp flush_one(%{realm: {:instance, _}}, _username), do: :ok
+
   defp flush_one(state, username) do
     case World.fetch(state.world, username, Position) do
       {:ok, %{x: x, y: y}} ->
         items = player_items(state.world, username)
-
-        state.repo.flush_players(state.coord, [
-          %{username: username, x: x, y: y, inventory: items}
-        ])
+        :ok = Datastore.upsert_player(username, state.coord, x, y, items)
 
       :error ->
         :ok
     end
   end
 
-  defp flush_depletions(%{world: world, coord: coord, repo: repo}) do
-    positions = Map.get(world.components, Position, %{})
-    depleteds = Map.get(world.components, Depleted, %{})
+  defp flush_all(%{realm: {:instance, _}}), do: :ok
 
-    rows =
-      for {eid, %{type: type, depleted_until: %DateTime{} = until}} <- depleteds,
-          {:ok, %{x: x, y: y}} <- [Map.fetch(positions, eid)] do
-        %{type: type, x: x, y: y, depleted_until: until}
-      end
-
-    repo.flush_depletions(coord, rows)
-  end
-
-  defp flush_all(%{world: world, coord: coord, repo: repo}) do
+  defp flush_all(%{world: world, coord: coord}) do
     positions = Map.get(world.components, Position, %{})
     player_eids = Map.keys(Map.get(world.components, PlayerControlled, %{}))
 
-    players =
-      Enum.flat_map(player_eids, fn eid ->
-        case Map.fetch(positions, eid) do
-          {:ok, %{x: x, y: y}} ->
-            [%{username: eid, x: x, y: y, inventory: player_items(world, eid)}]
+    Enum.each(player_eids, fn eid ->
+      case Map.fetch(positions, eid) do
+        {:ok, %{x: x, y: y}} ->
+          :ok = Datastore.upsert_player(eid, coord, x, y, player_items(world, eid))
 
-          :error ->
-            []
-        end
-      end)
-
-    case players do
-      [] -> :ok
-      _ -> repo.flush_players(coord, players)
-    end
+        :error ->
+          :ok
+      end
+    end)
   end
 
   defp player_items(world, username) do
@@ -874,7 +891,7 @@ defmodule GameCore.Chunk do
   defp schedule_tick(tick_ms), do: Process.send_after(self(), :tick, tick_ms)
   defp schedule_flush(flush_ms), do: Process.send_after(self(), :flush_db, flush_ms)
 
-  defp migrate_out(world, realm, coord, repo) do
+  defp migrate_out(world, realm, coord) do
     positions = Map.get(world.components, Position, %{})
 
     Enum.reduce(positions, {world, false}, fn {eid, %{x: x, y: y}}, {w, migrated?} ->
@@ -883,8 +900,7 @@ defmodule GameCore.Chunk do
           {w, migrated?}
 
         dest_coord ->
-          :ok =
-            ChunkMigration.cross(realm, eid, coord, dest_coord, entity_components(w, eid), repo)
+          :ok = ChunkMigration.cross(realm, eid, coord, dest_coord, entity_components(w, eid))
 
           {World.remove_entity(w, eid), true}
       end

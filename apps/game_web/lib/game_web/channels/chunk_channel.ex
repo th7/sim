@@ -30,14 +30,8 @@ defmodule GameWeb.ChunkChannel do
   end
 
   defp join_realm_coord(realm, coord_str, socket) do
-    repo =
-      case realm do
-        :overworld -> Application.get_env(:game_core, :chunk_repo, GameCore.ChunkRepo.Null)
-        {:instance, _} -> GameCore.ChunkRepo.Null
-      end
-
     with {:ok, coord} <- parse_coord(coord_str),
-         {:ok, _pid} <- Chunks.ensure_started(realm, coord, repo) do
+         {:ok, _pid} <- Chunks.ensure_started(realm, coord) do
       {:ok, socket |> assign(:realm, realm) |> assign(:coord, coord)}
     else
       _ -> {:error, %{reason: "unavailable"}}

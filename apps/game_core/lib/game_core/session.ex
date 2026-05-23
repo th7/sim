@@ -108,10 +108,9 @@ defmodule GameCore.Session do
 
     initial_chunk = Keyword.fetch!(opts, :initial_chunk)
     username = Keyword.fetch!(opts, :username)
-    repo = Keyword.get(opts, :repo, GameCore.ChunkRepo.Null)
 
     warm_opts =
-      [realm: :overworld, repo: repo] ++
+      [realm: :overworld] ++
         case Keyword.fetch(opts, :warm_radius) do
           {:ok, r} -> [radius: r]
           :error -> []
@@ -129,7 +128,6 @@ defmodule GameCore.Session do
       realm: :overworld,
       current_chunk: initial_chunk,
       warm: warm,
-      repo: repo,
       return_to: nil
     }
 
@@ -211,7 +209,7 @@ defmodule GameCore.Session do
         dst_realm: :overworld,
         dst_coord: dest_coord,
         spawn_pos: spawn_pos,
-        # Source is Instance (Null repo) — save_pos is ignored, kept uniform.
+        # Source is Instance (no emission) — save_pos is ignored, kept uniform.
         save_pos: spawn_pos,
         warm_radius: nil,
         return_to: nil
@@ -242,7 +240,7 @@ defmodule GameCore.Session do
     case Chunks.whereis(src_realm, src_coord) do
       src_pid when is_pid(src_pid) ->
         components = Chunk.take_components_for(src_pid, state.username, spawn_pos, save_pos)
-        {:ok, dest_pid} = Chunks.ensure_started(dst_realm, dst_coord, state.repo)
+        {:ok, dest_pid} = Chunks.ensure_started(dst_realm, dst_coord)
         :ok = Chunk.migrate_in(dest_pid, state.username, components)
 
       _ ->
@@ -252,7 +250,7 @@ defmodule GameCore.Session do
     WarmSet.release_all(state.warm)
 
     warm_opts =
-      [realm: dst_realm, repo: state.repo] ++ if radius, do: [radius: radius], else: []
+      [realm: dst_realm] ++ if radius, do: [radius: radius], else: []
 
     new_warm = WarmSet.new(dst_coord, self(), warm_opts)
 

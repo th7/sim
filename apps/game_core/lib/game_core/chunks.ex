@@ -26,11 +26,10 @@ defmodule GameCore.Chunks do
 
   @doc """
   Returns the chunk's pid for `(realm, coord)`, starting it under
-  `GameCore.ChunkSupervisor` if it isn't already alive. The chunk is started
-  with the given repo module (default `GameCore.ChunkRepo.Null`).
+  `GameCore.ChunkSupervisor` if it isn't already alive.
   """
-  @spec ensure_started(realm(), GameCore.Chunk.coord(), module()) :: {:ok, pid()}
-  def ensure_started(realm, coord, repo \\ GameCore.ChunkRepo.Null) do
+  @spec ensure_started(realm(), GameCore.Chunk.coord()) :: {:ok, pid()}
+  def ensure_started(realm, coord) do
     case whereis(realm, coord) do
       pid when is_pid(pid) ->
         if Process.alive?(pid) do
@@ -39,11 +38,11 @@ defmodule GameCore.Chunks do
           # Window between "decided to stop" and Registry monitor removal:
           # the lookup returned a doomed pid. Brief sleep + retry.
           Process.sleep(2)
-          ensure_started(realm, coord, repo)
+          ensure_started(realm, coord)
         end
 
       nil ->
-        case GameCore.start_chunk(realm: realm, coord: coord, repo: repo) do
+        case GameCore.start_chunk(realm: realm, coord: coord) do
           {:ok, pid} -> {:ok, pid}
           {:error, {:already_started, pid}} -> {:ok, pid}
         end
