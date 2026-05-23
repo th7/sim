@@ -5,6 +5,11 @@ import Config
 # global ChunkSupervisor during channel tests.
 config :game_core, session_warm_radius: 0
 
+# `PageController` ships the dev shell (references /src/main.ts) regardless
+# of whether a prior `mix assets.deploy` left a built index.html in
+# priv/static — so the controller test exercises the dev path.
+config :game_web, :force_dev_shell, true
+
 config :game_persistence, GamePersistence.Repo,
   database: "sim_test",
   pool: Ecto.Adapters.SQL.Sandbox,
