@@ -13,7 +13,8 @@ defmodule GameWeb.DevStatsChannel do
   alias GameCore.{Chunk, ChunkGeometry, Chunks, Session, Sessions}
 
   @tick_ms 1_000
-  @ring_radius 3
+  @overworld_ring_radius 3
+  @instance_ring_radius 1
 
   @impl true
   def join("dev:stats", params, socket) do
@@ -47,13 +48,19 @@ defmodule GameWeb.DevStatsChannel do
         center = Session.current_chunk(pid)
 
         center
-        |> ChunkGeometry.neighborhood(@ring_radius)
+        |> ChunkGeometry.neighborhood(ring_radius(realm))
         |> Enum.map(&entry_for(realm, &1))
 
       _ ->
         []
     end
   end
+
+  # Overworld is open-ended — the 7×7 ring helps a dev see chunk-lifecycle
+  # transitions in their neighborhood. An Instance is fixed 3×3, so the
+  # 3×3 ring exactly fills it; anything wider is misleading empty space.
+  defp ring_radius(:overworld), do: @overworld_ring_radius
+  defp ring_radius({:instance, _}), do: @instance_ring_radius
 
   defp entry_for(realm, {cx, cy} = coord) do
     case Chunks.whereis(realm, coord) do
