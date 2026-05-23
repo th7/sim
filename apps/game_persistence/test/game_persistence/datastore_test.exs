@@ -5,7 +5,12 @@ defmodule GamePersistence.DatastoreTest do
   alias GamePersistence.Schemas.{Player, ResourceNode, Structure}
 
   setup do
-    start_supervised!(Datastore)
+    # Disable periodic auto-flush for tests in this module that exercise
+    # backpressure directly — they need pending to accumulate so the
+    # threshold-engagement assertions are deterministic. Tests of the
+    # periodic-flush behaviour itself opt back in via their own
+    # `start_supervised!` with a small `flush_interval_ms`.
+    start_supervised!({Datastore, flush_interval_ms: 0})
     :ok
   end
 
@@ -129,7 +134,7 @@ defmodule GamePersistence.DatastoreTest do
 
     start_supervised!(
       Supervisor.child_spec(
-        {Datastore, name: bp, n_high: 3, n_low: 1},
+        {Datastore, name: bp, n_high: 3, n_low: 1, flush_interval_ms: 0},
         id: bp
       )
     )
@@ -223,7 +228,13 @@ defmodule GamePersistence.DatastoreTest do
 
     start_supervised!(
       Supervisor.child_spec(
-        {Datastore, name: age, n_high: 1_000, n_low: 200, t_high_ms: 50, t_low_ms: 10},
+        {Datastore,
+         name: age,
+         n_high: 1_000,
+         n_low: 200,
+         t_high_ms: 50,
+         t_low_ms: 10,
+         flush_interval_ms: 0},
         id: age
       )
     )
@@ -249,5 +260,86 @@ defmodule GamePersistence.DatastoreTest do
 
     assert {:ok, :ok} = Task.yield(parked, 1_000) || Task.shutdown(parked)
     assert :flowing = Datastore.mode(age)
+  end
+
+  # Regression for the bug where, in production, the Datastore would
+  # silently slide into permanent backpressure: t_high_ms elapsed, no
+  # caller was issuing `flush_now`, so every subsequent upsert parked
+  # forever and the calling GenServer.call would crash at the 5s
+  # default timeout. Chains of those crashes were the cause of the
+  # ~5s gameplay freezes and the chunk-edge teleport. The fix is a
+  # periodic self-flush in the Datastore process.
+
+  test "periodic flush drains pending writes without an external flush_now" do
+    auto = :"datastore_auto_#{System.unique_integer([:positive])}"
+
+    start_supervised!(
+      Supervisor.child_spec(
+        {Datastore, name: auto, flush_interval_ms: 25},
+        id: auto
+      )
+    )
+
+    :ok = GenServer.call(auto, {:upsert_player, "auto_alice", {0, 0}, 1, 2, %{wood: 3}})
+
+    # Wait through at least one auto-flush tick.
+    eventually(fn ->
+      pending = Datastore.dump_pending(auto)
+      assert pending.player == %{}
+    end)
+
+    player = Repo.get_by(Player, username: "auto_alice")
+    assert player.x == 1
+    assert player.y == 2
+  end
+
+  test "periodic flush keeps idle Datastore out of age-based backpressure" do
+    # Without the periodic flush: a single upsert sitting for >t_high_ms
+    # would trip the next caller into permanent backpressure.
+    auto = :"datastore_idle_bp_#{System.unique_integer([:positive])}"
+
+    start_supervised!(
+      Supervisor.child_spec(
+        {Datastore,
+         name: auto,
+         n_high: 1_000,
+         n_low: 200,
+         t_high_ms: 50,
+         t_low_ms: 10,
+         flush_interval_ms: 10},
+        id: auto
+      )
+    )
+
+    :ok = GenServer.call(auto, {:upsert_player, "idle_alice", {0, 0}, 1, 2, %{}})
+
+    # Sleep well past t_high_ms (50 ms). Without the periodic flush the
+    # next upsert would engage backpressure and never reply.
+    Process.sleep(200)
+
+    task =
+      Task.async(fn ->
+        GenServer.call(auto, {:upsert_player, "idle_bob", {0, 0}, 3, 4, %{}}, 500)
+      end)
+
+    assert {:ok, :ok} = Task.yield(task, 250) || Task.shutdown(task)
+    assert :flowing = Datastore.mode(auto)
+  end
+
+  defp eventually(fun, deadline_ms \\ 500) do
+    deadline = System.monotonic_time(:millisecond) + deadline_ms
+    do_eventually(fun, deadline)
+  end
+
+  defp do_eventually(fun, deadline) do
+    fun.()
+  rescue
+    e in [ExUnit.AssertionError] ->
+      if System.monotonic_time(:millisecond) >= deadline do
+        reraise e, __STACKTRACE__
+      else
+        Process.sleep(10)
+        do_eventually(fun, deadline)
+      end
   end
 end

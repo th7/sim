@@ -13,6 +13,11 @@ defmodule GamePersistence.Datastore do
   @default_n_low 200
   @default_t_high_ms 30_000
   @default_t_low_ms 5_000
+  # Periodic self-flush keeps the oldest pending entry well under
+  # `t_high_ms` so idle traffic alone never trips age-based backpressure
+  # (which has no automatic exit — only `flush_now` drains it). Set to 0
+  # to disable; tests that probe backpressure use that.
+  @default_flush_interval_ms 1_000
 
   def start_link(opts \\ []) do
     {name, opts} = Keyword.pop(opts, :name, __MODULE__)
@@ -77,18 +82,21 @@ defmodule GamePersistence.Datastore do
 
   @impl true
   def init(opts) do
-    {:ok,
-     %{
-       pending: %{player: %{}, structure: %{}, depletion: %{}},
-       pending_at: %{},
-       repo: Keyword.get(opts, :repo, GamePersistence.Repo),
-       mode: :flowing,
-       parked: [],
-       n_high: Keyword.get(opts, :n_high, @default_n_high),
-       n_low: Keyword.get(opts, :n_low, @default_n_low),
-       t_high_ms: Keyword.get(opts, :t_high_ms, @default_t_high_ms),
-       t_low_ms: Keyword.get(opts, :t_low_ms, @default_t_low_ms)
-     }}
+    state = %{
+      pending: %{player: %{}, structure: %{}, depletion: %{}},
+      pending_at: %{},
+      repo: Keyword.get(opts, :repo, GamePersistence.Repo),
+      mode: :flowing,
+      parked: [],
+      n_high: Keyword.get(opts, :n_high, @default_n_high),
+      n_low: Keyword.get(opts, :n_low, @default_n_low),
+      t_high_ms: Keyword.get(opts, :t_high_ms, @default_t_high_ms),
+      t_low_ms: Keyword.get(opts, :t_low_ms, @default_t_low_ms),
+      flush_interval_ms: Keyword.get(opts, :flush_interval_ms, @default_flush_interval_ms)
+    }
+
+    schedule_flush(state.flush_interval_ms)
+    {:ok, state}
   end
 
   @impl true
@@ -164,6 +172,22 @@ defmodule GamePersistence.Datastore do
 
   def handle_call(:dump_pending, _from, state), do: {:reply, state.pending, state}
   def handle_call(:mode, _from, state), do: {:reply, state.mode, state}
+
+  @impl true
+  def handle_info(:periodic_flush, state) do
+    state =
+      case do_flush(state) do
+        {:ok, state} -> state |> maybe_disengage_backpressure() |> drain_parked()
+        {:error, _} -> state
+      end
+
+    schedule_flush(state.flush_interval_ms)
+    {:noreply, state}
+  end
+
+  defp schedule_flush(0), do: :ok
+  defp schedule_flush(ms) when is_integer(ms) and ms > 0,
+    do: Process.send_after(self(), :periodic_flush, ms)
 
   # --- apply / park ---
 
