@@ -719,8 +719,8 @@ defmodule GameCore.Chunk do
       players = Map.get(state.world.components, PlayerControlled, %{})
       positions = Map.get(state.world.components, Position, %{})
 
-      for {pid, %{direction: dir}} <- portals,
-          {:ok, %{x: portal_x, y: portal_y}} = Map.fetch(positions, pid),
+      for {portal_eid, %{direction: dir}} <- portals,
+          {:ok, %{x: portal_x, y: portal_y}} = Map.fetch(positions, portal_eid),
           {username, _} <- players,
           {:ok, %{x: px, y: py}} = Map.fetch(positions, username),
           dx = px - portal_x,

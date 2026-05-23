@@ -104,6 +104,71 @@ test('phase 9: walk into the Portal, walk around the Instance, walk back out', a
   await ctx.close();
 });
 
+test('phase 9: two Players entering Portals get isolated Instances', async ({
+  browser,
+}) => {
+  test.setTimeout(60_000);
+  const alice = uniq('alice');
+  const bob = uniq('bob');
+
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  const pageB = await ctxB.newPage();
+
+  await openAtHome(pageA, alice);
+  await openAtHome(pageB, bob);
+
+  // Both walk into the Portal.
+  await pageA.locator('canvas').focus();
+  await pageB.locator('canvas').focus();
+  await pageA.keyboard.down('a');
+  await pageA.keyboard.down('w');
+  await pageB.keyboard.down('a');
+  await pageB.keyboard.down('w');
+
+  await pageA.waitForFunction(() => window.__game.realm().kind === 'instance', null, {
+    timeout: 15_000,
+  });
+  await pageB.waitForFunction(() => window.__game.realm().kind === 'instance', null, {
+    timeout: 15_000,
+  });
+
+  await pageA.keyboard.up('a');
+  await pageA.keyboard.up('w');
+  await pageB.keyboard.up('a');
+  await pageB.keyboard.up('w');
+
+  // Each Player got a different Instance id.
+  const idA = await pageA.evaluate(() => {
+    const r = window.__game.realm();
+    return r.kind === 'instance' ? r.id : null;
+  });
+  const idB = await pageB.evaluate(() => {
+    const r = window.__game.realm();
+    return r.kind === 'instance' ? r.id : null;
+  });
+  expect(idA).not.toBeNull();
+  expect(idB).not.toBeNull();
+  expect(idA).not.toBe(idB);
+
+  // Neither Player sees the other in their Instance.
+  await pageA.waitForTimeout(300);
+  const aSees = await pageA.evaluate(
+    (otherName) => otherName in window.__game.players(),
+    bob,
+  );
+  const bSees = await pageB.evaluate(
+    (otherName) => otherName in window.__game.players(),
+    alice,
+  );
+  expect(aSees).toBe(false);
+  expect(bSees).toBe(false);
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
 test('phase 9: disconnect mid-Instance returns the Player to the Overworld on reconnect', async ({
   browser,
 }) => {
