@@ -115,4 +115,19 @@ defmodule GameWeb.DevStatsChannelTest do
     assert is_integer(entry.idle_ms_remaining)
     assert entry.idle_ms_remaining > 0
   end
+
+  test "inside an Instance the `around` list is the 3x3 grid only — not the 7x7 overworld ring" do
+    alice = uniq("alice")
+    sess = start_session!(alice, {0, 0}, warm_radius: 2)
+    :ok = GameCore.Session.enter_instance(sess, {0, 0}, {4000, 4000})
+
+    {:ok, _reply, _socket} = join_dev(alice)
+
+    assert_push "stats", payload
+    assert length(payload.around) == 9
+
+    coords = MapSet.new(payload.around, fn entry -> {entry.cx, entry.cy} end)
+    expected = MapSet.new(for cx <- 0..2, cy <- 0..2, do: {cx, cy})
+    assert coords == expected
+  end
 end
