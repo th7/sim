@@ -5,7 +5,7 @@ defmodule GameCore.ChunkSelfEventsTest do
   PubSub topic `"self:<username>"`. Only the owner channel subscribes
   to that topic, so observers never see Inventory state.
   """
-  use ExUnit.Case, async: false
+  use GameCore.ChunkCase, async: false
 
   alias GameCore.Chunk
 

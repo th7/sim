@@ -13,7 +13,7 @@ defmodule GameCore.ChunkSupervisorCascadeTest do
 
   This test pins the Chunk's restart strategy by exercising the cascade.
   """
-  use ExUnit.Case, async: false
+  use GameCore.ChunkCase, async: false
 
   alias GameCore.{Chunk, Chunks, Session}
 

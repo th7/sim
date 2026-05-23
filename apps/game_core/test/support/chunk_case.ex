@@ -1,26 +1,54 @@
 defmodule GameCore.ChunkCase do
   @moduledoc """
   Test case base for tests that activate Chunks via `WarmSet` or
-  `Instances` and need to tear them down between tests. The Session's
-  warm set populates `GameCore.ChunkSupervisor` with 25 chunks per
-  Session; without explicit cleanup those leak across tests and trip
-  `start_supervised!` with `:already_started`.
+  `Instances`, or that exercise Chunk persistence paths. Provides:
 
-  Use either via `use GameCore.ChunkCase, async: false`, or — from a
-  test that already `use`s another case (e.g. `GameWeb.ChannelCase`) —
-  call `GameCore.ChunkCase.reset_chunks_and_instances/1` directly:
+    * a fresh `GamePersistence.Datastore` for each test
+    * an Ecto SQL sandbox checkout (so the Datastore's flushes land in
+      a per-test isolated transaction)
+    * cleanup of any leaked chunks/instances on `on_exit`
 
+  Use either `use GameCore.ChunkCase, async: false`, or — from a test
+  that already `use`s another case (e.g. `GameWeb.ChannelCase`) — import
+  the helpers and wire them up explicitly:
+
+      import GameCore.ChunkCase, only: [
+        datastore_setup: 1,
+        reset_chunks_and_instances: 1
+      ]
+      setup :datastore_setup
       setup :reset_chunks_and_instances
-      import GameCore.ChunkCase, only: [reset_chunks_and_instances: 1]
   """
 
   use ExUnit.CaseTemplate
 
   using do
     quote do
-      import GameCore.ChunkCase, only: [reset_chunks_and_instances: 1]
+      import GameCore.ChunkCase,
+        only: [datastore_setup: 1, reset_chunks_and_instances: 1]
+
+      setup :datastore_setup
       setup :reset_chunks_and_instances
     end
+  end
+
+  @doc """
+  Setup hook: checks out an Ecto SQL sandbox owner and starts a fresh
+  `GamePersistence.Datastore` under the test supervisor.
+  """
+  def datastore_setup(tags) do
+    pid =
+      Ecto.Adapters.SQL.Sandbox.start_owner!(
+        GamePersistence.Repo,
+        shared: not Map.get(tags, :async, false)
+      )
+
+    ExUnit.Callbacks.on_exit(fn ->
+      Ecto.Adapters.SQL.Sandbox.stop_owner(pid)
+    end)
+
+    ExUnit.Callbacks.start_supervised!(GamePersistence.Datastore)
+    :ok
   end
 
   @doc """

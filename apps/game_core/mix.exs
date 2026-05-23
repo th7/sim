@@ -30,7 +30,11 @@ defmodule GameCore.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:phoenix_pubsub, "~> 2.2"}
+      {:phoenix_pubsub, "~> 2.2"},
+      # Test-only: chunk tests run an `Ecto.Adapters.SQL.Sandbox` checkout
+      # to isolate Datastore writes per test. The Datastore module itself
+      # is loaded at runtime via the umbrella.
+      {:ecto_sql, "~> 3.12", only: :test}
     ]
   end
 end

@@ -1,5 +1,5 @@
 defmodule GameCore.ChunkMigrationTest do
-  use ExUnit.Case, async: false
+  use GameCore.ChunkCase, async: false
 
   alias GameCore.Chunk
   alias GameCore.Chunks

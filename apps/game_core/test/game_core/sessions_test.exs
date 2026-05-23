@@ -1,5 +1,5 @@
 defmodule GameCore.SessionsTest do
-  use ExUnit.Case, async: false
+  use GameCore.ChunkCase, async: false
 
   alias GameCore.{Session, Sessions}
 

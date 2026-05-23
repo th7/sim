@@ -8,7 +8,7 @@ defmodule GameCore.ChunkRespawnTest do
   Respawn behaviour is in-memory; persistence rides the heartbeat
   (`flush_db`) and is covered separately.
   """
-  use ExUnit.Case, async: true
+  use GameCore.ChunkCase, async: false
 
   alias GameCore.Chunk
 
