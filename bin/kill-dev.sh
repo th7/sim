@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
 # Kill any running dev phx.server BEAM and the Vite watcher Phoenix spawned
-# alongside it. Idempotent: exits 0 if neither is running. Identifies the
-# dev BEAM via `MIX_ENV=dev` in its environment, since Mix loads project
-# paths at runtime and they don't appear in argv.
+# alongside it. Idempotent: exits 0 if neither is running.
+#
+# The "dev BEAM" is identified as any `phx.server` BEAM **not** tagged
+# `MIX_ENV=e2e` (the only other env that runs an HTTP listener). This is
+# more robust than positive-matching `MIX_ENV=dev`: Mix defaults to :dev
+# when MIX_ENV isn't set, so a BEAM started with bare `mix phx.server`
+# has no `MIX_ENV=dev` in its environ at all.
 set -euo pipefail
 
 dev_pids() {
-  local pid
-  for pid in $(pgrep -f beam.smp 2>/dev/null || true); do
-    if [ -r "/proc/$pid/environ" ] && \
-       tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -qx 'MIX_ENV=dev'; then
-      echo "$pid"
-    fi
+  local pid env
+  for pid in $(pgrep -f phx.server 2>/dev/null || true); do
+    if [ ! -r "/proc/$pid/environ" ]; then continue; fi
+    env=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null || true)
+    # Skip e2e BEAM — restart-e2e.sh handles that one.
+    if echo "$env" | grep -qx 'MIX_ENV=e2e'; then continue; fi
+    # Skip anything explicitly tagged test/prod, just in case.
+    if echo "$env" | grep -qE '^MIX_ENV=(test|prod)$'; then continue; fi
+    echo "$pid"
   done
 }
 
