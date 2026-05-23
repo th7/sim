@@ -53,10 +53,10 @@ The **ItemStacks** carried by a **Player**. Filled by harvesting **Resource node
 _Avoid_: Bag, backpack, container (Container may earn a glossary entry later if a second kind of container appears — chest, bank — but v1 has only the Inventory).
 
 **Chunk activation**:
-The transition of a **Chunk** from cold (state-on-disk-only) to hot (live GenServer holding state in memory). Triggered by player proximity.
+The transition of a **Chunk** from cold to hot — a live GenServer holding state in memory. State is hydrated through the **Datastore**, which returns the freshest view by merging its **pending writes** with the durably-stored set. Triggered by player proximity.
 
 **Chunk deactivation**:
-The reverse — snapshot the live state to durable storage and terminate the GenServer. Triggered by sustained absence of players.
+The reverse — the **Chunk** emits its final state to the **Datastore** and terminates. The Datastore is responsible for the eventual flush to durable storage. Triggered by sustained absence of players.
 
 **Boundary crossing**:
 A **Player**'s entity exits the bounds of its owning **Chunk** and enters a neighbor **in the same realm** (i.e. an adjacent Chunk of the same **Overworld** or the same **Instance**). The entity is handed off from the source's process to the destination's; the Player's session updates its **Warm set** to the new center; the entity continues in the destination process on the next tick. **Instance entry** and **Instance exit** are *not* Boundary crossings — they cross realms.
@@ -78,6 +78,17 @@ _Avoid_: Warm zone, warm radius (the radius is a parameter; the set is the conce
 The set of **Chunks** a connected client subscribes to for snapshot streams — currently the 3×3 grid centered on the **Chunk** the Player occupies. Strictly smaller than (or equal to, inside an **Instance**) the **Warm set**; the outer ring of the warm set is pre-activated to hide chunk-activation latency when the Player crosses a boundary into it.
 _Avoid_: Visible chunks, subscription window, AOI (AOI is the general concept; the view window is our specific implementation).
 
+**Datastore**:
+The single in-memory persistence chokepoint per node. All durable reads and writes for the running world go through it. **Chunks** emit state changes via synchronous calls; the Datastore buffers them as **pending writes** and flushes to durable storage on its own cadence. Chunks hydrate through it too — it returns the freshest view by merging **pending writes** with the last-flushed DB state. Under overload it engages **backpressure** rather than dropping writes or crashing.
+_Avoid_: Repo, persistence layer, cache, store. Don't say "actor" in domain language — that's its implementation, not its role.
+
+**Pending writes**:
+The **Datastore**'s in-memory buffer of state changes that have been emitted by **Chunks** but not yet confirmed durable. Per-key, last-write-wins; a delete is a tombstone entry that supersedes any prior upsert at the same key. An entry leaves pending only when its DB flush is confirmed.
+_Avoid_: WAL (the buffer is not a log — it's a keyed map of effective state), write queue, dirty set.
+
+**Backpressure**:
+The **Datastore**'s overload-protection mode. When **pending writes** exceed a size threshold or any entry has aged past a time threshold, the Datastore stops replying to incoming write calls — caller `GenServer.call`s block. Upstream **Chunks** (and the **Players** whose verbs route through them) freeze. The mode clears when the Datastore drains — usually because the DB recovered, or an operator deployed a fix via hot code reload for a stuck flush. Parked callers then receive their replies in FIFO order and upstream resumes naturally.
+
 ## Relationships
 
 - A **World** is composed of one **Overworld** and zero-or-more live **Instances**
@@ -93,6 +104,8 @@ _Avoid_: Visible chunks, subscription window, AOI (AOI is the general concept; t
 - A **Chunk** is either hot (running) or cold (state in durable storage only)
 - Each connected **Player** has a **Warm set** (kept hot) and a **View window** (snapshots subscribed); the View window is a strict subset of the Warm set
 - A **Chunk** stays hot while it is in any session's **Warm set**; **Chunk deactivation** fires after the last interested session releases it
+- All durable reads and writes flow through the **Datastore**; **Chunks** do not talk to durable storage directly
+- **Instance** **Chunks** do not emit to the **Datastore** — Instance state is in-memory only
 
 ## Example dialogue
 
