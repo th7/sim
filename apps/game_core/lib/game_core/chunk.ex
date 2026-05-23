@@ -719,10 +719,13 @@ defmodule GameCore.Chunk do
       players = Map.get(state.world.components, PlayerControlled, %{})
       positions = Map.get(state.world.components, Position, %{})
 
+      # Portal and Player entities always have Position (added together in
+      # seed_portals and handle_call({:join, ...})), so the inner Map.fetch!
+      # is total — a missing Position would be a programmer error.
       for {portal_eid, %{direction: dir}} <- portals,
-          {:ok, %{x: portal_x, y: portal_y}} = Map.fetch(positions, portal_eid),
+          %{x: portal_x, y: portal_y} = Map.fetch!(positions, portal_eid),
           {username, _} <- players,
-          {:ok, %{x: px, y: py}} = Map.fetch(positions, username),
+          %{x: px, y: py} = Map.fetch!(positions, username),
           dx = px - portal_x,
           dy = py - portal_y,
           dx * dx + dy * dy <= @portal_overlap_range_sq do
