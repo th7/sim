@@ -650,7 +650,7 @@ defmodule GameCore.Chunk do
   def handle_info(:tick, state) do
     dt = state.tick_ms / 1000.0
     world = MovementSystem.run(state.world, dt, bounds: movement_bounds(state.realm))
-    {world, migrated?} = migrate_out(world, state.coord, state.repo)
+    {world, migrated?} = migrate_out(world, state.realm, state.coord, state.repo)
     state = %{state | world: world, tick_count: state.tick_count + 1}
 
     check_portal_overlaps(state)
@@ -860,7 +860,7 @@ defmodule GameCore.Chunk do
   defp schedule_tick(tick_ms), do: Process.send_after(self(), :tick, tick_ms)
   defp schedule_flush(flush_ms), do: Process.send_after(self(), :flush_db, flush_ms)
 
-  defp migrate_out(world, coord, repo) do
+  defp migrate_out(world, realm, coord, repo) do
     positions = Map.get(world.components, Position, %{})
 
     Enum.reduce(positions, {world, false}, fn {eid, %{x: x, y: y}}, {w, migrated?} ->
@@ -869,7 +869,9 @@ defmodule GameCore.Chunk do
           {w, migrated?}
 
         dest_coord ->
-          :ok = ChunkMigration.cross(eid, coord, dest_coord, entity_components(w, eid), repo)
+          :ok =
+            ChunkMigration.cross(realm, eid, coord, dest_coord, entity_components(w, eid), repo)
+
           {World.remove_entity(w, eid), true}
       end
     end)
