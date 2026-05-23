@@ -1,18 +1,29 @@
 defmodule GameCore.Chunk do
   @moduledoc """
-  A Chunk is a fixed-size rectangular partition of the Overworld and the
-  unit of process ownership: one GenServer per `{chunk_x, chunk_y}` coord.
+  A Chunk is a fixed-size rectangular partition of either the **Overworld**
+  or an **Instance**, and the unit of process ownership: one GenServer per
+  `{realm, {chunk_x, chunk_y}}` key in the shared `GameCore.Chunks`
+  Registry. Overworld chunks live under `realm = :overworld`; Instance
+  chunks under `realm = {:instance, id}`.
 
   Internals are an ECS over plain maps: a `GameCore.World` holds component
-  data, and each tick runs `MovementSystem` then `BroadcastSystem`. Player
-  entities use their username as the entity id; non-player entities (added
-  in later phases) use integer ids.
+  data, and each tick runs `MovementSystem` then a Portal-overlap check
+  then `BroadcastSystem`. Player entities use their username as the entity
+  id; non-player entities (Resource nodes, Structures, Portals) use string
+  ids derived from their type and position.
 
-  Persistence is delegated to a pluggable `GameCore.ChunkRepo` implementation.
-  The default is the `Null` repo (no durability), suitable for tests that
-  don't care; production wires `GamePersistence.ChunkRepo`. Players are
-  hydrated lazily on `join/2` from `fetch_player/1` and flushed on `leave/2`,
-  on a periodic `flush_db` tick, and on chunk terminate.
+  Persistence is delegated to a pluggable `GameCore.ChunkRepo`
+  implementation. The default `Null` repo (no durability) is used for
+  tests and for Instance chunks (Instance state is in-memory only);
+  Overworld chunks in production use `GamePersistence.ChunkRepo`. Players
+  are hydrated lazily on `join/2` from `fetch_player/1` and flushed on
+  `leave/2`, on a periodic `flush_db` tick, and on chunk terminate. The
+  cross-realm `take_components_for/4` also forces a flush so a mid-realm
+  disconnect persists a sensible Overworld return position.
+
+  Snapshot broadcasts go to a realm-prefixed PubSub topic
+  (`chunk:cx:cy` for Overworld, `instance:<id>:chunk:cx:cy` for Instance),
+  ensuring subscribers in different realms can't see each other's state.
   """
 
   # `:transient` is load-bearing: a Chunk's idle deactivation is an
