@@ -177,34 +177,19 @@ defmodule GameCore.Session do
     {:ok, id} = Instances.start_new()
     new_realm = {:instance, id}
     center_coord = {1, 1}
-    spawn_pos = instance_spawn_pos()
 
-    save_pos = offset_from_portal(portal_pos)
-
-    case Chunks.whereis(:overworld, from_coord) do
-      src_pid when is_pid(src_pid) ->
-        components =
-          Chunk.take_components_for(src_pid, state.username, spawn_pos, save_pos)
-
-        dest_pid = Chunks.whereis(new_realm, center_coord)
-        :ok = Chunk.migrate_in(dest_pid, state.username, components)
-
-      _ ->
-        :ok
-    end
-
-    WarmSet.release_all(state.warm)
-    new_warm = WarmSet.new(center_coord, self(), realm: new_realm, repo: state.repo, radius: 1)
-
-    new_state = %{
-      state
-      | realm: new_realm,
-        current_chunk: center_coord,
-        warm: new_warm,
+    new_state =
+      transition_realm(state,
+        src_realm: :overworld,
+        src_coord: from_coord,
+        dst_realm: new_realm,
+        dst_coord: center_coord,
+        spawn_pos: instance_spawn_pos(),
+        save_pos: offset_from_portal(portal_pos),
+        warm_radius: 1,
         return_to: {:overworld, from_coord, portal_pos}
-    }
+      )
 
-    publish_relocated(new_state)
     {:reply, :ok, new_state}
   end
 
@@ -215,14 +200,45 @@ defmodule GameCore.Session do
   def handle_call(:exit_instance, _from, %{realm: {:instance, id}, return_to: {:overworld, dest_coord, portal_pos}} = state) do
     spawn_pos = offset_from_portal(portal_pos)
 
-    case Chunks.whereis(state.realm, state.current_chunk) do
-      src_pid when is_pid(src_pid) ->
-        # `save_pos` is irrelevant here (Instance source uses Null repo and
-        # doesn't persist), but we pass `spawn_pos` to keep the API uniform.
-        components =
-          Chunk.take_components_for(src_pid, state.username, spawn_pos, spawn_pos)
+    new_state =
+      transition_realm(state,
+        src_realm: state.realm,
+        src_coord: state.current_chunk,
+        dst_realm: :overworld,
+        dst_coord: dest_coord,
+        spawn_pos: spawn_pos,
+        # Source is Instance (Null repo) — save_pos is ignored, kept uniform.
+        save_pos: spawn_pos,
+        warm_radius: nil,
+        return_to: nil
+      )
 
-        {:ok, dest_pid} = Chunks.ensure_started(:overworld, dest_coord, state.repo)
+    :ok = Instances.terminate(id)
+    {:reply, :ok, new_state}
+  end
+
+  def handle_call(:exit_instance, _from, state) do
+    {:reply, {:error, :not_in_instance}, state}
+  end
+
+  # Cross-realm transition shared by enter_instance / exit_instance: pull the
+  # entity out of `src_realm/src_coord` with a save flush + Position override,
+  # drop it into `dst_realm/dst_coord`, swap the realm-scoped WarmSet, and
+  # publish a `relocated` event. Returns the new Session state.
+  defp transition_realm(state, opts) do
+    src_realm = Keyword.fetch!(opts, :src_realm)
+    src_coord = Keyword.fetch!(opts, :src_coord)
+    dst_realm = Keyword.fetch!(opts, :dst_realm)
+    dst_coord = Keyword.fetch!(opts, :dst_coord)
+    spawn_pos = Keyword.fetch!(opts, :spawn_pos)
+    save_pos = Keyword.fetch!(opts, :save_pos)
+    radius = Keyword.fetch!(opts, :warm_radius)
+    return_to = Keyword.fetch!(opts, :return_to)
+
+    case Chunks.whereis(src_realm, src_coord) do
+      src_pid when is_pid(src_pid) ->
+        components = Chunk.take_components_for(src_pid, state.username, spawn_pos, save_pos)
+        {:ok, dest_pid} = Chunks.ensure_started(dst_realm, dst_coord, state.repo)
         :ok = Chunk.migrate_in(dest_pid, state.username, components)
 
       _ ->
@@ -230,24 +246,22 @@ defmodule GameCore.Session do
     end
 
     WarmSet.release_all(state.warm)
-    new_warm = WarmSet.new(dest_coord, self(), realm: :overworld, repo: state.repo)
 
-    :ok = Instances.terminate(id)
+    warm_opts =
+      [realm: dst_realm, repo: state.repo] ++ if radius, do: [radius: radius], else: []
+
+    new_warm = WarmSet.new(dst_coord, self(), warm_opts)
 
     new_state = %{
       state
-      | realm: :overworld,
-        current_chunk: dest_coord,
+      | realm: dst_realm,
+        current_chunk: dst_coord,
         warm: new_warm,
-        return_to: nil
+        return_to: return_to
     }
 
     publish_relocated(new_state)
-    {:reply, :ok, new_state}
-  end
-
-  def handle_call(:exit_instance, _from, state) do
-    {:reply, {:error, :not_in_instance}, state}
+    new_state
   end
 
   defp forward_to_current(state, fun) do
