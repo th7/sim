@@ -17,6 +17,7 @@ declare global {
       resourceNodes(): Record<string, ResourceNode>;
       portals(): Record<string, PortalEntry>;
       realm(): Realm;
+      cameraPos(): { x: number; y: number; z: number };
       click(worldX: number, worldY: number): void;
       harvest(subX: number, subY: number): void;
       build(type: string, subX: number, subY: number): void;

@@ -93,9 +93,19 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   500,
 );
-const camLookAt = new THREE.Vector3(homeChunk[0] * CHUNK_SIZE, 0, homeChunk[1] * CHUNK_SIZE);
-camera.position.set(camLookAt.x + 12, 12, camLookAt.z + 12);
-camera.lookAt(camLookAt);
+// Camera frames the local Player from the same fixed offset every frame.
+// Without follow, walking far enough in any direction — or a realm transition
+// that teleports the entity (e.g. Phase 9 Instance entry, which drops the
+// Player at the Instance's spawn cell ~24 world units from the Overworld
+// home) — leaves the Player outside the viewport while still in the scene.
+const CAM_OFFSET = new THREE.Vector3(12, 12, 12);
+const camTarget = new THREE.Vector3(
+  homeChunk[0] * CHUNK_SIZE,
+  0,
+  homeChunk[1] * CHUNK_SIZE,
+);
+camera.position.copy(camTarget).add(CAM_OFFSET);
+camera.lookAt(camTarget);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
@@ -384,6 +394,9 @@ refreshHudInventory();
   realm(): Realm {
     return currentRealm;
   },
+  cameraPos(): { x: number; y: number; z: number } {
+    return { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+  },
   click(worldX: number, worldY: number): void {
     handleWorldClick(worldX, worldY);
   },
@@ -570,6 +583,17 @@ renderer.setAnimationLoop(() => {
       lerp.from.y + (lerp.target.y - lerp.from.y) * t,
     );
   }
+
+  // Follow the local Player. Re-aim every frame at the local mesh's actual
+  // visible position so the camera tracks both within-realm motion and the
+  // hard teleport that an Instance entry / exit produces.
+  const me = playerMeshes.get(username);
+  if (me) {
+    camTarget.set(me.position.x, 0, me.position.z);
+    camera.position.copy(camTarget).add(CAM_OFFSET);
+    camera.lookAt(camTarget);
+  }
+
   renderer.render(scene, camera);
 });
 

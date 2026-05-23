@@ -104,6 +104,42 @@ test('phase 9: walk into the Portal, walk around the Instance, walk back out', a
   await ctx.close();
 });
 
+test('phase 9: camera follows the Player into the Instance', async ({ browser }) => {
+  test.setTimeout(60_000);
+  const alice = uniq('alice');
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+
+  await openAtHome(page, alice);
+
+  // Walk into the Portal.
+  await page.locator('canvas').focus();
+  await page.keyboard.down('a');
+  await page.keyboard.down('w');
+  await page.waitForFunction(() => window.__game.realm().kind === 'instance', null, {
+    timeout: 15_000,
+  });
+  await page.keyboard.up('a');
+  await page.keyboard.up('w');
+
+  // After entry the Player is at Instance-local ~(23, 24); the camera must
+  // be near that, not stuck framing the Overworld home chunk at (0, 0).
+  await page.waitForFunction(
+    (name) => {
+      const me = window.__game.players()[name];
+      const cam = window.__game.cameraPos();
+      if (!me) return false;
+      const dx = cam.x - me.x;
+      const dz = cam.z - me.y;
+      return Math.sqrt(dx * dx + dz * dz) < 20;
+    },
+    alice,
+    { timeout: 5_000 },
+  );
+
+  await ctx.close();
+});
+
 test('phase 9: inventory gathered in Overworld survives an Instance round-trip', async ({
   browser,
 }) => {
