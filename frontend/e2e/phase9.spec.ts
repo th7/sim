@@ -104,6 +104,52 @@ test('phase 9: walk into the Portal, walk around the Instance, walk back out', a
   await ctx.close();
 });
 
+test('phase 9: inventory gathered in Overworld survives an Instance round-trip', async ({
+  browser,
+}) => {
+  test.setTimeout(60_000);
+  const alice = uniq('alice');
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+
+  await openAtHome(page, alice);
+
+  // Player spawns at chunk centre (8000, 8000); the centre tree sits on
+  // the same cell. Harvest it for one wood.
+  await page.evaluate(() => window.__game.harvest(8000, 8000));
+  await page.waitForFunction(
+    () => (window.__game.inventory().wood ?? 0) >= 1,
+    null,
+    { timeout: 5_000 },
+  );
+  expect(await page.evaluate(() => window.__game.inventory().wood)).toBe(1);
+
+  // Walk into the Portal.
+  await page.locator('canvas').focus();
+  await page.keyboard.down('a');
+  await page.keyboard.down('w');
+  await page.waitForFunction(() => window.__game.realm().kind === 'instance', null, {
+    timeout: 15_000,
+  });
+  await page.keyboard.up('a');
+  await page.keyboard.up('w');
+
+  // Inventory still 1 inside the Instance.
+  expect(await page.evaluate(() => window.__game.inventory().wood)).toBe(1);
+
+  // Walk east into the return-Portal.
+  await page.keyboard.down('d');
+  await page.waitForFunction(() => window.__game.realm().kind === 'overworld', null, {
+    timeout: 15_000,
+  });
+  await page.keyboard.up('d');
+
+  // Inventory still 1 back in the Overworld.
+  expect(await page.evaluate(() => window.__game.inventory().wood)).toBe(1);
+
+  await ctx.close();
+});
+
 test('phase 9: two Players entering Portals get isolated Instances', async ({
   browser,
 }) => {
