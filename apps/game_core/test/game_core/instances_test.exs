@@ -1,7 +1,7 @@
 defmodule GameCore.InstancesTest do
   use GameCore.ChunkCase, async: false
 
-  alias GameCore.{Chunks, Instances}
+  alias GameCore.{Chunk, Chunks, Instances}
 
   test "start_new/0 spawns 9 Instance chunks (3×3) under a fresh supervisor" do
     {:ok, id} = Instances.start_new()
@@ -33,5 +33,19 @@ defmodule GameCore.InstancesTest do
 
     :ok = Instances.terminate(id1)
     :ok = Instances.terminate(id2)
+  end
+
+  test "Instance chunks contain no Worldgen Resource nodes" do
+    # Worldgen.resource_nodes/1 places a 5-tree cluster at every chunk
+    # center — including the return-Portal cell of Instance chunk {1, 1}.
+    # Per CONTEXT.md, Instances have no Resource nodes; the seed must skip
+    # them so the return Portal is reachable (no tree Footprint blocking).
+    {:ok, id} = Instances.start_new()
+    centre = Chunks.whereis({:instance, id}, {1, 1})
+
+    %{resource_nodes: nodes} = Chunk.snapshot(centre)
+    assert nodes == %{}
+
+    :ok = Instances.terminate(id)
   end
 end

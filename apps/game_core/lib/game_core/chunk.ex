@@ -234,7 +234,7 @@ defmodule GameCore.Chunk do
 
     world =
       World.new()
-      |> seed_resource_nodes(coord)
+      |> seed_resource_nodes(realm, coord)
       |> seed_structures(realm, coord)
       |> hydrate_depletions(realm, coord)
       |> seed_portals(realm, coord)
@@ -285,7 +285,7 @@ defmodule GameCore.Chunk do
 
   defp hydrate_depletions(world, {:instance, _}, _coord), do: world
 
-  defp seed_resource_nodes(world, coord) do
+  defp seed_resource_nodes(world, :overworld, coord) do
     Enum.reduce(Worldgen.resource_nodes(coord), world, fn %{type: type, x: x, y: y}, w ->
       eid = node_eid(type, x, y)
 
@@ -296,6 +296,8 @@ defmodule GameCore.Chunk do
       |> World.add_component(eid, Footprint, footprint_for(type))
     end)
   end
+
+  defp seed_resource_nodes(world, {:instance, _}, _coord), do: world
 
   defp footprint_for(:tree), do: %{shape: :circle, radius: 300}
 
