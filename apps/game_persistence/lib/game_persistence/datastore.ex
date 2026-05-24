@@ -145,13 +145,7 @@ defmodule GamePersistence.Datastore do
   end
 
   def handle_call({:fetch_structures, coord}, _from, state) do
-    results =
-      for {{x, y}, entry} <- state.pending.structure,
-          entry != :tombstone,
-          coord_for(x, y) == coord,
-          do: entry
-
-    {:reply, results, state}
+    {:reply, merged_structures(state, coord), state}
   end
 
   def handle_call({:fetch_depletions, realm, coord}, _from, state) do
@@ -425,6 +419,38 @@ defmodule GamePersistence.Datastore do
             r.x == ^x and r.y == ^y
       )
     )
+  end
+
+  defp merged_structures(state, {chunk_x, chunk_y} = coord) do
+    pending_for_coord =
+      for {{x, y} = key, entry} <- state.pending.structure,
+          coord_for(x, y) == coord,
+          into: %{},
+          do: {key, entry}
+
+    db_rows =
+      from(s in GamePersistence.Schemas.Structure,
+        where: s.chunk_x == ^chunk_x and s.chunk_y == ^chunk_y
+      )
+      |> state.repo.all()
+
+    db_view =
+      for r <- db_rows, into: %{} do
+        {{r.x, r.y},
+         %{
+           coord: {r.chunk_x, r.chunk_y},
+           owner: r.owner_username,
+           type: String.to_atom(r.type),
+           x: r.x,
+           y: r.y,
+           hp: r.hp
+         }}
+      end
+
+    # Pending wins on conflict; tombstones drop the DB row.
+    Map.merge(db_view, pending_for_coord)
+    |> Enum.reject(fn {_key, entry} -> entry == :tombstone end)
+    |> Enum.map(fn {_key, entry} -> entry end)
   end
 
   defp merged_depletions(state, realm, {chunk_x, chunk_y} = coord) do

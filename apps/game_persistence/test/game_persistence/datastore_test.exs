@@ -70,6 +70,76 @@ defmodule GamePersistence.DatastoreTest do
            } = Datastore.fetch_player("bob")
   end
 
+  test "fetch_structures reads from the DB when pending is empty" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, _} =
+      %{
+        chunk_x: 2,
+        chunk_y: 3,
+        type: "wall",
+        owner_username: "diane",
+        x: 36_500,
+        y: 56_500,
+        hp: 100,
+        inserted_at: now,
+        updated_at: now
+      }
+      |> Structure.changeset()
+      |> Repo.insert()
+
+    assert [%{type: :wall, owner: "diane", x: 36_500, y: 56_500, hp: 100}] =
+             Datastore.fetch_structures({2, 3})
+  end
+
+  test "fetch_structures merges pending entries over DB rows" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, _} =
+      %{
+        chunk_x: 0,
+        chunk_y: 0,
+        type: "wall",
+        owner_username: "ed",
+        x: 1_500,
+        y: 500,
+        hp: 100,
+        inserted_at: now,
+        updated_at: now
+      }
+      |> Structure.changeset()
+      |> Repo.insert()
+
+    # Pending upsert with lower HP — should win on conflict.
+    :ok = Datastore.upsert_structure({0, 0}, "ed", :wall, 1_500, 500, 25)
+
+    assert [%{type: :wall, x: 1_500, y: 500, hp: 25}] =
+             Datastore.fetch_structures({0, 0})
+  end
+
+  test "fetch_structures honours pending tombstones over DB rows" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, _} =
+      %{
+        chunk_x: 0,
+        chunk_y: 0,
+        type: "wall",
+        owner_username: "frank",
+        x: 2_500,
+        y: 500,
+        hp: 100,
+        inserted_at: now,
+        updated_at: now
+      }
+      |> Structure.changeset()
+      |> Repo.insert()
+
+    :ok = Datastore.delete_structure(2_500, 500)
+
+    assert [] = Datastore.fetch_structures({0, 0})
+  end
+
   test "pending entries overlay DB rows on fetch_player" do
     {:ok, _} =
       %{username: "carol", chunk_x: 0, chunk_y: 0, x: 100, y: 200, inventory: %{"wood" => 1}}
