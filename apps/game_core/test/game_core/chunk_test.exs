@@ -28,6 +28,16 @@ defmodule GameCore.ChunkTest do
     assert Map.has_key?(snapshot.players, "bob")
   end
 
+  test "a chunk's snapshot includes every joined player" do
+    chunk = start_supervised!({Chunk, coord: {0, 0}})
+    :ok = Chunk.join(chunk, "alice")
+    :ok = Chunk.join(chunk, "bob")
+
+    %{players: players} = Chunk.snapshot(chunk)
+    assert Map.has_key?(players, "alice")
+    assert Map.has_key?(players, "bob")
+  end
+
   test "nonzero intent moves the player over ticks" do
     chunk =
       start_supervised!({Chunk, coord: {0, 0}, auto_tick: false, speed: 4_000.0, tick_ms: 50})
