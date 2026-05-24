@@ -1,62 +1,24 @@
 # Plan
 
-Work locked in but not yet implemented. See `DESIGN.md` for what currently works and `CONTEXT.md` for domain language.
+The remaining work on Sim, triaged into three buckets:
 
-## Datastore
+- **Needs Follow Up** — a test passes (or a feature appears to work in the dev client) but the server doesn't actually enforce the semantics yet; the green suite hides the gap.
+- **Ready to Implement** — design is locked (in CONTEXT.md or DESIGN.md); build it against new tests, no further decisions needed.
+- **Needs Grill** — design isn't settled; needs a design conversation, then tests illustrating the agreed design, before implementation.
 
-Replace the current chunk-owned persistence model (each Chunk calls a `ChunkRepo` directly) with a single per-node **Datastore** that handles all durable reads and writes for the running world.
+For the vision and repo layout, see [README.md](./README.md). The locked design and terminology live in [CONTEXT.md](./CONTEXT.md); behavior that already works is specified in [DESIGN.md](./DESIGN.md) and verified by the suites under `apps/*/test` and `frontend/{test,e2e}` — so it isn't repeated here. Glossary terms in **bold** are defined in CONTEXT.md.
 
-### Contract
+## Ready to Implement
 
-- Chunks send all state changes to the Datastore via synchronous calls. The call returns once the Datastore has accepted the change into its **pending writes**.
-- Chunks read all durable state through the Datastore. The Datastore merges pending writes with the last-flushed DB state and returns the freshest view.
-- The Chunk's responsibility ends when its call returns. The Datastore owns durability from there.
-- Instance Chunks do not emit to the Datastore. Instance state is in-memory only.
-- On cross-realm migration, the source Chunk eagerly emits the Player's `save_pos` before handing off the entity. The destination Overworld Chunk eagerly emits on receiving the entity in `migrate_in`. (Same-realm boundary crossings do not emit — the destination's next heartbeat covers them.)
-- Chunks emit a Player upsert on their tick heartbeat only if that Player's `(position, inventory)` changed since the last heartbeat. Idle Players do not generate work.
+- **Decouple frontend and backend along an explicit API contract.** Design locked. The Phoenix Channels wire surface (topics; client→server verbs + replies; server→client pushes `snapshot`/`self`/`relocated`/`stats`) is declared as data in a `GameWeb.Contract` module; `mix contract.export` emits one JSON Schema per payload plus an event descriptor (event → direction, topic, reply) to `apps/game_web/priv/contract/`. Artifacts are committed and CI fails on a stale regen. The frontend generates `frontend/src/contract/types.ts` from those files and validates its test mocks against them (ajv); the backend proves conformance with a `Phoenix.ChannelTest` provider suite that validates real push/reply payloads against the same schemas (`ex_json_schema`). Validation is test-time only — prod keeps the existing channel pattern-match guards. Target test topology, three seams: frontend contract-style (mocked wire, no Phoenix) for client logic plus a consumer test; backend ChannelTest (no browser) for all server/wire semantics — the live-`:4000` vitest specs (`frontend/test/{channel,collision}.spec.ts`) are backend tests in disguise and move here; a thin Playwright golden-path layer (~5 paths) for semantic/units mismatches schema conformance can't catch (e.g. sub-units vs the client's ÷1000). Land as five strangler PRs: (1) contract pipeline + provider verification, (2) frontend codegen + consumer test, (3) migrate live vitest → ChannelTest (delete the `:4000` dependency), (4) remaining frontend specs → contract-style, (5) thin Playwright. Sequence before the DESIGN.md strangler below, which then pins each behavior at the appropriate seam rather than defaulting to e2e.
 
-### Pending writes
+## Needs Grill
 
-- Shape: `%{aggregate => %{key => value | :tombstone}}`. Aggregates: `player` (keyed by username), `depletion` (keyed by `{realm, coord, type, x, y}`), `structure` (keyed by `(x, y)`).
-- Coalesce on emit; the last emission per key wins.
-- `:tombstone` represents a delete intent; cancels any prior upsert at the same key.
+- **Strangle DESIGN.md.** Walk each behavior currently described in `DESIGN.md` (Player verbs, World/Chunk lifecycle, Persistence, Dev mode, Operator surface). For every behavior: confirm a test pins it; if not, write one — typically an e2e spec, occasionally a chunk-level integration test where the behavior isn't visible from the client. Once a behavior is pinned, delete its description from `DESIGN.md` (and from `PLAN.md`'s preamble link), or move the bit that's actually load-bearing language into `CONTEXT.md`. Goal: `DESIGN.md` empties out and is deleted. Open: per-behavior triage (which need new tests vs. which are already e2e-covered), how to handle behaviors that are inherently hard to e2e (operator-level claims like "single BEAM node", supervision-cascade semantics), and whether the strangler should be one PR per behavior or batched.
 
-### Flushing
+### Deferred
 
-- Periodic timer; ~1s cadence (numeric tuning under load).
-- One `Repo.transaction` per flush, wrapping per-aggregate `insert_all` and `delete_all`. Compound atomicity (e.g., build emits a structure upsert + an inventory upsert) is free — both land in the same transaction.
-- On flush success: clear all flushed entries from pending.
-- On flush failure: keep all entries; retry next cycle. No partial drop. Persistent failures eventually trip backpressure.
-
-### Backpressure
-
-- Triggered when pending size exceeds `N_high` **or** the oldest entry age exceeds `T_high`.
-- Released when pending size drops below `N_low` **and** the oldest age drops below `T_low`. (Hysteresis prevents flapping.)
-- Mechanism: under load, the Datastore withholds replies to incoming write calls. Caller Chunks block in their `GenServer.call`. World freezes upstream.
-- Recovery: DB recovers OR operator deploys a fix via hot code reload → next flush succeeds → drain → Datastore replies to parked callers in FIFO order → upstream resumes naturally. No explicit re-activation needed.
-
-### Failure semantics
-
-- Flush failures → backpressure. No crashes, no dropped data.
-- Datastore process crash (OOM, internal bug) → cascade. The Datastore's supervisor uses `intensity: 0` so any crash escalates to `GameCore.Supervisor`, which escalates to the `:temporary` Application, which halts. Operator hot-reloads the fix and restarts the application; world rehydrates from DB. Pending state at crash time is lost.
-
-### Supervision
-
-- Datastore is declared **first** in `GameCore.Supervisor`'s child list. OTP starts children in declared order and stops in reverse, so the Datastore starts before any Chunk that might call it and stops only after every Chunk has emitted its final state.
-- Datastore's `terminate/2` runs one final flush. Child spec uses `shutdown: 30_000` to give that flush room.
-
-### Schema
-
-- Drop the SERIAL `structures.id`. Primary key becomes the natural key `(x, y)`. Keep `chunk_x, chunk_y` as indexed columns for partition-style lookups.
-- ECS structure eid becomes `"structure:#{x}:#{y}"`, matching the resource-node eid pattern.
-
-### Test strategy
-
-- Chunk tests: `start_supervised!({GameCore.Datastore, …})` with the real Repo behind `Ecto.Adapters.SQL.Sandbox`. No production-code branching for tests.
-- Datastore tests: same setup, focused on backpressure transitions, retry behavior, transaction shape.
-- The `GameCore.ChunkRepo` behaviour, `GamePersistence.ChunkRepo` implementation, and `GameCore.ChunkRepo.Null` are removed.
-
-## Deferred
+These are deliberately deprioritized for now — listed so they aren't forgotten, not because they're queued.
 
 - **Auth, anti-cheat, public exposure, ops/observability.**
 - **Player housing, persistent dungeons, guild halls.**
