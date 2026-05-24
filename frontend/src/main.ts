@@ -1,5 +1,12 @@
 import * as THREE from 'three';
 import { Socket, type Channel } from 'phoenix';
+import {
+  createPlayerMesh,
+  createTreeMesh,
+  createWallMesh,
+  createPortalMesh,
+  setTreeDepleted,
+} from './models';
 
 type PlayerPos = { x: number; y: number };
 type ResourceNode = { type: string; x: number; y: number; depleted: boolean };
@@ -87,6 +94,30 @@ const INSTANCE_BG = 0x1a1030;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(OVERWORLD_BG);
 
+scene.add(new THREE.AmbientLight(0xffffff, 1.2));
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.8);
+const LIGHT_OFFSET = new THREE.Vector3(-6, 10, -3);
+keyLight.position.copy(LIGHT_OFFSET);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.camera.left = -25;
+keyLight.shadow.camera.right = 25;
+keyLight.shadow.camera.top = 25;
+keyLight.shadow.camera.bottom = -25;
+keyLight.shadow.camera.near = 1;
+keyLight.shadow.camera.far = 60;
+scene.add(keyLight);
+scene.add(keyLight.target);
+
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(2000, 2000),
+  new THREE.MeshLambertMaterial({ color: 0x3a3a3a }),
+);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.01;
+ground.receiveShadow = true;
+scene.add(ground);
+
 const camera = new THREE.PerspectiveCamera(
   50,
   window.innerWidth / window.innerHeight,
@@ -110,39 +141,28 @@ camera.lookAt(camTarget);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 app.appendChild(renderer.domElement);
 
 scene.add(new THREE.GridHelper(CHUNK_SIZE * 5, CHUNK_SIZE * 5, 0x404040, 0x202020));
 
-const playerMeshes = new Map<string, THREE.Mesh>();
+const playerMeshes = new Map<string, THREE.Group>();
 // Per-mesh interpolation state. Snapshots arrive at ~10 Hz; lerping from the
 // mesh's current visible position toward the latest snapshot target over the
 // snapshot interval (~100 ms) eliminates jitter without client-side prediction.
 type LerpState = { from: PlayerPos; target: PlayerPos; start: number };
 const playerLerps = new Map<string, LerpState>();
 const SNAPSHOT_INTERVAL_MS = 100;
-const palette = [0x4caf50, 0x2196f3, 0xff9800, 0xe91e63, 0x9c27b0, 0xffeb3b];
-
-function colorFor(name: string): number {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
-  return palette[Math.abs(h) % palette.length];
-}
 
 // One snapshot map per subscribed chunk. The rendered set is the union.
 const channelSnapshots = new Map<string, Map<string, PlayerPos>>();
 const channelNodes = new Map<string, Map<string, ResourceNode>>();
 const channelStructures = new Map<string, Map<string, StructureEntry>>();
 const channelPortals = new Map<string, Map<string, PortalEntry>>();
-const nodeMeshes = new Map<string, THREE.Mesh>();
-const structureMeshes = new Map<string, THREE.Mesh>();
-const portalMeshes = new Map<string, THREE.Mesh>();
-
-const NODE_GATHERABLE_COLOR = 0x2e7d32;
-const NODE_DEPLETED_COLOR = 0x6d4c41;
-const WALL_COLOR = 0x90a4ae;
-const PORTAL_INTO_COLOR = 0x7e57c2;
-const PORTAL_OUT_COLOR = 0xff7043;
+const nodeMeshes = new Map<string, THREE.Group>();
+const structureMeshes = new Map<string, THREE.Group>();
+const portalMeshes = new Map<string, THREE.Group>();
 
 function updateRenderedFromMerge(): void {
   const union = new Map<string, PlayerPos>();
@@ -154,11 +174,8 @@ function updateRenderedFromMerge(): void {
     let mesh = playerMeshes.get(name);
     let from: PlayerPos;
     if (!mesh) {
-      mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(1, 1, 1),
-        new THREE.MeshBasicMaterial({ color: colorFor(name) }),
-      );
-      mesh.position.set(target.x, 0.5, target.y);
+      mesh = createPlayerMesh(name);
+      mesh.position.set(target.x, 0, target.y);
       scene.add(mesh);
       playerMeshes.set(name, mesh);
       from = target;
@@ -186,24 +203,13 @@ function updateRenderedFromMerge(): void {
   for (const [id, n] of nodeUnion) {
     let mesh = nodeMeshes.get(id);
     if (!mesh) {
-      mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.8, n.depleted ? 0.2 : 1.5, 0.8),
-        new THREE.MeshBasicMaterial({
-          color: n.depleted ? NODE_DEPLETED_COLOR : NODE_GATHERABLE_COLOR,
-        }),
-      );
+      mesh = createTreeMesh();
       mesh.userData = { kind: 'node', id };
       scene.add(mesh);
       nodeMeshes.set(id, mesh);
-    } else {
-      const mat = mesh.material as THREE.MeshBasicMaterial;
-      mat.color.setHex(n.depleted ? NODE_DEPLETED_COLOR : NODE_GATHERABLE_COLOR);
-      const h = n.depleted ? 0.2 : 1.5;
-      mesh.geometry.dispose();
-      mesh.geometry = new THREE.BoxGeometry(0.8, h, 0.8);
     }
-    const h = n.depleted ? 0.2 : 1.5;
-    mesh.position.set(n.x, h / 2, n.y);
+    setTreeDepleted(mesh, n.depleted);
+    mesh.position.set(n.x, 0, n.y);
     mesh.userData.depleted = n.depleted;
     mesh.userData.x = n.x;
     mesh.userData.y = n.y;
@@ -223,15 +229,12 @@ function updateRenderedFromMerge(): void {
   for (const [id, s] of structUnion) {
     let mesh = structureMeshes.get(id);
     if (!mesh) {
-      mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.9, 1, 0.9),
-        new THREE.MeshBasicMaterial({ color: WALL_COLOR }),
-      );
+      mesh = createWallMesh();
       mesh.userData = { kind: 'structure', id };
       scene.add(mesh);
       structureMeshes.set(id, mesh);
     }
-    mesh.position.set(s.x, 0.5, s.y);
+    mesh.position.set(s.x, 0, s.y);
     mesh.userData.x = s.x;
     mesh.userData.y = s.y;
   }
@@ -250,19 +253,12 @@ function updateRenderedFromMerge(): void {
   for (const [id, p] of portalUnion) {
     let mesh = portalMeshes.get(id);
     if (!mesh) {
-      mesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.5, 0.5, 1.5, 16),
-        new THREE.MeshBasicMaterial({
-          color: p.direction === 'into_instance' ? PORTAL_INTO_COLOR : PORTAL_OUT_COLOR,
-          transparent: true,
-          opacity: 0.7,
-        }),
-      );
+      mesh = createPortalMesh(p.direction);
       mesh.userData = { kind: 'portal', id };
       scene.add(mesh);
       portalMeshes.set(id, mesh);
     }
-    mesh.position.set(p.x, 0.75, p.y);
+    mesh.position.set(p.x, 0, p.y);
   }
   for (const [id, mesh] of portalMeshes) {
     if (!portalUnion.has(id)) {
@@ -579,7 +575,7 @@ renderer.setAnimationLoop(() => {
     const t = Math.min(1, (now - lerp.start) / SNAPSHOT_INTERVAL_MS);
     mesh.position.set(
       lerp.from.x + (lerp.target.x - lerp.from.x) * t,
-      0.5,
+      0,
       lerp.from.y + (lerp.target.y - lerp.from.y) * t,
     );
   }
@@ -592,6 +588,8 @@ renderer.setAnimationLoop(() => {
     camTarget.set(me.position.x, 0, me.position.z);
     camera.position.copy(camTarget).add(CAM_OFFSET);
     camera.lookAt(camTarget);
+    keyLight.position.copy(camTarget).add(LIGHT_OFFSET);
+    keyLight.target.position.copy(camTarget);
   }
 
   renderer.render(scene, camera);

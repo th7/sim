@@ -33,7 +33,7 @@ A gatherable world object (tree, rock, ore vein, plant). Depletes when harvested
 _Avoid_: Resource (ambiguous — also means inventory material), node (too generic).
 
 **Structure**:
-A persistent object placed in the **Overworld** by a Player (building, wall, crafting station, fence). Survives indefinitely until destroyed. Anchored to a specific **Chunk**.
+A persistent object placed in the **Overworld** by a Player (building, wall, crafting station, fence). Survives indefinitely until destroyed. Anchored to a specific **Chunk**. In v1, the only Structure type is a *wooden palisade* (the "wall"); cost is 5 **wood**.
 _Avoid_: Building (only one kind of Structure), object, placeable.
 
 **Portal**:
