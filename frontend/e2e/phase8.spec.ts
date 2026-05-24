@@ -36,11 +36,15 @@ test('phase 8: gather → build → persistence round-trip', async ({ browser })
   const alice = uniq('alice');
   const [cx, cy] = pickChunk();
 
-  // Chunk-centre and an adjacent cell anchor for the wall.
+  // Chunk-centre and walk target. Post-collision the wall's AABB cannot
+  // overlap any tree (live or depleted) or the placing player's body, so
+  // alice walks east of the harvested cluster before placing. The exact
+  // wall position is derived from alice's actual stopping spot (computed
+  // after she settles), since the margin between "no body overlap" and
+  // "within 1u damage range" is only 200 sub-units.
   const centreSubX = cx * CHUNK_SUB + 8_000;
   const centreSubY = cy * CHUNK_SUB + 8_000;
-  const wallSubX = centreSubX - 500; // 0.5u west of centre
-  const wallSubY = centreSubY - 500;
+  const aliceTargetSubX = centreSubX + 2_500; // 2.5u east — well outside cluster
 
   // Worldgen tree positions in this chunk (sub-units):
   const treeOffsets = [
@@ -59,8 +63,8 @@ test('phase 8: gather → build → persistence round-trip', async ({ browser })
   await expect(page1.locator('#inv-hud')).toBeVisible();
 
   // Chop every Worldgen tree in the chunk (5 total → 5 wood for one wall).
-  // Trees and walls can share a cell at the persistence layer; cell-occupied
-  // only rejects when a *Structure* already sits there.
+  // Alice is grandfathered through the cluster on spawn (her body overlaps
+  // the centre tree); harvest just needs interact range, not navigation.
   for (let i = 0; i < 5; i++) {
     const [dx, dy] = treeOffsets[i];
     await page1.evaluate(
@@ -75,7 +79,43 @@ test('phase 8: gather → build → persistence round-trip', async ({ browser })
 
   expect(await page1.evaluate(() => window.__game.inventory().wood)).toBe(5);
 
-  // Build a wall on the wall's cell anchor.
+  // Walk east out of the (depleted-but-still-collidable) tree cluster.
+  await page1.locator('canvas').focus();
+  await page1.keyboard.down('d');
+  await page1.waitForFunction(
+    (target) => {
+      const me = window.__game.players()[window.__game.username];
+      return !!me && me.x * 1000 >= target;
+    },
+    aliceTargetSubX,
+  );
+  await page1.keyboard.up('d');
+
+  // Wait for alice to actually stop — poll until position is stable across
+  // a few snapshot intervals (server is 10Hz, mesh interpolates between).
+  await page1.waitForFunction(
+    () => {
+      const me = window.__game.players()[window.__game.username];
+      if (!me) return false;
+      const k = `__phase8_stop_${me.x.toFixed(3)}`;
+      const w = window as unknown as Record<string, number>;
+      w[k] = (w[k] ?? 0) + 1;
+      return w[k] >= 5;
+    },
+    null,
+    { polling: 100, timeout: 5_000 },
+  );
+
+  const aliceStop = await page1.evaluate(() => {
+    const me = window.__game.players()[window.__game.username];
+    return { x: Math.round(me.x * 1000), y: Math.round(me.y * 1000) };
+  });
+  // Place wall exactly 1u east of alice's centre — wall AABB west edge sits
+  // 200 sub-units past alice's body (no overlap), distance from alice to
+  // wall centre is 1000 sub-units (boundary of damage interact_range_sq).
+  const wallSubX = aliceStop.x + 1_000;
+  const wallSubY = aliceStop.y;
+
   await page1.evaluate(
     ([x, y]) => window.__game.build('wall', x, y),
     [wallSubX, wallSubY],
@@ -88,7 +128,9 @@ test('phase 8: gather → build → persistence round-trip', async ({ browser })
   expect(built.owner).toBe(alice);
 
   await ctx1.close();
-  await new Promise((r) => setTimeout(r, 500));
+  // Datastore default flush interval is 1s; give it a clear window so the
+  // wall + alice's walked position are flushed before SIGTERM.
+  await new Promise((r) => setTimeout(r, 1_500));
 
   // Restart Phoenix; the wall row is in Postgres and inventory has flushed.
   await exec(resolve(__dirname, '../../bin/restart-e2e.sh'), [], { timeout: 90_000 });

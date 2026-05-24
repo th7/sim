@@ -104,6 +104,36 @@ test('phase 9: walk into the Portal, walk around the Instance, walk back out', a
   await ctx.close();
 });
 
+test('phase 9: Instance has no Resource nodes — return Portal is unobstructed', async ({
+  browser,
+}) => {
+  // Before the seed_resource_nodes/3 realm gate, Worldgen placed a 5-tree
+  // cluster in every chunk — including Instance chunks. The (0,0)-offset
+  // tree sat exactly on the return-Portal cell at instance chunk (1,1)
+  // centre, and after Footprints arrived, the tree's Footprint blocked
+  // the player from reaching the Portal. Assert the Instance is empty.
+  test.setTimeout(60_000);
+  const alice = uniq('alice');
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+
+  await openAtHome(page, alice);
+
+  await page.locator('canvas').focus();
+  await page.keyboard.down('a');
+  await page.keyboard.down('w');
+  await page.waitForFunction(() => window.__game.realm().kind === 'instance', null, {
+    timeout: 15_000,
+  });
+  await page.keyboard.up('a');
+  await page.keyboard.up('w');
+
+  const nodes = await page.evaluate(() => window.__game.resourceNodes());
+  expect(Object.keys(nodes)).toHaveLength(0);
+
+  await ctx.close();
+});
+
 test('phase 9: camera follows the Player into the Instance', async ({ browser }) => {
   test.setTimeout(60_000);
   const alice = uniq('alice');

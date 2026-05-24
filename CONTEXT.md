@@ -101,7 +101,7 @@ The **Datastore**'s overload-protection mode. When **pending writes** exceed a s
 - An **Instance** is partitioned into its own private grid of **Chunks**, scoped to that Instance and disjoint from the **Overworld**'s grid
 - A **Player** exists in exactly one **Chunk** (if in the **Overworld**) or one **Instance** at a time
 - A username uniquely identifies a **Player**; there is no separate account or character roster
-- A **Chunk** holds zero-or-more **Resource nodes**, zero-or-more **Structures**, and zero-or-more **Portals**
+- An **Overworld Chunk** holds zero-or-more **Resource nodes**, zero-or-more **Structures**, and zero-or-more **Portals**; an **Instance Chunk** holds only **Portals** (no **Resource nodes**, no **Structures**)
 - A **Structure** belongs to the **Chunk** it sits in; ownership is per-Structure (a Player owns the Structure)
 - Every **Resource node** and every **Structure** has a **Footprint**; **Players** and **Portals** do not. A **Player** cannot move to a position where their body would overlap any Footprint
 - Each **Player** has exactly one **Inventory**; an **Inventory** holds zero-or-more **ItemStacks**; each **ItemStack** is a quantity of exactly one **Item**
