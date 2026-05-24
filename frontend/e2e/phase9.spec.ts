@@ -16,7 +16,14 @@ async function openAtHome(page: Page, username: string): Promise<void> {
   );
 }
 
-test('phase 9: walk into the Portal, walk around the Instance, walk back out', async ({
+// Golden path: the full Instance round-trip through a real browser — realm
+// transition, camera follow, and return. The server-side semantics (entry/exit
+// migration, inventory survival, instance isolation, no Resource nodes,
+// disconnect teardown) are pinned at the backend seam in game_core
+// (instances_test, session_instance_transitions_test); this spec is the one
+// browser-observable path the backend can't reach (rendered realm switch +
+// camera).
+test('phase 9: walk into the Portal, around the Instance, and back out — camera follows', async ({
   browser,
 }) => {
   test.setTimeout(60_000);
@@ -74,6 +81,21 @@ test('phase 9: walk into the Portal, walk around the Instance, walk back out', a
     { timeout: 5_000 },
   );
 
+  // The camera follows the Player into the Instance — it must frame the
+  // Instance-local position, not stay stuck on the Overworld home chunk.
+  await page.waitForFunction(
+    (name) => {
+      const me = window.__game.players()[name];
+      const cam = window.__game.cameraPos();
+      if (!me) return false;
+      const dx = cam.x - me.x;
+      const dz = cam.z - me.y;
+      return Math.sqrt(dx * dx + dz * dz) < 20;
+    },
+    alice,
+    { timeout: 5_000 },
+  );
+
   // Walk east into the return-Portal at (24, 24).
   await page.keyboard.down('d');
   await page.waitForFunction(
@@ -100,224 +122,6 @@ test('phase 9: walk into the Portal, walk around the Instance, walk back out', a
     return Object.values(ps).find((p) => p.direction === 'into_instance') ?? null;
   });
   expect(overworldPortalAgain).toMatchObject({ direction: 'into_instance' });
-
-  await ctx.close();
-});
-
-test('phase 9: Instance has no Resource nodes — return Portal is unobstructed', async ({
-  browser,
-}) => {
-  // Before the seed_resource_nodes/3 realm gate, Worldgen placed a 5-tree
-  // cluster in every chunk — including Instance chunks. The (0,0)-offset
-  // tree sat exactly on the return-Portal cell at instance chunk (1,1)
-  // centre, and after Footprints arrived, the tree's Footprint blocked
-  // the player from reaching the Portal. Assert the Instance is empty.
-  test.setTimeout(60_000);
-  const alice = uniq('alice');
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
-
-  await openAtHome(page, alice);
-
-  await page.locator('canvas').focus();
-  await page.keyboard.down('a');
-  await page.keyboard.down('w');
-  await page.waitForFunction(() => window.__game.realm().kind === 'instance', null, {
-    timeout: 15_000,
-  });
-  await page.keyboard.up('a');
-  await page.keyboard.up('w');
-
-  const nodes = await page.evaluate(() => window.__game.resourceNodes());
-  expect(Object.keys(nodes)).toHaveLength(0);
-
-  await ctx.close();
-});
-
-test('phase 9: camera follows the Player into the Instance', async ({ browser }) => {
-  test.setTimeout(60_000);
-  const alice = uniq('alice');
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
-
-  await openAtHome(page, alice);
-
-  // Walk into the Portal.
-  await page.locator('canvas').focus();
-  await page.keyboard.down('a');
-  await page.keyboard.down('w');
-  await page.waitForFunction(() => window.__game.realm().kind === 'instance', null, {
-    timeout: 15_000,
-  });
-  await page.keyboard.up('a');
-  await page.keyboard.up('w');
-
-  // After entry the Player is at Instance-local ~(23, 24); the camera must
-  // be near that, not stuck framing the Overworld home chunk at (0, 0).
-  await page.waitForFunction(
-    (name) => {
-      const me = window.__game.players()[name];
-      const cam = window.__game.cameraPos();
-      if (!me) return false;
-      const dx = cam.x - me.x;
-      const dz = cam.z - me.y;
-      return Math.sqrt(dx * dx + dz * dz) < 20;
-    },
-    alice,
-    { timeout: 5_000 },
-  );
-
-  await ctx.close();
-});
-
-test('phase 9: inventory gathered in Overworld survives an Instance round-trip', async ({
-  browser,
-}) => {
-  test.setTimeout(60_000);
-  const alice = uniq('alice');
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
-
-  await openAtHome(page, alice);
-
-  // Player spawns at chunk centre (8000, 8000); the centre tree sits on
-  // the same cell. Harvest it for one wood.
-  await page.evaluate(() => window.__game.harvest(8000, 8000));
-  await page.waitForFunction(
-    () => (window.__game.inventory().wood ?? 0) >= 1,
-    null,
-    { timeout: 5_000 },
-  );
-  expect(await page.evaluate(() => window.__game.inventory().wood)).toBe(1);
-
-  // Walk into the Portal.
-  await page.locator('canvas').focus();
-  await page.keyboard.down('a');
-  await page.keyboard.down('w');
-  await page.waitForFunction(() => window.__game.realm().kind === 'instance', null, {
-    timeout: 15_000,
-  });
-  await page.keyboard.up('a');
-  await page.keyboard.up('w');
-
-  // Inventory still 1 inside the Instance.
-  expect(await page.evaluate(() => window.__game.inventory().wood)).toBe(1);
-
-  // Walk east into the return-Portal.
-  await page.keyboard.down('d');
-  await page.waitForFunction(() => window.__game.realm().kind === 'overworld', null, {
-    timeout: 15_000,
-  });
-  await page.keyboard.up('d');
-
-  // Inventory still 1 back in the Overworld.
-  expect(await page.evaluate(() => window.__game.inventory().wood)).toBe(1);
-
-  await ctx.close();
-});
-
-test('phase 9: two Players entering Portals get isolated Instances', async ({
-  browser,
-}) => {
-  test.setTimeout(60_000);
-  const alice = uniq('alice');
-  const bob = uniq('bob');
-
-  const ctxA = await browser.newContext();
-  const ctxB = await browser.newContext();
-  const pageA = await ctxA.newPage();
-  const pageB = await ctxB.newPage();
-
-  await openAtHome(pageA, alice);
-  await openAtHome(pageB, bob);
-
-  // Both walk into the Portal.
-  await pageA.locator('canvas').focus();
-  await pageB.locator('canvas').focus();
-  await pageA.keyboard.down('a');
-  await pageA.keyboard.down('w');
-  await pageB.keyboard.down('a');
-  await pageB.keyboard.down('w');
-
-  await pageA.waitForFunction(() => window.__game.realm().kind === 'instance', null, {
-    timeout: 15_000,
-  });
-  await pageB.waitForFunction(() => window.__game.realm().kind === 'instance', null, {
-    timeout: 15_000,
-  });
-
-  await pageA.keyboard.up('a');
-  await pageA.keyboard.up('w');
-  await pageB.keyboard.up('a');
-  await pageB.keyboard.up('w');
-
-  // Each Player got a different Instance id.
-  const idA = await pageA.evaluate(() => {
-    const r = window.__game.realm();
-    return r.kind === 'instance' ? r.id : null;
-  });
-  const idB = await pageB.evaluate(() => {
-    const r = window.__game.realm();
-    return r.kind === 'instance' ? r.id : null;
-  });
-  expect(idA).not.toBeNull();
-  expect(idB).not.toBeNull();
-  expect(idA).not.toBe(idB);
-
-  // Neither Player sees the other in their Instance.
-  await pageA.waitForTimeout(300);
-  const aSees = await pageA.evaluate(
-    (otherName) => otherName in window.__game.players(),
-    bob,
-  );
-  const bSees = await pageB.evaluate(
-    (otherName) => otherName in window.__game.players(),
-    alice,
-  );
-  expect(aSees).toBe(false);
-  expect(bSees).toBe(false);
-
-  await ctxA.close();
-  await ctxB.close();
-});
-
-test('phase 9: disconnect mid-Instance returns the Player to the Overworld on reconnect', async ({
-  browser,
-}) => {
-  test.setTimeout(60_000);
-  const alice = uniq('alice');
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
-
-  await openAtHome(page, alice);
-
-  // Walk into the Portal.
-  await page.locator('canvas').focus();
-  await page.keyboard.down('a');
-  await page.keyboard.down('w');
-  await page.waitForFunction(() => window.__game.realm().kind === 'instance', null, {
-    timeout: 15_000,
-  });
-  await page.keyboard.up('a');
-  await page.keyboard.up('w');
-
-  // Slam the door — close the page mid-Instance.
-  await page.close();
-
-  // Reconnect.
-  const page2 = await ctx.newPage();
-  await openAtHome(page2, alice);
-
-  // Back in the Overworld, near (or at) the entry Portal cell.
-  expect(await page2.evaluate(() => window.__game.realm().kind)).toBe('overworld');
-  await page2.waitForFunction(
-    (name) => {
-      const me = window.__game.players()[name];
-      return !!me && Math.abs(me.x - 4) < 1.5 && Math.abs(me.y - 4) < 1.5;
-    },
-    alice,
-    { timeout: 5_000 },
-  );
 
   await ctx.close();
 });
