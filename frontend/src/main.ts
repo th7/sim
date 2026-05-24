@@ -7,6 +7,7 @@ import {
   createPortalMesh,
   setTreeDepleted,
 } from './models';
+import type { SnapshotPayload as WireSnapshot } from './contract/types';
 
 type PlayerPos = { x: number; y: number };
 type ResourceNode = { type: string; x: number; y: number; depleted: boolean };
@@ -14,13 +15,9 @@ type StructureEntry = { type: string; x: number; y: number; hp: number; owner: s
 type PortalEntry = { type: string; direction: string; x: number; y: number };
 // Server snapshots carry positions in **sub-units** (1 world unit = 1000
 // sub-units); we divide at the channel boundary so the rest of the
-// frontend works in world-unit floats for Three.js.
-type WireSnapshot = {
-  players: Record<string, { x: number; y: number }>;
-  resource_nodes: Record<string, { type: string; x: number; y: number; depleted: boolean }>;
-  structures: Record<string, { type: string; x: number; y: number; hp: number; owner: string }>;
-  portals: Record<string, { type: string; direction: string; x: number; y: number }>;
-};
+// frontend works in world-unit floats for Three.js. The wire shape itself
+// (WireSnapshot) is imported from the generated contract — single source of
+// truth with the backend.
 type Snapshot = {
   players: Record<string, PlayerPos>;
   resource_nodes: Record<string, ResourceNode>;

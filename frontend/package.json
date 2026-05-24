@@ -9,13 +9,16 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "../bin/kill-e2e.sh && playwright test"
+    "test:e2e": "../bin/kill-e2e.sh && playwright test",
+    "gen:contract": "node scripts/gen-contract.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
     "@types/node": "^25.9.0",
     "@types/phoenix": "^1.6.7",
     "@types/three": "^0.184.1",
+    "ajv": "^8.20.0",
+    "json-schema-to-typescript": "^15.0.4",
     "typescript": "~6.0.2",
     "vite": "^8.0.12",
     "vitest": "^4.1.6"
