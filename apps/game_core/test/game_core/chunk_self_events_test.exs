@@ -35,7 +35,9 @@ defmodule GameCore.ChunkSelfEventsTest do
     # Drain the set_inventory self event so we only assert on the build one.
     assert_received {:self, %{inventory: %{wood: 5}}}
 
-    :ok = Chunk.build(chunk, "bob", :wall, {8_000, 8_000})
+    # (12_000, 8_000) sits clear of bob's spawn (8_000, 8_000) and of every
+    # Worldgen tree footprint in chunk (0,0).
+    :ok = Chunk.build(chunk, "bob", :wall, {12_000, 8_000})
 
     assert_received {:self, %{inventory: %{wood: 0}}}
   end

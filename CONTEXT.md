@@ -40,6 +40,10 @@ _Avoid_: Building (only one kind of Structure), object, placeable.
 A fixed Overworld entity that marks the entry point to an **Instance**. Placed deterministically by worldgen — not built by **Players**, not stored in the **Structure** table. Anchored to a specific **Chunk**. Interacting with a Portal triggers **Instance entry**.
 _Avoid_: Structure (a Portal is not a Structure — Structures are player-placed; see the Structure entry), gate, dungeon entrance.
 
+**Footprint**:
+The world-space shape an obstacle occupies. A **Player** carries a body circle; they cannot move their position so that the body would overlap any Footprint. Collision is one-way — the world blocks the Player, but the Player blocks neither the world nor other Players. A **Resource node**'s Footprint is the same whether the node is gatherable or depleted: harvesting a node does not open a path.
+_Avoid_: Hitbox (implies combat / damage zones), bounding box (only one of the two Footprint shapes is rectangular), collider (implementation term).
+
 **Item**:
 A *kind* of gatherable, stackable substance — wood, stone, iron ore. Abstract: an Item is a type, never a quantity. Items are produced by harvesting **Resource nodes** and consumed when **Players** build **Structures**.
 _Avoid_: Material (collides with "crafting material" once recipes exist), Resource (already forbidden — see Resource node).
@@ -99,6 +103,7 @@ The **Datastore**'s overload-protection mode. When **pending writes** exceed a s
 - A username uniquely identifies a **Player**; there is no separate account or character roster
 - A **Chunk** holds zero-or-more **Resource nodes**, zero-or-more **Structures**, and zero-or-more **Portals**
 - A **Structure** belongs to the **Chunk** it sits in; ownership is per-Structure (a Player owns the Structure)
+- Every **Resource node** and every **Structure** has a **Footprint**; **Players** and **Portals** do not. A **Player** cannot move to a position where their body would overlap any Footprint
 - Each **Player** has exactly one **Inventory**; an **Inventory** holds zero-or-more **ItemStacks**; each **ItemStack** is a quantity of exactly one **Item**
 - A **Resource node** yields one or more **ItemStacks** when harvested; a **Structure**'s build cost is expressed as one or more **ItemStacks** drawn from the placing Player's **Inventory**
 - A **Chunk** is either hot (running) or cold (state in durable storage only)
@@ -122,3 +127,4 @@ The **Datastore**'s overload-protection mode. When **pending writes** exceed a s
 
 - "Player" vs "Character" — collapsed to a single concept (**Player**). Revisit if/when a roster feature is wanted.
 - "Private" — earlier framing said "private Instances," but Instances are *Party-scoped*, not owned. There is no per-Player private space in v1.
+- Cross-chunk collision — v1 enforces Footprints only against obstacles in the **Player**'s current **Chunk**. A **Structure** placed within ~0.5u of a Chunk boundary can produce a visible "clip-and-stop" when a Player crosses in from the neighbor side. Revisit when combat or PvP makes the artifact gameplay-relevant.

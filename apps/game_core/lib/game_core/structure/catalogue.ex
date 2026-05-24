@@ -11,6 +11,7 @@ defmodule GameCore.Structure.Catalogue do
 
   @walls_cost [{:wood, 5}]
   @walls_max_hp 100
+  @walls_footprint %{shape: :aabb, w: 1_000, h: 1_000}
 
   @spec types() :: [type()]
   def types, do: [:wall]
@@ -23,4 +24,7 @@ defmodule GameCore.Structure.Catalogue do
 
   @spec max_hp(type()) :: pos_integer()
   def max_hp(:wall), do: @walls_max_hp
+
+  @spec footprint(type()) :: GameCore.Components.Footprint.t()
+  def footprint(:wall), do: @walls_footprint
 end

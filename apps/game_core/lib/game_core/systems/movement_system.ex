@@ -4,13 +4,12 @@ defmodule GameCore.Systems.MovementSystem do
   Position is integer sub-units; Velocity is float sub-units/sec; the
   integrated step is rounded back to integer at each tick.
 
-  When given a `:bounds` option `{x_min, y_min, x_max, y_max}`, the
-  integrated Position is clamped to the bounding rect. The Overworld
-  runs without bounds (unbounded); each Instance Chunk runs with its
-  3×3 grid's outer rect.
+  Each integrated step is clamped against any **Footprint** in the world
+  via `GameCore.Collision`, then clamped to the optional bounding rect
+  (Instance Chunks use this; the Overworld runs unbounded).
   """
 
-  alias GameCore.World
+  alias GameCore.{Collision, World}
   alias GameCore.Components.{Position, Velocity}
 
   @type bounds :: {integer(), integer(), integer(), integer()}
@@ -25,8 +24,8 @@ defmodule GameCore.Systems.MovementSystem do
     Enum.reduce(velocities, world, fn {eid, %{vx: vx, vy: vy}}, acc ->
       case World.fetch(acc, eid, Position) do
         {:ok, %{x: x, y: y}} ->
-          new_x = x + round(vx * dt)
-          new_y = y + round(vy * dt)
+          step = {round(vx * dt), round(vy * dt)}
+          {new_x, new_y} = Collision.clamp_step(acc, {x, y}, step)
           {clamped_x, clamped_y} = clamp(new_x, new_y, bounds)
 
           World.add_component(acc, eid, Position, %{x: clamped_x, y: clamped_y})

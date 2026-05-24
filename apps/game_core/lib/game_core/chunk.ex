@@ -35,12 +35,13 @@ defmodule GameCore.Chunk do
   # current_chunk — silently losing movement.
   use GenServer, restart: :transient
 
-  alias GameCore.{ChunkLifecycle, ChunkMigration, Worldgen, World}
+  alias GameCore.{ChunkLifecycle, ChunkMigration, Collision, Worldgen, World}
 
   alias GamePersistence.Datastore
 
   alias GameCore.Components.{
     Depleted,
+    Footprint,
     Gatherable,
     Inventory,
     PlayerControlled,
@@ -292,8 +293,11 @@ defmodule GameCore.Chunk do
       |> World.add_component(eid, Position, %{x: x, y: y})
       |> World.add_component(eid, Renderable, %{})
       |> World.add_component(eid, Gatherable, %{type: type, yields: yield_for(type)})
+      |> World.add_component(eid, Footprint, footprint_for(type))
     end)
   end
+
+  defp footprint_for(:tree), do: %{shape: :circle, radius: 300}
 
   defp node_eid(type, x, y), do: "#{type}:#{x}:#{y}"
 
@@ -334,6 +338,7 @@ defmodule GameCore.Chunk do
       |> World.add_component(eid, Position, %{x: s.x, y: s.y})
       |> World.add_component(eid, Renderable, %{})
       |> World.add_component(eid, Structure, %{type: s.type, owner: s.owner, hp: s.hp})
+      |> World.add_component(eid, Footprint, Catalogue.footprint(s.type))
     end)
   end
 
@@ -400,19 +405,12 @@ defmodule GameCore.Chunk do
     end
   end
 
-  defp check_cell_empty(%World{components: cs}, x, y) do
-    structures = Map.get(cs, Structure, %{})
-    positions = Map.get(cs, Position, %{})
-
-    collision? =
-      Enum.any?(structures, fn {eid, _} ->
-        case Map.fetch(positions, eid) do
-          {:ok, %{x: ^x, y: ^y}} -> true
-          _ -> false
-        end
-      end)
-
-    if collision?, do: {:error, :cell_occupied}, else: :ok
+  defp check_footprint_clear(world, type, {x, y}) do
+    if Collision.aabb_blocked?(world, {x, y}, Catalogue.footprint(type)) do
+      {:error, :footprint_blocked}
+    else
+      :ok
+    end
   end
 
   defp subtract_cost(items, cost) do
@@ -587,7 +585,7 @@ defmodule GameCore.Chunk do
   def handle_call({:build, username, type, {x, y}}, _from, state) do
     with :ok <- Catalogue.valid?(type) |> ok_or(:invalid_type),
          :ok <- check_in_chunk(state.coord, x, y),
-         :ok <- check_cell_empty(state.world, x, y),
+         :ok <- check_footprint_clear(state.world, type, {x, y}),
          {:ok, items} <- player_inv(state.world, username),
          {:ok, new_items} <- subtract_cost(items, Catalogue.cost(type)),
          {:ok, {px, py}} <- player_pos(state.world, username) do
@@ -605,6 +603,7 @@ defmodule GameCore.Chunk do
         |> World.add_component(eid, Position, %{x: x, y: y})
         |> World.add_component(eid, Renderable, %{})
         |> World.add_component(eid, Structure, %{type: type, owner: username, hp: hp})
+        |> World.add_component(eid, Footprint, Catalogue.footprint(type))
 
       publish_self(username, new_items)
       {:reply, :ok, %{state | world: world}}
