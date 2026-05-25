@@ -74,8 +74,8 @@ resolved when we wire transport (Phase 4). POC stubs it.
 
 ## Plan — POC first
 
-The POC is **test-driven**: the core simulation layer is proven by a unit + integration suite (below)
-before any parallelism, persistence, or transport is added.
+The POC is **test-driven**: the core simulation layer is proven by the unit + integration suite in
+`sim/tests` before any parallelism, persistence, or transport is added.
 
 **Phase 0 — skeleton.** A standalone Rust crate (e.g. `/sim`, *not* under `apps/`). ECS via `hecs`
 (we want our own tick scheduling, not Bevy's frame scheduler), chunk geometry, the id/registry types,
@@ -84,26 +84,11 @@ clock, a scripted-intent driver, and world/topology assertion helpers.
 
 **Phase 1 — prove the core model (PRIORITY, test-first, single-threaded, no `unsafe`).** Structure the
 simulation core as **pure, testable functions** — chunk-graph connectivity, placement, merge detection,
-`should_split?`, repack *policy*, delta diffing — and drive their development **test-first**. The
-deliverable is a **unit + integration suite that exercises every major topology case**, written before
-(or alongside) the implementation. One worker ticks all clusters sequentially; actors are driven by
-scripted/synthetic intent (no real sessions). Major cases:
-
-- *Placement* — an unclustered actor joins an overlapping cluster; spawns a new cluster when none overlaps.
-- *Crossing* — an actor moves across a chunk boundary inside a cluster (chunk-set updates, no topology change).
-- *Merge* — two clusters' chunk-sets come to overlap → one cluster; triggered by a crossing.
-- *Split* — a cluster's chunk-set disconnects → splits into components; actors land in the right child;
-  hysteresis prevents churn at the boundary.
-- *Repack policy* (pure decision, no threads yet) — given cluster tick-times, minimize workers within
-  budget; an over-budget worker sheds whole clusters; a single indivisible cluster stays put.
-- *Deltas* — each tick emits exactly the changed entities (upserts) + removes; baseline on cell-enter; idempotent.
-- *Determinism* — identical inputs produce identical output.
-- *The core invariant (property test)* — over randomized movement sequences, **any two actors within
-  `interaction_range` are always in the same cluster** (never-under-merge).
-
-Integration tests drive the whole single-threaded loop with scripted intent over many ticks, asserting the
-expected topology transitions and the invariant on every tick. Only once the suite is green is the *model*
-proven — all the genuinely novel logic — with zero concurrency risk.
+`should_split?`, repack *policy*, delta diffing — and drive their development **test-first**. One worker
+ticks all clusters sequentially; actors are driven by scripted/synthetic intent (no real sessions). The
+deliverable is the unit + integration suite in `sim/tests` covering every topology case (placement,
+crossing, merge, split, repack, deltas, determinism, and the never-under-merge invariant property test);
+only once it is green is the *model* proven — the genuinely novel logic, with zero concurrency risk.
 
 **Phase 2 — parallelism + the `unsafe` boundary.** Multiple workers; disjoint `&mut` into the shared
 world behind a small documented `unsafe` API whose soundness precondition is the Labeler's disjoint
@@ -145,9 +130,9 @@ The prototype lives in `/sim` (Rust). Decisions resolved while building Phase 0/
   they disconnect (split). Merged at ≤2, stays merged through 3, splits at ≥4 — churn-free.
 - **Reconcile-to-canonical after every mutation.** Each insert/move/remove recomputes the partition to
   its canonical form (two actors co-cluster iff their footprints transitively overlap), so
-  never-under-merge holds *by construction*, verified against an oracle and a 16-seed property test.
-  Cluster ids are preserved incrementally: a merge survivor keeps the lower id; a split keeps the id on
-  its largest child.
+  never-under-merge holds *by construction*, verified against a canonical-partition oracle and a
+  randomized property test. Cluster ids are preserved incrementally: a merge survivor keeps the lower id;
+  a split keeps the id on its largest child.
 - **Cross-chunk collision is now correct.** A cluster owns its actors' full 3×3, so collision sees
   obstacles in neighbouring chunks — the intended resolution of the Elixir per-chunk "clip-and-stop"
   artifact (CONTEXT.md). A blessed divergence, identical away from chunk boundaries.
@@ -170,8 +155,8 @@ Phase 2 (parallelism):
   for the determinism this project wants. The cluster disjointness is still load-bearing (it's what
   makes the jobs independent). hecs's per-column borrow model also makes per-entity disjoint `&mut`
   from multiple threads impossible without replacing the ECS, which independently rules the raw-pointer
-  approach out. Result asserted identical to the serial tick across worker counts {1,2,3,8} and a
-  pooled `Sim`, over a 250-tick random walk with the invariant checked every tick.
+  approach out. Parallel output is asserted identical to the serial tick (across multiple worker counts
+  and a pooled `Sim`).
 - **Persistent worker pool**, not per-tick spawn. The compute is so cheap that spawning OS threads each
   tick loses (measured 0.25–0.74×); a reused pool (IDEA's "workers self-tick") wins.
 - **Measured single-core dense-cluster ceiling ≈ 0.085 ms/tick** for 500 movers × 1500 obstacles —
@@ -199,19 +184,17 @@ Phase 3 (persistence):
 
 Phase 4 (observation & transport):
 
-- **Wire-compatible Phoenix Channels v2 server** (`phx.rs` codec, `server.rs` routing, `transport.rs`
-  async runtime, `bin/server.rs`). Same topics (`player:<u>`, `chunk:x:y`, `instance:<id>:chunk:x:y`,
-  `dev:stats`, `phoenix` heartbeat), same events, same payloads as the Elixir socket. The frontend's
-  `phoenix` JS client connects unchanged; Vite proxies `/socket` to it.
-- **Sessions** (resolved): a connection that joins `player:<u>` *is* the session — it routes intent in
-  (`move`/`harvest`/`build`/`damage`) and the tick loop pushes the View window out. The client joins a
-  3×3 of `chunk:x:y` topics; the server broadcasts each subscribed chunk's full `snapshot` every
-  `BROADCAST_EVERY` ticks and routes `self`/`relocated` to the owning player. No per-player server object
-  is needed beyond the connection's `ConnState`.
+- **Wire-compatible Phoenix Channels v2 server**: same topics, events, and payloads as the Elixir socket
+  (see `sim/README.md` for the module layout and topic list), so the frontend's `phoenix` JS client
+  connects unchanged through Vite's `/socket` proxy.
+- **Sessions** (resolved): a connection that joins its `player` channel *is* the session — it routes
+  intent in and the tick loop pushes the View window out. The client subscribes to a 3×3 of chunk topics;
+  the server broadcasts each subscribed chunk's full `snapshot` every `BROADCAST_EVERY` ticks and routes
+  `self`/`relocated` to the owning player. No per-player server object is needed beyond the connection's
+  channel state.
 - **Delta ↔ contract mapping** (resolved): the wire carries full per-chunk `snapshot` payloads (the
   current Elixir behaviour), built from the same entity states as the changed-only deltas, so they can't
-  disagree. A `tests/contract.rs` validator checks every emitted payload (snapshot/self/relocated/stats)
-  against `contract.json` directly.
+  disagree. A conformance validator checks every emitted payload against `contract.json` directly.
 - **`unsafe` validation** (resolved): not applicable — Phase 2 needs no `unsafe` (see above), so there is
   no disjoint-access boundary to validate with miri/loom; the parallel-equals-serial stress tests cover it.
 - **dev:stats** maps chunk lifecycle to hot (cluster-owned) / cold; the cluster model has no idle-armed
@@ -220,10 +203,9 @@ Phase 4 (observation & transport):
 ## Verdict (after Phases 0–4)
 
 The interaction-clustered model is **proven and fully wire/feature-compatible** with the Elixir
-implementation, on a radically different internal structure (one shared ECS world per realm, clusters by
-interaction locality, a serialized Labeler, no per-chunk processes, no message handoffs). Never-under-merge
-holds by construction; the single-core dense-cluster ceiling is generous (~0.085 ms/tick at 500×1500);
-parallelism is sound with zero `unsafe`. Remaining work is real-DB persistence and NPC/combat (deferred).
+implementation, on the radically different internal structure described above. Never-under-merge holds by
+construction; the single-core dense-cluster ceiling is generous (~0.085 ms/tick at 500×1500); parallelism
+is sound with zero `unsafe`. Remaining work is real-DB persistence and NPC/combat (deferred).
 
 ## Open questions (remaining)
 
