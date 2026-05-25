@@ -427,6 +427,30 @@ impl RealmWorld {
         self.wire_index.get(wid).copied()
     }
 
+    /// Number of chunks currently owned by some cluster (the "hot" chunks).
+    pub fn owned_chunk_count(&self) -> usize {
+        self.labeler.owned_chunks().count()
+    }
+
+    /// Whether `coord` is owned by a cluster (hot).
+    pub fn is_chunk_hot(&self, coord: ChunkCoord) -> bool {
+        self.labeler.owner_of_chunk(coord).is_some()
+    }
+
+    /// Count of positioned entities whose position falls in `coord`.
+    pub fn entity_count_in(&self, coord: ChunkCoord) -> usize {
+        self.world
+            .query::<&Position>()
+            .iter()
+            .filter(|(_, p)| p.chunk() == coord)
+            .count()
+    }
+
+    /// All entity wire states (for snapshot/delta building by the Sim layer).
+    pub fn snapshot_states(&self) -> BTreeMap<WireId, crate::wire::EntityWire> {
+        crate::wire::entity_states(self)
+    }
+
     pub fn player_positions(&self) -> Vec<(i64, i64)> {
         self.world
             .query::<(&Position, &PlayerControlled)>()

@@ -9,9 +9,31 @@
 
 use crate::components::*;
 use crate::geometry::ChunkCoord;
+use crate::ids::Realm;
 use crate::world::RealmWorld;
 use serde::Serialize;
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
+
+/// The `self` event payload: `{"inventory": {"wood": 3, ...}}` (string-keyed).
+pub fn inventory_payload(inv: &Inventory) -> Value {
+    let items: BTreeMap<String, u32> =
+        inv.items.iter().map(|(k, v)| (k.as_str().to_string(), *v)).collect();
+    json!({ "inventory": items })
+}
+
+/// Serialize a realm to the contract's `relocated.realm` shape.
+pub fn realm_value(realm: Realm) -> Value {
+    match realm {
+        Realm::Overworld => json!({ "kind": "overworld" }),
+        Realm::Instance(id) => json!({ "kind": "instance", "id": id }),
+    }
+}
+
+/// The `relocated` event payload: `{"realm": {...}, "coord": [cx, cy]}`.
+pub fn relocated_payload(realm: Realm, coord: ChunkCoord) -> Value {
+    json!({ "realm": realm_value(realm), "coord": [coord.cx, coord.cy] })
+}
 
 /// The observable state of one entity, keyed on the wire by its [`WireId`].
 /// Equality drives changed-only delta diffing.

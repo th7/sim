@@ -449,6 +449,25 @@ impl Sim {
             .collect()
     }
 
+    /// Total hot chunks across all realms — the `stats.active_chunks` value.
+    pub fn active_chunk_count(&self) -> usize {
+        self.overworld.owned_chunk_count()
+            + self.instances.values().map(|i| i.owned_chunk_count()).sum::<usize>()
+    }
+
+    /// Connected player count — the `stats.total_players` value.
+    pub fn player_count(&self) -> usize {
+        self.player_realm.len()
+    }
+
+    /// `(hot, entity_count)` for `coord` in `realm` — for the dev overlay ring.
+    pub fn chunk_status(&self, realm: Realm, coord: ChunkCoord) -> (bool, usize) {
+        match self.realm_world(realm) {
+            Some(rw) => (rw.is_chunk_hot(coord), rw.entity_count_in(coord)),
+            None => (false, 0),
+        }
+    }
+
     fn instance_is_empty(&self, id: u64) -> bool {
         !self
             .player_realm

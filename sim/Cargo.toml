@@ -8,6 +8,13 @@ description = "Interaction-clustered simulation — Rust shared-memory prototype
 hecs = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
 
 [dev-dependencies]
 

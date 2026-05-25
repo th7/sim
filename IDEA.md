@@ -197,10 +197,37 @@ Phase 3 (persistence):
   (`Sim::into_store` → `Sim::with_persistence`). Depletion respawn time is sim-clock-relative — true
   cross-restart wall-clock timing needs clock persistence (deferred).
 
-## Open questions
+Phase 4 (observation & transport):
 
-- **Sessions**: shape of the per-player endpoint; how it feeds intent and pulls the view window. (Phase 4.)
-- **Delta ↔ contract mapping**: exact correspondence between cluster deltas and the committed wire schemas.
-- **`unsafe` validation strategy**: how far to push `miri`/`loom`/stress on the disjoint-access boundary.
-- Whether, after the POC, this path is worth pursuing over ADR-0001's BEAM design — explicitly a decision
-  to make *after* Phase 1–2 give us the model-correctness result and the single-core ceiling number.
+- **Wire-compatible Phoenix Channels v2 server** (`phx.rs` codec, `server.rs` routing, `transport.rs`
+  async runtime, `bin/server.rs`). Same topics (`player:<u>`, `chunk:x:y`, `instance:<id>:chunk:x:y`,
+  `dev:stats`, `phoenix` heartbeat), same events, same payloads as the Elixir socket. The frontend's
+  `phoenix` JS client connects unchanged; Vite proxies `/socket` to it.
+- **Sessions** (resolved): a connection that joins `player:<u>` *is* the session — it routes intent in
+  (`move`/`harvest`/`build`/`damage`) and the tick loop pushes the View window out. The client joins a
+  3×3 of `chunk:x:y` topics; the server broadcasts each subscribed chunk's full `snapshot` every
+  `BROADCAST_EVERY` ticks and routes `self`/`relocated` to the owning player. No per-player server object
+  is needed beyond the connection's `ConnState`.
+- **Delta ↔ contract mapping** (resolved): the wire carries full per-chunk `snapshot` payloads (the
+  current Elixir behaviour), built from the same entity states as the changed-only deltas, so they can't
+  disagree. A `tests/contract.rs` validator checks every emitted payload (snapshot/self/relocated/stats)
+  against `contract.json` directly.
+- **`unsafe` validation** (resolved): not applicable — Phase 2 needs no `unsafe` (see above), so there is
+  no disjoint-access boundary to validate with miri/loom; the parallel-equals-serial stress tests cover it.
+- **dev:stats** maps chunk lifecycle to hot (cluster-owned) / cold; the cluster model has no idle-armed
+  timer, so `idle_ms_remaining` is always null — a documented divergence.
+
+## Verdict (after Phases 0–4)
+
+The interaction-clustered model is **proven and fully wire/feature-compatible** with the Elixir
+implementation, on a radically different internal structure (one shared ECS world per realm, clusters by
+interaction locality, a serialized Labeler, no per-chunk processes, no message handoffs). Never-under-merge
+holds by construction; the single-core dense-cluster ceiling is generous (~0.085 ms/tick at 500×1500);
+parallelism is sound with zero `unsafe`. Remaining work is real-DB persistence and NPC/combat (deferred).
+
+## Open questions (remaining)
+
+- **Real Datastore**: swap `MemStore` for Postgres behind the `DurableStore` trait; persist the sim clock
+  so depletion respawn timing survives a true process restart.
+- Whether to pursue this Rust path over ADR-0001's BEAM design — now a decision the POC can actually
+  inform: it works, it's deterministic by construction, and the single-core ceiling is high.
