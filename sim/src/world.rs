@@ -11,10 +11,11 @@
 use crate::catalogue::{resource_footprint, resource_yield, structure_footprint};
 use crate::collision::{clamp_step, Obstacle};
 use crate::components::*;
-use crate::consts::DEFAULT_SPEED;
+use crate::consts::{DAMAGE_PER_CLICK, DEFAULT_SPEED, RESPAWN_MS};
 use crate::geometry::{coord_for, ChunkCoord};
 use crate::ids::{ActorId, ClusterId, Realm};
 use crate::labeler::{Labeler, TopologyEvent};
+use crate::verbs::VerbError;
 use crate::worldgen;
 use hecs::{Entity, World};
 use std::collections::{BTreeMap, BTreeSet};
@@ -306,6 +307,166 @@ impl RealmWorld {
             let _ = self.world.despawn(e);
         }
     }
+
+    pub fn inventory_of(&self, username: &str) -> Option<Inventory> {
+        let e = self.username_index.get(username)?;
+        self.world.get::<&Inventory>(*e).ok().map(|i| (*i).clone())
+    }
+
+    /// Obstacles in the chunks owned by `username`'s cluster (for build checks).
+    fn obstacles_for_cluster_of(&self, username: &str) -> Vec<Obstacle> {
+        match self.cluster_of_username(username).and_then(|c| self.labeler.cluster(c)) {
+            Some(cluster) => self.obstacles_in(&cluster.chunk_set),
+            None => Vec::new(),
+        }
+    }
+
+    // --- Verbs (mirroring GameCore.Chunk's with-chains in order) ---
+
+    /// Harvest the tree at `(tx, ty)`. Adds one yield to the player's inventory
+    /// and depletes the node (respawns after [`RESPAWN_MS`]). Returns the new
+    /// inventory on success. Check order: no_player → too_far → no_target/depleted.
+    pub fn harvest(
+        &mut self,
+        username: &str,
+        tx: i64,
+        ty: i64,
+        clock_ms: u64,
+    ) -> Result<Inventory, VerbError> {
+        let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(VerbError::NoPlayer)?;
+        if !in_range(px, py, tx, ty) {
+            return Err(VerbError::TooFar);
+        }
+        let node_wid = WireId(format!("tree:{tx}:{ty}"));
+        let node = self.wire_index.get(&node_wid).copied().ok_or(VerbError::NoTarget)?;
+
+        let (kind, item) = {
+            match self.world.get::<&Gatherable>(node) {
+                Ok(g) => (g.kind, g.yields),
+                Err(_) => {
+                    // Present but not gatherable → depleted (or no_target).
+                    return if self.world.get::<&Depleted>(node).is_ok() {
+                        Err(VerbError::Depleted)
+                    } else {
+                        Err(VerbError::NoTarget)
+                    };
+                }
+            }
+        };
+
+        // Yield +1 to inventory.
+        let player_e = self.username_index[username];
+        {
+            let mut inv = self.world.get::<&mut Inventory>(player_e).map_err(|_| VerbError::NoPlayer)?;
+            *inv.items.entry(item).or_insert(0) += 1;
+        }
+        // Deplete the node.
+        let _ = self.world.remove_one::<Gatherable>(node);
+        let _ = self.world.insert_one(
+            node,
+            Depleted { kind, respawn_at_ms: clock_ms + RESPAWN_MS },
+        );
+
+        Ok(self.inventory_of(username).unwrap_or_default())
+    }
+
+    /// Build a structure of `kind` at `(x, y)`. Check order (the realm/instance
+    /// gate is applied by the caller): out_of_chunk → footprint_blocked →
+    /// no_player → insufficient_materials. Returns the new inventory.
+    pub fn build(
+        &mut self,
+        username: &str,
+        kind: StructureKind,
+        x: i64,
+        y: i64,
+    ) -> Result<Inventory, VerbError> {
+        // Build cell must be in the player's current chunk.
+        let player_pos = self.position_of(username).ok_or(VerbError::NoPlayer)?;
+        if coord_for(x, y) != player_pos.chunk() {
+            return Err(VerbError::OutOfChunk);
+        }
+
+        // Footprint clear of obstacles and player bodies.
+        let fp = crate::catalogue::structure_footprint(kind);
+        let (w, h) = match fp {
+            Footprint::Aabb { w, h } => (w, h),
+            Footprint::Circle { radius } => (radius * 2, radius * 2),
+        };
+        let obstacles = self.obstacles_for_cluster_of(username);
+        let players = self.player_positions();
+        if crate::collision::aabb_blocked(x, y, w, h, &obstacles, &players) {
+            return Err(VerbError::FootprintBlocked);
+        }
+
+        // Materials.
+        let player_e = self.username_index[username];
+        {
+            let inv = self.world.get::<&Inventory>(player_e).map_err(|_| VerbError::NoPlayer)?;
+            for &(item, qty) in crate::catalogue::cost(kind) {
+                if inv.items.get(&item).copied().unwrap_or(0) < qty {
+                    return Err(VerbError::InsufficientMaterials);
+                }
+            }
+        }
+        {
+            let mut inv = self.world.get::<&mut Inventory>(player_e).unwrap();
+            for &(item, qty) in crate::catalogue::cost(kind) {
+                let e = inv.items.entry(item).or_insert(0);
+                *e -= qty;
+            }
+        }
+
+        let hp = crate::catalogue::max_hp(kind);
+        self.insert_structure(x, y, kind, username, hp);
+        Ok(self.inventory_of(username).unwrap_or_default())
+    }
+
+    /// Damage the structure at `(x, y)` by [`DAMAGE_PER_CLICK`]. Destroys it at
+    /// ≤0 HP. Check order: no_player → too_far → no_target. Returns the
+    /// structure's remaining HP (`None` if destroyed).
+    pub fn damage(&mut self, username: &str, x: i64, y: i64) -> Result<Option<i64>, VerbError> {
+        let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(VerbError::NoPlayer)?;
+        if !in_range(px, py, x, y) {
+            return Err(VerbError::TooFar);
+        }
+        let wid = WireId(format!("structure:{x}:{y}"));
+        let e = self.wire_index.get(&wid).copied().ok_or(VerbError::NoTarget)?;
+        // Confirm it is a structure at exactly (x, y).
+        let new_hp = {
+            let s = self.world.get::<&Structure>(e).map_err(|_| VerbError::NoTarget)?;
+            s.hp - DAMAGE_PER_CLICK
+        };
+        if new_hp > 0 {
+            if let Ok(mut s) = self.world.get::<&mut Structure>(e) {
+                s.hp = new_hp;
+            }
+            Ok(Some(new_hp))
+        } else {
+            self.despawn_wire(&wid);
+            Ok(None)
+        }
+    }
+
+    /// Portals in this realm a player at `(px, py)` currently overlaps, with the
+    /// portal's direction and position. Used for Instance entry/exit triggers.
+    pub fn overlapping_portals(&self, px: i64, py: i64) -> Vec<(PortalDirection, i64, i64)> {
+        let mut out = Vec::new();
+        for (_e, (pos, portal)) in self.world.query::<(&Position, &Portal)>().iter() {
+            let dx = px - pos.x;
+            let dy = py - pos.y;
+            if dx * dx + dy * dy <= crate::consts::PORTAL_OVERLAP_RANGE_SQ {
+                out.push((portal.direction, pos.x, pos.y));
+            }
+        }
+        out
+    }
+}
+
+/// Within interact range (1.0 world unit) of a target, by squared distance.
+fn in_range(px: i64, py: i64, tx: i64, ty: i64) -> bool {
+    let dx = px - tx;
+    let dy = py - ty;
+    dx * dx + dy * dy <= crate::consts::INTERACT_RANGE_SQ
 }
 
 /// Bounds of an Instance: its 3×3 grid in instance-local sub-units.

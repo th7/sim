@@ -21,6 +21,7 @@ pub mod ids;
 pub mod labeler;
 pub mod repack;
 pub mod sim;
+pub mod verbs;
 pub mod wire;
 pub mod world;
 pub mod worldgen;

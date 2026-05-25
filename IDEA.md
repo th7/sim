@@ -133,6 +133,32 @@ settled.)
   full chunk of margin this is many ticks, so it's cheap.
 - **Tick-time** smoothed (EWMA); repack thresholds banded (e.g. split a worker >~75%, consolidate <~20%).
 
+## Build log — decisions made during implementation
+
+The prototype lives in `/sim` (Rust). Decisions resolved while building Phase 0/1:
+
+- **Merge predicate = chunk-set *overlap* (share a chunk), not "border".** The prose said "share or
+  border"; the precise, sound rule is *overlap* — it captures every interacting pair (interaction
+  range ≤ chunk_size ⇒ interacting actors' footprints share chunks) with a full chunk of margin.
+  The hysteresis band is exactly **Chebyshev distance 3** between two actors' chunks: at ≤2 their
+  footprints overlap (merge); at 3 they border (one connected component — no split, no merge); at ≥4
+  they disconnect (split). Merged at ≤2, stays merged through 3, splits at ≥4 — churn-free.
+- **Reconcile-to-canonical after every mutation.** Each insert/move/remove recomputes the partition to
+  its canonical form (two actors co-cluster iff their footprints transitively overlap), so
+  never-under-merge holds *by construction*, verified against an oracle and a 16-seed property test.
+  Cluster ids are preserved incrementally: a merge survivor keeps the lower id; a split keeps the id on
+  its largest child.
+- **Cross-chunk collision is now correct.** A cluster owns its actors' full 3×3, so collision sees
+  obstacles in neighbouring chunks — the intended resolution of the Elixir per-chunk "clip-and-stop"
+  artifact (CONTEXT.md). A blessed divergence, identical away from chunk boundaries.
+- **Determinism** comes from an explicit sim clock, `BTreeMap`/`BTreeSet` ordering everywhere, and
+  ticking clusters in id order. Depletion respawn uses sim-clock ms, not wall-clock `DateTime`.
+- **Wire still carries full per-chunk `snapshot` events** (current Elixir behaviour); the changed-only
+  deltas are the internal read-model feed (`delta.rs`), derived from the same entity states as the
+  snapshot so they can't disagree.
+- **Chunk hydration is lazy on cluster ownership.** Deactivation/persistence of cold chunks is deferred
+  to Phase 3.
+
 ## Open questions
 
 - **Sessions**: shape of the per-player endpoint; how it feeds intent and pulls the view window. (Phase 4.)

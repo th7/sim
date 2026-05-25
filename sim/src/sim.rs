@@ -7,12 +7,23 @@
 //! prove the cluster model: movement, crossings, merges, splits, and the
 //! never-under-merge invariant.
 
-use crate::components::{Inventory, Position};
+use crate::components::{Inventory, Position, PortalDirection, StructureKind};
 use crate::consts::TICK_MS;
-use crate::geometry::{chunk_center, ChunkCoord};
+use crate::geometry::{chunk_center, coord_for, ChunkCoord};
 use crate::ids::{ClusterId, Realm};
+use crate::verbs::VerbError;
 use crate::world::{instance_bounds, RealmWorld};
+use crate::worldgen;
 use std::collections::BTreeMap;
+
+/// A per-player server→client event the transport layer (Phase 4) pushes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutboundEvent {
+    /// The player's inventory changed (the `self` wire event).
+    SelfInventory { username: String, inventory: Inventory },
+    /// The player changed realm/chunk (the `relocated` wire event).
+    Relocated { username: String, realm: Realm, coord: ChunkCoord },
+}
 
 pub struct Sim {
     clock_ms: u64,
@@ -20,6 +31,9 @@ pub struct Sim {
     overworld: RealmWorld,
     instances: BTreeMap<u64, RealmWorld>,
     player_realm: BTreeMap<String, Realm>,
+    /// Per-player Instance return info: `(entry chunk, entry portal pos)`.
+    return_to: BTreeMap<String, (ChunkCoord, (i64, i64))>,
+    pending: Vec<OutboundEvent>,
     next_instance: u64,
 }
 
@@ -37,6 +51,8 @@ impl Sim {
             overworld: RealmWorld::new(Realm::Overworld, None),
             instances: BTreeMap::new(),
             player_realm: BTreeMap::new(),
+            return_to: BTreeMap::new(),
+            pending: Vec::new(),
             next_instance: 1,
         }
     }
@@ -68,6 +84,7 @@ impl Sim {
     }
 
     pub fn disconnect(&mut self, username: &str) {
+        self.return_to.remove(username);
         if let Some(realm) = self.player_realm.remove(username) {
             if let Some(rw) = self.realm_world_mut(realm) {
                 rw.remove_player(username);
@@ -89,7 +106,8 @@ impl Sim {
         }
     }
 
-    /// Advance the whole world by one tick.
+    /// Advance the whole world by one tick: movement + topology reconcile in
+    /// every realm, then Instance entry/exit for any player overlapping a portal.
     pub fn tick(&mut self) {
         self.clock_ms += TICK_MS;
         self.tick_count += 1;
@@ -97,6 +115,132 @@ impl Sim {
         for inst in self.instances.values_mut() {
             inst.tick(TICK_MS, self.clock_ms);
         }
+        self.process_portals();
+    }
+
+    /// Drain the queued per-player outbound events (for the transport layer).
+    pub fn drain_events(&mut self) -> Vec<OutboundEvent> {
+        std::mem::take(&mut self.pending)
+    }
+
+    // --- Verbs ---
+
+    pub fn inventory_of(&self, username: &str) -> Option<Inventory> {
+        let realm = self.realm_of(username)?;
+        self.realm_world(realm)?.inventory_of(username)
+    }
+
+    pub fn harvest(&mut self, username: &str, tx: i64, ty: i64) -> Result<(), VerbError> {
+        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
+        let clock = self.clock_ms;
+        let rw = self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?;
+        let inv = rw.harvest(username, tx, ty, clock)?;
+        self.pending.push(OutboundEvent::SelfInventory {
+            username: username.to_string(),
+            inventory: inv,
+        });
+        Ok(())
+    }
+
+    pub fn build(
+        &mut self,
+        username: &str,
+        kind: StructureKind,
+        x: i64,
+        y: i64,
+    ) -> Result<(), VerbError> {
+        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
+        if let Realm::Instance(_) = realm {
+            return Err(VerbError::NoBuildInInstance);
+        }
+        let rw = self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?;
+        let inv = rw.build(username, kind, x, y)?;
+        self.pending.push(OutboundEvent::SelfInventory {
+            username: username.to_string(),
+            inventory: inv,
+        });
+        Ok(())
+    }
+
+    pub fn damage(&mut self, username: &str, x: i64, y: i64) -> Result<(), VerbError> {
+        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
+        let rw = self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?;
+        rw.damage(username, x, y)?;
+        Ok(())
+    }
+
+    // --- Instance transitions (portal-triggered) ---
+
+    fn process_portals(&mut self) {
+        // Collect one trigger per player (post-movement positions).
+        let mut triggers: Vec<(String, Realm, PortalDirection, i64, i64)> = Vec::new();
+        for (username, &realm) in &self.player_realm {
+            if let Some(rw) = self.realm_world(realm) {
+                if let Some(pos) = rw.position_of(username) {
+                    if let Some(&(dir, px, py)) = rw.overlapping_portals(pos.x, pos.y).first() {
+                        triggers.push((username.clone(), realm, dir, px, py));
+                    }
+                }
+            }
+        }
+        for (username, realm, dir, px, py) in triggers {
+            match (dir, realm) {
+                (PortalDirection::IntoInstance, Realm::Overworld) => {
+                    self.enter_instance(&username, px, py);
+                }
+                (PortalDirection::OutOfInstance, Realm::Instance(id)) => {
+                    self.exit_instance(&username, id);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Move `username` from the Overworld into a fresh Instance, spawning west of
+    /// the return portal. `(entry_px, entry_py)` is the entry portal's position,
+    /// cached for the symmetric exit.
+    fn enter_instance(&mut self, username: &str, entry_px: i64, entry_py: i64) {
+        let Some((_pos, inv)) = self.overworld.remove_player(username) else { return };
+        let from_coord = coord_for(entry_px, entry_py);
+        let id = self.start_instance();
+        let (rpx, rpy) = worldgen::return_portal_pos();
+        let spawn = Position { x: rpx - 1_000, y: rpy };
+        if let Some(rw) = self.instances.get_mut(&id) {
+            rw.spawn_player(username, spawn, inv);
+        }
+        self.player_realm.insert(username.to_string(), Realm::Instance(id));
+        self.return_to.insert(username.to_string(), (from_coord, (entry_px, entry_py)));
+        self.pending.push(OutboundEvent::Relocated {
+            username: username.to_string(),
+            realm: Realm::Instance(id),
+            coord: spawn.chunk(),
+        });
+    }
+
+    /// Move `username` from Instance `id` back to the Overworld, re-emerging west
+    /// of the entry portal, and tear the Instance down if now empty.
+    fn exit_instance(&mut self, username: &str, id: u64) {
+        let inv = self
+            .instances
+            .get_mut(&id)
+            .and_then(|rw| rw.remove_player(username))
+            .map(|(_p, i)| i)
+            .unwrap_or_default();
+        let (_from_coord, (epx, epy)) = self
+            .return_to
+            .remove(username)
+            .unwrap_or((ChunkCoord::new(0, 0), (4_000, 4_000)));
+        let spawn = Position { x: epx - 1_000, y: epy };
+        self.overworld.spawn_player(username, spawn, inv);
+        self.player_realm.insert(username.to_string(), Realm::Overworld);
+        if self.instance_is_empty(id) {
+            self.instances.remove(&id);
+        }
+        self.pending.push(OutboundEvent::Relocated {
+            username: username.to_string(),
+            realm: Realm::Overworld,
+            coord: spawn.chunk(),
+        });
     }
 
     // --- queries ---
@@ -170,9 +314,5 @@ impl Sim {
         self.instances
             .insert(id, RealmWorld::new(Realm::Instance(id), Some(instance_bounds())));
         id
-    }
-
-    pub(crate) fn set_player_realm(&mut self, username: &str, realm: Realm) {
-        self.player_realm.insert(username.to_string(), realm);
     }
 }
