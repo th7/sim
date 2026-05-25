@@ -10,10 +10,17 @@
 //! under `apps/`, but its internal structure is entirely different: there are
 //! no per-chunk processes and no message handoffs.
 
+pub mod catalogue;
 pub mod chunkgraph;
+pub mod collision;
+pub mod components;
 pub mod geometry;
+pub mod harness;
 pub mod ids;
 pub mod labeler;
+pub mod sim;
+pub mod world;
+pub mod worldgen;
 
 /// Game-wide constants, matching the Elixir implementation's values exactly.
 pub mod consts {
