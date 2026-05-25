@@ -35,6 +35,7 @@ pub struct Sim {
     return_to: BTreeMap<String, (ChunkCoord, (i64, i64))>,
     pending: Vec<OutboundEvent>,
     next_instance: u64,
+    pool: Option<crate::parallel::WorkerPool>,
 }
 
 impl Default for Sim {
@@ -54,7 +55,15 @@ impl Sim {
             return_to: BTreeMap::new(),
             pending: Vec::new(),
             next_instance: 1,
+            pool: None,
         }
+    }
+
+    /// Attach a persistent worker pool of `workers` threads. Subsequent
+    /// [`Sim::tick_parallel`] calls dispatch cluster movement to it instead of
+    /// spawning threads per tick. Output is unchanged (still equals [`Sim::tick`]).
+    pub fn enable_pool(&mut self, workers: usize) {
+        self.pool = Some(crate::parallel::WorkerPool::new(workers));
     }
 
     pub fn clock_ms(&self) -> u64 {
@@ -114,6 +123,32 @@ impl Sim {
         self.overworld.tick(TICK_MS, self.clock_ms);
         for inst in self.instances.values_mut() {
             inst.tick(TICK_MS, self.clock_ms);
+        }
+        self.process_portals();
+    }
+
+    /// Advance the whole world by one tick, ticking each realm's clusters across
+    /// a pool of `workers` threads under per-worker tick-time `budget` (seconds).
+    /// Produces state identical to [`Sim::tick`] for any `workers`/`budget`.
+    pub fn tick_parallel(&mut self, workers: usize, budget: f64) {
+        self.clock_ms += TICK_MS;
+        self.tick_count += 1;
+        let dt = TICK_MS as f64 / 1000.0;
+        let clock = self.clock_ms;
+
+        let tick_realm = |rw: &mut RealmWorld| {
+            let jobs = rw.movement_jobs();
+            let assignment = rw.repack_assignment(budget);
+            let results = match &self.pool {
+                Some(pool) => pool.run(jobs, &assignment, dt),
+                None => crate::parallel::execute(jobs, &assignment, workers, dt),
+            };
+            rw.apply_movement(results, clock);
+        };
+
+        tick_realm(&mut self.overworld);
+        for inst in self.instances.values_mut() {
+            tick_realm(inst);
         }
         self.process_portals();
     }

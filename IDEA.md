@@ -159,6 +159,27 @@ The prototype lives in `/sim` (Rust). Decisions resolved while building Phase 0/
 - **Chunk hydration is lazy on cluster ownership.** Deactivation/persistence of cold chunks is deferred
   to Phase 3.
 
+Phase 2 (parallelism):
+
+- **No `unsafe` was needed.** IDEA.md anticipated "disjoint `&mut` into the shared world behind a
+  documented `unsafe` API". In practice the dominant cost is the collision *compute*
+  (O(movers × obstacles)), not the position write-back, so each cluster's inputs are **extracted** to
+  owned data, computed across a worker pool with no shared access (trivially `Send`, zero `unsafe`),
+  and **applied** serially. This gives the model's parallelism profile while keeping soundness *by
+  construction* rather than by an `unsafe` precondition a Labeler bug could violate — strictly better
+  for the determinism this project wants. The cluster disjointness is still load-bearing (it's what
+  makes the jobs independent). hecs's per-column borrow model also makes per-entity disjoint `&mut`
+  from multiple threads impossible without replacing the ECS, which independently rules the raw-pointer
+  approach out. Result asserted identical to the serial tick across worker counts {1,2,3,8} and a
+  pooled `Sim`, over a 250-tick random walk with the invariant checked every tick.
+- **Persistent worker pool**, not per-tick spawn. The compute is so cheap that spawning OS threads each
+  tick loses (measured 0.25–0.74×); a reused pool (IDEA's "workers self-tick") wins.
+- **Measured single-core dense-cluster ceiling ≈ 0.085 ms/tick** for 500 movers × 1500 obstacles —
+  vs a 20 Hz budget of 50 ms/tick. The accepted one-core floor is very generous: a single indivisible
+  dense cluster has ~600× headroom at that density. **Parallel scaling ≈ 3.2×** across 10 cores on 96
+  independent clusters (sublinear: dispatch overhead + sub-ms work). Takeaway: the model runs
+  comfortably single-threaded at realistic loads; the pool is a tail-load accelerator.
+
 ## Open questions
 
 - **Sessions**: shape of the per-player endpoint; how it feeds intent and pulls the view window. (Phase 4.)

@@ -35,6 +35,8 @@ pub struct RealmWorld {
     actor_index: BTreeMap<ActorId, Entity>,
     wire_index: BTreeMap<WireId, Entity>,
     next_actor: u64,
+    /// EWMA of per-cluster tick wall-time (seconds), feeding the repack policy.
+    cluster_times: BTreeMap<ClusterId, f64>,
 }
 
 impl RealmWorld {
@@ -49,6 +51,7 @@ impl RealmWorld {
             actor_index: BTreeMap::new(),
             wire_index: BTreeMap::new(),
             next_actor: 0,
+            cluster_times: BTreeMap::new(),
         }
     }
 
@@ -220,7 +223,92 @@ impl RealmWorld {
             }
         }
 
-        // 2. Crossings → Labeler reconcile.
+        self.reconcile_after_movement(clock_ms)
+    }
+
+    /// Advance the realm by one tick using a worker pool of `worker_count`
+    /// threads. Movement compute is parallel across clusters (assigned by the
+    /// repack policy on cluster tick-times); topology reconcile stays serial in
+    /// the Labeler. The result is identical to [`RealmWorld::tick`] regardless
+    /// of `worker_count` — positions are applied in deterministic order.
+    pub fn tick_parallel(
+        &mut self,
+        dt_ms: u64,
+        clock_ms: u64,
+        worker_count: usize,
+        budget: f64,
+    ) -> Vec<TopologyEvent> {
+        let dt = dt_ms as f64 / 1000.0;
+        let jobs = self.movement_jobs();
+        let assignment = self.repack_assignment(budget);
+        let results = crate::parallel::execute(jobs, &assignment, worker_count, dt);
+        self.apply_movement(results, clock_ms)
+    }
+
+    /// Extract one owned movement job per cluster (read-only). Safe to hand to
+    /// worker threads — distinct clusters are entity-disjoint by construction.
+    pub fn movement_jobs(&self) -> Vec<crate::parallel::ClusterJob> {
+        self.labeler
+            .clusters()
+            .map(|cluster| {
+                let obstacles = self.obstacles_in(&cluster.chunk_set);
+                let movers = cluster
+                    .actors
+                    .iter()
+                    .filter_map(|a| {
+                        let e = *self.actor_index.get(a)?;
+                        let p = self.world.get::<&Position>(e).ok()?;
+                        let v = self.world.get::<&Velocity>(e).ok()?;
+                        Some((e, p.x, p.y, v.vx, v.vy))
+                    })
+                    .collect();
+                crate::parallel::ClusterJob { cid: cluster.id, obstacles, movers, bounds: self.bounds }
+            })
+            .collect()
+    }
+
+    /// Repack assignment (`cluster → worker`) from the smoothed cluster
+    /// tick-times under `budget`.
+    pub fn repack_assignment(&self, budget: f64) -> BTreeMap<ClusterId, u32> {
+        let times: BTreeMap<ClusterId, f64> = self
+            .labeler
+            .clusters()
+            .map(|c| (c.id, self.cluster_times.get(&c.id).copied().unwrap_or(0.0)))
+            .collect();
+        crate::repack::repack(&times, budget).into_iter().map(|(c, w)| (c, w.0)).collect()
+    }
+
+    /// Apply computed cluster movement (deterministic order), update tick-time
+    /// EWMAs, then run the serial topology reconcile + respawn.
+    pub fn apply_movement(
+        &mut self,
+        results: BTreeMap<ClusterId, crate::parallel::ClusterResult>,
+        clock_ms: u64,
+    ) -> Vec<TopologyEvent> {
+        for (cid, result) in &results {
+            let smoothed = crate::repack::ewma(
+                self.cluster_times.get(cid).copied().unwrap_or(result.elapsed_secs),
+                result.elapsed_secs,
+            );
+            self.cluster_times.insert(*cid, smoothed);
+            for &(e, nx, ny) in &result.positions {
+                if let Ok(mut p) = self.world.get::<&mut Position>(e) {
+                    p.x = nx;
+                    p.y = ny;
+                }
+            }
+        }
+        let live: std::collections::BTreeSet<ClusterId> =
+            self.labeler.clusters().map(|c| c.id).collect();
+        self.cluster_times.retain(|c, _| live.contains(c));
+
+        self.reconcile_after_movement(clock_ms)
+    }
+
+    /// Detect chunk crossings, let the Labeler reconcile (merge/split), hydrate
+    /// any newly-owned chunks, and respawn due resource nodes. Shared by the
+    /// serial and parallel ticks; this is the serialized Labeler domain.
+    fn reconcile_after_movement(&mut self, clock_ms: u64) -> Vec<TopologyEvent> {
         let mut events = Vec::new();
         let crossings: Vec<(ActorId, ChunkCoord)> = self
             .actor_index
@@ -238,10 +326,7 @@ impl RealmWorld {
         if !events.is_empty() {
             self.hydrate_owned_chunks();
         }
-
-        // 3. Respawn due resource nodes.
         self.respawn_due(clock_ms);
-
         events
     }
 

@@ -19,6 +19,7 @@ pub mod geometry;
 pub mod harness;
 pub mod ids;
 pub mod labeler;
+pub mod parallel;
 pub mod repack;
 pub mod sim;
 pub mod verbs;
