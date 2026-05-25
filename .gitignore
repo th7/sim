@@ -27,3 +27,6 @@ erl_crash.dump
 /node_modules/
 /test-results/
 /playwright-report/
+
+# Rust build output for the /sim crate
+/sim/target/
