@@ -11,7 +11,7 @@
 use crate::catalogue::{resource_footprint, resource_yield, structure_footprint};
 use crate::collision::{clamp_step, Obstacle};
 use crate::components::*;
-use crate::consts::{DAMAGE_PER_CLICK, DEFAULT_SPEED, RESPAWN_MS};
+use crate::consts::{DAMAGE_PER_CLICK, DEFAULT_SPEED, IDLE_TIMEOUT_MS, RESPAWN_MS};
 use crate::datastore::{DepletionRecord, PersistEvent, PlayerRecord, StructureRecord};
 use crate::geometry::{coord_for, ChunkCoord};
 use crate::ids::{ActorId, ClusterId, Realm};
@@ -42,6 +42,9 @@ pub struct RealmWorld {
     persist_events: Vec<PersistEvent>,
     /// Chunks first hydrated since the last drain; Sim overlays persisted state.
     newly_loaded: Vec<ChunkCoord>,
+    /// Sim-clock time each loaded chunk was last owned by a cluster — drives
+    /// idle deactivation (a chunk unowned for IDLE_TIMEOUT_MS goes cold).
+    chunk_last_owned: BTreeMap<ChunkCoord, u64>,
 }
 
 impl RealmWorld {
@@ -59,6 +62,7 @@ impl RealmWorld {
             cluster_times: BTreeMap::new(),
             persist_events: Vec::new(),
             newly_loaded: Vec::new(),
+            chunk_last_owned: BTreeMap::new(),
         }
     }
 
@@ -396,7 +400,48 @@ impl RealmWorld {
             self.hydrate_owned_chunks();
         }
         self.respawn_due(clock_ms);
+        self.deactivate_idle_chunks(clock_ms);
         events
+    }
+
+    /// Unload chunks no cluster has owned for at least IDLE_TIMEOUT_MS — the
+    /// cluster-model analogue of Chunk deactivation. Despawns the chunk's static
+    /// content (it is re-seeded from worldgen + persistence on re-entry);
+    /// players are never in unowned chunks, so no dynamic state is lost.
+    fn deactivate_idle_chunks(&mut self, clock_ms: u64) {
+        let owned: BTreeSet<ChunkCoord> = self.labeler.owned_chunks().collect();
+        for c in &owned {
+            self.chunk_last_owned.insert(*c, clock_ms);
+        }
+        let stale: Vec<ChunkCoord> = self
+            .loaded
+            .iter()
+            .filter(|c| !owned.contains(c))
+            .filter(|c| {
+                let last = self.chunk_last_owned.get(c).copied().unwrap_or(0);
+                clock_ms.saturating_sub(last) >= IDLE_TIMEOUT_MS
+            })
+            .copied()
+            .collect();
+        for coord in stale {
+            self.unload_chunk(coord);
+        }
+    }
+
+    fn unload_chunk(&mut self, coord: ChunkCoord) {
+        let to_despawn: Vec<(Entity, WireId)> = self
+            .world
+            .query::<(&Position, &WireId, Option<&PlayerControlled>)>()
+            .iter()
+            .filter(|(_, (p, _, player))| p.chunk() == coord && player.is_none())
+            .map(|(e, (_, wid, _))| (e, wid.clone()))
+            .collect();
+        for (e, wid) in to_despawn {
+            self.wire_index.remove(&wid);
+            let _ = self.world.despawn(e);
+        }
+        self.loaded.remove(&coord);
+        self.chunk_last_owned.remove(&coord);
     }
 
     fn clamp_bounds(&self, x: i64, y: i64) -> (i64, i64) {

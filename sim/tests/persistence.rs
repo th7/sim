@@ -120,6 +120,41 @@ fn depletion_survives_restart() {
 }
 
 #[test]
+fn idle_chunk_deactivates_then_rehydrates_from_persistence() {
+    let mut sim = Sim::new();
+    let mut inv = Inventory::default();
+    inv.items.insert(Item::Wood, 5);
+    sim.connect_at("alice", at(2_700, 3_000), inv);
+    sim.build("alice", StructureKind::Wall, 3_500, 3_000).unwrap();
+
+    // A few ticks with alice present keep chunk (0,0) hot.
+    for _ in 0..5 {
+        sim.tick();
+    }
+    assert!(sim.chunk_status(Realm::Overworld, ChunkCoord::new(0, 0)).0, "hot while owned");
+
+    // Disconnect, then idle past the 5s deactivation window.
+    sim.disconnect("alice");
+    for _ in 0..110 {
+        sim.tick();
+    }
+    let (hot, count) = sim.chunk_status(Realm::Overworld, ChunkCoord::new(0, 0));
+    assert!(!hot, "chunk goes cold once unowned past the idle window");
+    assert_eq!(count, 0, "static content unloaded");
+
+    // Reconnect → chunk re-hydrates; the persisted wall comes back.
+    sim.connect("alice", ChunkCoord::new(0, 0));
+    assert!(sim.chunk_status(Realm::Overworld, ChunkCoord::new(0, 0)).0, "hot again");
+    let states = entity_states(sim.overworld());
+    assert!(
+        states.contains_key(&WireId("structure:3500:3000".into())),
+        "wall re-hydrated from persistence after deactivation"
+    );
+    // And worldgen content is back too.
+    assert!(states.contains_key(&WireId("tree:8000:8000".into())));
+}
+
+#[test]
 fn mid_instance_disconnect_resumes_west_of_entry_portal() {
     let mut sim = Sim::new();
     // Enter the instance via the entry portal at (4000,4000).
