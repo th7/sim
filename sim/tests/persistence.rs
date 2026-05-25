@@ -120,6 +120,26 @@ fn depletion_survives_restart() {
 }
 
 #[test]
+fn reconnect_replaces_prior_live_session() {
+    let mut sim = Sim::new();
+    sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
+    sim.harvest("alice", 8_000, 8_000).unwrap(); // wood 1
+
+    // A second connect for the same username (a reconnect race) must replace the
+    // old session, not duplicate it.
+    sim.connect("alice", ChunkCoord::new(0, 0));
+    assert_eq!(sim.player_count(), 1, "exactly one live session for the username");
+    // Resumed from the freshly-flushed live state: same chunk → exact position + wood.
+    assert_eq!(sim.position("alice"), Some(at(8_000, 8_000)));
+    assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&1));
+
+    // Exactly one player entity is on the wire.
+    let states = entity_states(sim.overworld());
+    let players = states.values().filter(|s| matches!(s, EntityWire::Player { .. })).count();
+    assert_eq!(players, 1, "no duplicate player entity left behind");
+}
+
+#[test]
 fn idle_chunk_deactivates_then_rehydrates_from_persistence() {
     let mut sim = Sim::new();
     let mut inv = Inventory::default();

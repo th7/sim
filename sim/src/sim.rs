@@ -103,6 +103,10 @@ impl Sim {
     /// their saved inventory (empty if never seen). Mirrors the Elixir
     /// `hydrate_player`.
     pub fn connect(&mut self, username: &str, initial_chunk: ChunkCoord) {
+        // Clean reconnect: tear down any live session for this username first
+        // (flushing its position), so the resume below reads the freshest state
+        // and no duplicate entity lingers. Mirrors the Elixir PlayerChannel.
+        self.disconnect_if_present(username);
         let (pos, inv) = match self.datastore.fetch_player(username) {
             Some(rec) if rec.chunk == initial_chunk => {
                 (Position { x: rec.x, y: rec.y }, Inventory { items: rec.inventory })
@@ -131,7 +135,15 @@ impl Sim {
         self.spawn_overworld(username, pos, inv);
     }
 
+    /// Disconnect a username if it currently has a live session anywhere.
+    fn disconnect_if_present(&mut self, username: &str) {
+        if self.player_realm.contains_key(username) {
+            self.disconnect(username);
+        }
+    }
+
     fn spawn_overworld(&mut self, username: &str, pos: Position, inv: Inventory) {
+        self.disconnect_if_present(username);
         self.overworld.spawn_player(username, pos, inv);
         self.player_realm.insert(username.to_string(), Realm::Overworld);
         self.overlay_persisted_overworld();
