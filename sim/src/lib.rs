@@ -14,6 +14,7 @@ pub mod catalogue;
 pub mod chunkgraph;
 pub mod collision;
 pub mod components;
+pub mod datastore;
 pub mod delta;
 pub mod geometry;
 pub mod harness;

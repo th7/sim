@@ -8,7 +8,8 @@
 //! never-under-merge invariant.
 
 use crate::components::{Inventory, Position, PortalDirection, StructureKind};
-use crate::consts::TICK_MS;
+use crate::consts::{FLUSH_MS, TICK_MS};
+use crate::datastore::{Datastore, MemStore, PersistEvent, PlayerRecord};
 use crate::geometry::{chunk_center, coord_for, ChunkCoord};
 use crate::ids::{ClusterId, Realm};
 use crate::verbs::VerbError;
@@ -36,6 +37,7 @@ pub struct Sim {
     pending: Vec<OutboundEvent>,
     next_instance: u64,
     pool: Option<crate::parallel::WorkerPool>,
+    datastore: Datastore<MemStore>,
 }
 
 impl Default for Sim {
@@ -46,6 +48,12 @@ impl Default for Sim {
 
 impl Sim {
     pub fn new() -> Self {
+        Sim::with_persistence(MemStore::default())
+    }
+
+    /// Construct a Sim over an existing durable store — modelling a process
+    /// restart that resumes from persisted state.
+    pub fn with_persistence(store: MemStore) -> Self {
         Sim {
             clock_ms: 0,
             tick_count: 0,
@@ -56,7 +64,24 @@ impl Sim {
             pending: Vec::new(),
             next_instance: 1,
             pool: None,
+            datastore: Datastore::new(store),
         }
+    }
+
+    /// Force a Datastore flush (test/operator hook).
+    pub fn flush_now(&mut self) {
+        self.datastore.flush();
+    }
+
+    /// Consume the Sim and return its durable store (after flushing pending
+    /// writes) — hand to [`Sim::with_persistence`] to model a restart.
+    pub fn into_store(mut self) -> MemStore {
+        self.datastore.flush();
+        self.datastore.into_durable()
+    }
+
+    pub fn datastore(&self) -> &Datastore<MemStore> {
+        &self.datastore
     }
 
     /// Attach a persistent worker pool of `workers` threads. Subsequent
@@ -73,28 +98,55 @@ impl Sim {
         self.tick_count
     }
 
-    /// Connect a player, spawning their entity at the center of `initial_chunk`
-    /// in the Overworld with an empty inventory. (Persistence-aware spawn comes
-    /// in Phase 3.)
+    /// Connect a player, resuming from the Datastore: if their saved position is
+    /// in `initial_chunk` they spawn there; otherwise at the chunk's center with
+    /// their saved inventory (empty if never seen). Mirrors the Elixir
+    /// `hydrate_player`.
     pub fn connect(&mut self, username: &str, initial_chunk: ChunkCoord) {
-        self.connect_with(username, initial_chunk, Inventory::default());
+        let (pos, inv) = match self.datastore.fetch_player(username) {
+            Some(rec) if rec.chunk == initial_chunk => {
+                (Position { x: rec.x, y: rec.y }, Inventory { items: rec.inventory })
+            }
+            Some(rec) => {
+                let (x, y) = chunk_center(initial_chunk);
+                (Position { x, y }, Inventory { items: rec.inventory })
+            }
+            None => {
+                let (x, y) = chunk_center(initial_chunk);
+                (Position { x, y }, Inventory::default())
+            }
+        };
+        self.spawn_overworld(username, pos, inv);
     }
 
+    /// Connect at the center of `initial_chunk` with an explicit inventory,
+    /// ignoring any saved position (used by tests).
     pub fn connect_with(&mut self, username: &str, initial_chunk: ChunkCoord, inv: Inventory) {
         let (x, y) = chunk_center(initial_chunk);
-        self.overworld.spawn_player(username, Position { x, y }, inv);
-        self.player_realm.insert(username.to_string(), Realm::Overworld);
+        self.spawn_overworld(username, Position { x, y }, inv);
     }
 
-    /// Connect a player at an exact position (used by tests / persistence).
+    /// Connect a player at an exact position with an explicit inventory.
     pub fn connect_at(&mut self, username: &str, pos: Position, inv: Inventory) {
+        self.spawn_overworld(username, pos, inv);
+    }
+
+    fn spawn_overworld(&mut self, username: &str, pos: Position, inv: Inventory) {
         self.overworld.spawn_player(username, pos, inv);
         self.player_realm.insert(username.to_string(), Realm::Overworld);
+        self.overlay_persisted_overworld();
+        self.drain_persistence();
     }
 
     pub fn disconnect(&mut self, username: &str) {
         self.return_to.remove(username);
         if let Some(realm) = self.player_realm.remove(username) {
+            // Leave-flush the player's final Overworld position before removal.
+            if realm.is_overworld() {
+                if let Some(ev) = self.overworld.player_upsert(username) {
+                    self.datastore.apply(ev);
+                }
+            }
             if let Some(rw) = self.realm_world_mut(realm) {
                 rw.remove_player(username);
             }
@@ -125,6 +177,9 @@ impl Sim {
             inst.tick(TICK_MS, self.clock_ms);
         }
         self.process_portals();
+        self.overlay_persisted_overworld();
+        self.drain_persistence();
+        self.maybe_flush();
     }
 
     /// Advance the whole world by one tick, ticking each realm's clusters across
@@ -151,6 +206,47 @@ impl Sim {
             tick_realm(inst);
         }
         self.process_portals();
+        self.overlay_persisted_overworld();
+        self.drain_persistence();
+        self.maybe_flush();
+    }
+
+    /// Overlay persisted structures + depletion state onto any Overworld chunks
+    /// hydrated since the last call.
+    fn overlay_persisted_overworld(&mut self) {
+        let clock = self.clock_ms;
+        for coord in self.overworld.take_newly_loaded() {
+            let structs = self.datastore.fetch_structures(coord);
+            self.overworld.seed_persisted_structures(&structs);
+            let deps = self.datastore.fetch_depletions(coord);
+            self.overworld.apply_persisted_depletions(&deps, clock);
+        }
+        // Instances don't persist; just clear their newly-loaded buffer.
+        for inst in self.instances.values_mut() {
+            inst.take_newly_loaded();
+        }
+    }
+
+    /// Move emitted persistence changes from the realms into the Datastore.
+    fn drain_persistence(&mut self) {
+        let evs = self.overworld.take_persist_events();
+        self.datastore.apply_all(evs);
+        for inst in self.instances.values_mut() {
+            inst.take_persist_events(); // guarded empty, but keep buffers clear
+        }
+    }
+
+    /// Periodic flush + player heartbeat, on the [`FLUSH_MS`] cadence.
+    fn maybe_flush(&mut self) {
+        let period = (FLUSH_MS / TICK_MS).max(1);
+        if self.tick_count % period == 0 {
+            for u in self.players_in(Realm::Overworld) {
+                if let Some(ev) = self.overworld.player_upsert(&u) {
+                    self.datastore.apply(ev);
+                }
+            }
+            self.datastore.flush();
+        }
     }
 
     /// Drain the queued per-player outbound events (for the transport layer).
@@ -174,6 +270,7 @@ impl Sim {
             username: username.to_string(),
             inventory: inv,
         });
+        self.drain_persistence();
         Ok(())
     }
 
@@ -194,6 +291,7 @@ impl Sim {
             username: username.to_string(),
             inventory: inv,
         });
+        self.drain_persistence();
         Ok(())
     }
 
@@ -201,6 +299,7 @@ impl Sim {
         let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
         let rw = self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?;
         rw.damage(username, x, y)?;
+        self.drain_persistence();
         Ok(())
     }
 
@@ -237,6 +336,17 @@ impl Sim {
     fn enter_instance(&mut self, username: &str, entry_px: i64, entry_py: i64) {
         let Some((_pos, inv)) = self.overworld.remove_player(username) else { return };
         let from_coord = coord_for(entry_px, entry_py);
+        // Persist a save one unit west of the entry portal, so a mid-Instance
+        // disconnect reconnects there (not on the portal, which would loop back).
+        let save_x = entry_px - 1_000;
+        let save_y = entry_py;
+        self.datastore.apply(PersistEvent::UpsertPlayer(PlayerRecord {
+            username: username.to_string(),
+            chunk: coord_for(save_x, save_y),
+            x: save_x,
+            y: save_y,
+            inventory: inv.items.clone(),
+        }));
         let id = self.start_instance();
         let (rpx, rpy) = worldgen::return_portal_pos();
         let spawn = Position { x: rpx - 1_000, y: rpy };
@@ -268,6 +378,12 @@ impl Sim {
         let spawn = Position { x: epx - 1_000, y: epy };
         self.overworld.spawn_player(username, spawn, inv);
         self.player_realm.insert(username.to_string(), Realm::Overworld);
+        // Destination (Overworld) eagerly persists the re-emergence position.
+        if let Some(ev) = self.overworld.player_upsert(username) {
+            self.datastore.apply(ev);
+        }
+        self.overlay_persisted_overworld();
+        self.drain_persistence();
         if self.instance_is_empty(id) {
             self.instances.remove(&id);
         }

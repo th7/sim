@@ -180,6 +180,23 @@ Phase 2 (parallelism):
   independent clusters (sublinear: dispatch overhead + sub-ms work). Takeaway: the model runs
   comfortably single-threaded at realistic loads; the pool is a tail-load accelerator.
 
+Phase 3 (persistence):
+
+- **Datastore** (`datastore.rs`): pending-writes buffer (per-key LWW + delete tombstones), merged reads
+  (pending overlaid on durable), flush, and a backpressure state machine — over a `DurableStore` trait.
+  The POC ships an in-memory `MemStore`; a Postgres impl can follow. Only the Overworld emits (Instances
+  are in-memory only) — the realm guard lives in `RealmWorld::emit`.
+- **Emission** mirrors the Elixir verbs: harvest → player + depletion; build → player + structure;
+  damage → structure upsert or tombstone; respawn → depletion delete; plus a periodic player heartbeat
+  and a leave-flush on disconnect, on the [`FLUSH_MS`] cadence.
+- **Hydration** is split: `RealmWorld` seeds worldgen (trees/portals) on chunk load and reports
+  newly-loaded chunks; the Sim overlays persisted structures + depletion state from the Datastore.
+- **Resume** matches `hydrate_player`: reconnect in the saved chunk → exact position; elsewhere → chunk
+  centre; inventory always restored. Mid-Instance disconnect saves one unit west of the entry portal, so
+  reconnect doesn't loop straight back in. Structures and depletions survive a modelled restart
+  (`Sim::into_store` → `Sim::with_persistence`). Depletion respawn time is sim-clock-relative — true
+  cross-restart wall-clock timing needs clock persistence (deferred).
+
 ## Open questions
 
 - **Sessions**: shape of the per-player endpoint; how it feeds intent and pulls the view window. (Phase 4.)

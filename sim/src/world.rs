@@ -12,6 +12,7 @@ use crate::catalogue::{resource_footprint, resource_yield, structure_footprint};
 use crate::collision::{clamp_step, Obstacle};
 use crate::components::*;
 use crate::consts::{DAMAGE_PER_CLICK, DEFAULT_SPEED, RESPAWN_MS};
+use crate::datastore::{DepletionRecord, PersistEvent, PlayerRecord, StructureRecord};
 use crate::geometry::{coord_for, ChunkCoord};
 use crate::ids::{ActorId, ClusterId, Realm};
 use crate::labeler::{Labeler, TopologyEvent};
@@ -37,6 +38,10 @@ pub struct RealmWorld {
     next_actor: u64,
     /// EWMA of per-cluster tick wall-time (seconds), feeding the repack policy.
     cluster_times: BTreeMap<ClusterId, f64>,
+    /// Persistence changes emitted this step (Overworld only); drained by Sim.
+    persist_events: Vec<PersistEvent>,
+    /// Chunks first hydrated since the last drain; Sim overlays persisted state.
+    newly_loaded: Vec<ChunkCoord>,
 }
 
 impl RealmWorld {
@@ -52,6 +57,69 @@ impl RealmWorld {
             wire_index: BTreeMap::new(),
             next_actor: 0,
             cluster_times: BTreeMap::new(),
+            persist_events: Vec::new(),
+            newly_loaded: Vec::new(),
+        }
+    }
+
+    /// Emit a persistence change — Overworld only (Instances don't persist).
+    fn emit(&mut self, ev: PersistEvent) {
+        if self.realm.is_overworld() {
+            self.persist_events.push(ev);
+        }
+    }
+
+    /// Drain persistence changes emitted since the last call (for the Datastore).
+    pub fn take_persist_events(&mut self) -> Vec<PersistEvent> {
+        std::mem::take(&mut self.persist_events)
+    }
+
+    /// Drain the chunks first hydrated since the last call (for persisted-state
+    /// overlay by the Sim layer).
+    pub fn take_newly_loaded(&mut self) -> Vec<ChunkCoord> {
+        std::mem::take(&mut self.newly_loaded)
+    }
+
+    fn player_record(&self, username: &str) -> Option<PlayerRecord> {
+        let pos = self.position_of(username)?;
+        let inv = self.inventory_of(username)?;
+        Some(PlayerRecord {
+            username: username.to_string(),
+            chunk: pos.chunk(),
+            x: pos.x,
+            y: pos.y,
+            inventory: inv.items,
+        })
+    }
+
+    /// Build a player upsert event for `username` at their current state.
+    pub fn player_upsert(&self, username: &str) -> Option<PersistEvent> {
+        self.player_record(username).map(PersistEvent::UpsertPlayer)
+    }
+
+    /// Seed persisted structures into a freshly-hydrated chunk.
+    pub fn seed_persisted_structures(&mut self, records: &[StructureRecord]) {
+        for r in records {
+            self.insert_structure(r.x, r.y, r.kind, &r.owner, r.hp);
+        }
+    }
+
+    /// Apply persisted depletion state to freshly-hydrated nodes: a node whose
+    /// `respawn_at_ms` is still in the future becomes Depleted; past-due records
+    /// are left gatherable (matching the Elixir hydrate_depletions).
+    pub fn apply_persisted_depletions(&mut self, records: &[DepletionRecord], clock_ms: u64) {
+        for r in records {
+            if r.respawn_at_ms <= clock_ms {
+                continue;
+            }
+            let wid = WireId(format!("{}:{}:{}", r.kind.as_str(), r.x, r.y));
+            if let Some(e) = self.wire_index.get(&wid).copied() {
+                let _ = self.world.remove_one::<Gatherable>(e);
+                let _ = self.world.insert_one(
+                    e,
+                    Depleted { kind: r.kind, respawn_at_ms: r.respawn_at_ms },
+                );
+            }
         }
     }
 
@@ -68,6 +136,7 @@ impl RealmWorld {
         if !self.loaded.insert(coord) {
             return;
         }
+        self.newly_loaded.push(coord);
         if self.realm.is_overworld() {
             for spec in worldgen::resource_nodes(coord) {
                 let wid = WireId(format!("{}:{}:{}", spec.kind.as_str(), spec.x, spec.y));
@@ -338,16 +407,17 @@ impl RealmWorld {
     }
 
     fn respawn_due(&mut self, clock_ms: u64) {
-        let due: Vec<(Entity, ResourceKind)> = self
+        let due: Vec<(Entity, ResourceKind, i64, i64)> = self
             .world
-            .query::<&Depleted>()
+            .query::<(&Depleted, &Position)>()
             .iter()
-            .filter(|(_, d)| clock_ms >= d.respawn_at_ms)
-            .map(|(e, d)| (e, d.kind))
+            .filter(|(_, (d, _))| clock_ms >= d.respawn_at_ms)
+            .map(|(e, (d, p))| (e, d.kind, p.x, p.y))
             .collect();
-        for (e, kind) in due {
+        for (e, kind, x, y) in due {
             let _ = self.world.remove_one::<Depleted>(e);
             let _ = self.world.insert_one(e, Gatherable { kind, yields: resource_yield(kind) });
+            self.emit(PersistEvent::DeleteDepletion { x, y });
         }
     }
 
@@ -446,11 +516,21 @@ impl RealmWorld {
             *inv.items.entry(item).or_insert(0) += 1;
         }
         // Deplete the node.
+        let respawn_at = clock_ms + RESPAWN_MS;
         let _ = self.world.remove_one::<Gatherable>(node);
-        let _ = self.world.insert_one(
-            node,
-            Depleted { kind, respawn_at_ms: clock_ms + RESPAWN_MS },
-        );
+        let _ = self.world.insert_one(node, Depleted { kind, respawn_at_ms: respawn_at });
+
+        // Persist: player inventory/position + the depletion.
+        if let Some(ev) = self.player_upsert(username) {
+            self.emit(ev);
+        }
+        self.emit(PersistEvent::UpsertDepletion(DepletionRecord {
+            coord: coord_for(tx, ty),
+            kind,
+            x: tx,
+            y: ty,
+            respawn_at_ms: respawn_at,
+        }));
 
         Ok(self.inventory_of(username).unwrap_or_default())
     }
@@ -503,6 +583,19 @@ impl RealmWorld {
 
         let hp = crate::catalogue::max_hp(kind);
         self.insert_structure(x, y, kind, username, hp);
+
+        // Persist: player inventory/position + the new structure.
+        if let Some(ev) = self.player_upsert(username) {
+            self.emit(ev);
+        }
+        self.emit(PersistEvent::UpsertStructure(StructureRecord {
+            coord: coord_for(x, y),
+            owner: username.to_string(),
+            kind,
+            x,
+            y,
+            hp,
+        }));
         Ok(self.inventory_of(username).unwrap_or_default())
     }
 
@@ -522,12 +615,23 @@ impl RealmWorld {
             s.hp - DAMAGE_PER_CLICK
         };
         if new_hp > 0 {
+            let owner = self.world.get::<&Structure>(e).map(|s| s.owner.clone()).unwrap_or_default();
+            let kind = self.world.get::<&Structure>(e).map(|s| s.kind).unwrap_or(StructureKind::Wall);
             if let Ok(mut s) = self.world.get::<&mut Structure>(e) {
                 s.hp = new_hp;
             }
+            self.emit(PersistEvent::UpsertStructure(StructureRecord {
+                coord: coord_for(x, y),
+                owner,
+                kind,
+                x,
+                y,
+                hp: new_hp,
+            }));
             Ok(Some(new_hp))
         } else {
             self.despawn_wire(&wid);
+            self.emit(PersistEvent::DeleteStructure { x, y });
             Ok(None)
         }
     }
