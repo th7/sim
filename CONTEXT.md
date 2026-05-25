@@ -13,7 +13,7 @@ The single shared, persistent, free-positioned 2D space that all players inhabit
 _Avoid_: Map, world map, overland.
 
 **Instance**:
-An ephemeral, private 2D region spawned on demand for a Party entering a dungeon. Lives in memory only — no persistence. Destroyed when the Party leaves or disconnects. In v1, dungeons are the only kind of Instance; no player housing, no persistent dungeons, no guild halls. Internally, an Instance is partitioned into its own private grid of **Chunks** — the same Chunk machinery as the **Overworld** (ECS, ticks, **Boundary crossing**, **Warm set**, **View window**) — distinct only by Registry scope, absence of persistence, and bounded extent.
+An ephemeral, private 2D region spawned on demand for a Party entering a dungeon. Lives in memory only — no persistence. Destroyed when the Party leaves or disconnects. In v1, dungeons are the only kind of Instance; no player housing, no persistent dungeons, no guild halls. Internally, an Instance is partitioned into its own private grid of **Chunks** and simulated by **Islands** the same way the **Overworld** is (ECS, ticks, the **Cartographer**, the **Warm set**, the **View window**) — distinct only by scope, absence of persistence, and bounded extent.
 _Avoid_: Dungeon (a dungeon is the *content* hosted by an Instance), private map, room.
 
 **Party**:
@@ -21,8 +21,16 @@ A group of Players (1 or more) that enters an Instance together. The Instance is
 _Avoid_: Group, raid, team (group/raid/team have specific other-MMO meanings we may want later).
 
 **Chunk**:
-A fixed-size rectangular partition of the **Overworld**. The unit of ownership and spatial indexing.
-_Avoid_: Tile (a tile would imply discrete movement, which we explicitly rejected), zone, region.
+A fixed-size rectangular partition of the **Overworld** — the unit of **Worldgen** determinism, persistence keying, and spatial indexing. A Chunk is *data*, not a running process: worldgen output plus durably-stored state, identified by coordinate. The live simulation of whatever occupies a Chunk's area is owned at runtime by an **Island**, never by the Chunk itself.
+_Avoid_: Tile (a tile would imply discrete movement, which we explicitly rejected), zone, region. Don't call a Chunk a process or an owner of live state — that role is the **Island**'s.
+
+**Island**:
+The single runtime authority over a connected cluster of interacting dynamic entities (**Players** today; NPCs in a later phase) together with the **Chunks** their activity currently spans. An Island simulates all movement, collision, and combat among its members, so every interaction is resolved by one authority, locally. Islands are ephemeral and reshaped continuously by the **Cartographer** — created, merged, and split as entities move — so that any two entities able to interact are always inside the same Island. An Island sizes itself to activity: many tiny Islands in a quiet world, one large Island in a dense fight (whose ceiling is a single core).
+_Avoid_: Zone, region, shard (an Island is interaction-scoped and dynamic, not a fixed spatial division), cell, party (a **Party** is a social grouping; an Island is a simulation authority that may hold unrelated entities who merely happen to be near each other).
+
+**Cartographer**:
+The single authority that maps the world into **Islands**: it assigns each **Player** (and each hot **Chunk**) to an Island, and creates, merges, and splits Islands as entities move. Being the sole arbiter of these changes, it serializes them — two Islands never race to merge each other. The Cartographer assigns but does not simulate; gameplay runs inside the Islands.
+_Avoid_: Navigator (implies steering entities' movement; the Cartographer arbitrates authority, it does not move anyone), coordinator/manager (too generic), scheduler.
 
 **Player**:
 A human participant, identified by a chosen username. Also refers to the in-world entity they control — we deliberately do not distinguish Player from Character; one username = one in-world entity.
@@ -57,17 +65,13 @@ The **ItemStacks** carried by a **Player**. Filled by harvesting **Resource node
 _Avoid_: Bag, backpack, container (Container may earn a glossary entry later if a second kind of container appears — chest, bank — but v1 has only the Inventory).
 
 **Chunk activation**:
-The transition of a **Chunk** from cold to hot — a live GenServer holding state in memory. State is hydrated through the **Datastore**, which returns the freshest view by merging its **pending writes** with the durably-stored set. Triggered by player proximity.
+The transition of a **Chunk** from cold to hot: an **Island** takes ownership of the Chunk's area and hydrates its state through the **Datastore**, which returns the freshest view by merging its **pending writes** with the durably-stored set. Triggered when an Island's entities move into range of the Chunk.
 
 **Chunk deactivation**:
-The reverse — the **Chunk** emits its final state to the **Datastore** and terminates. The Datastore is responsible for the eventual flush to durable storage. Triggered by sustained absence of players.
-
-**Boundary crossing**:
-A **Player**'s entity exits the bounds of its owning **Chunk** and enters a neighbor **in the same realm** (i.e. an adjacent Chunk of the same **Overworld** or the same **Instance**). The entity is handed off from the source's process to the destination's; the Player's session updates its **Warm set** to the new center; the entity continues in the destination process on the next tick. **Instance entry** and **Instance exit** are *not* Boundary crossings — they cross realms.
-_Avoid_: Migration (an implementation term — `ChunkMigration` is the module that performs the handoff; the event itself is a boundary crossing), chunk transfer, hop.
+The reverse — when no **Island** holds a **Chunk** any longer, its final state is emitted to the **Datastore** (responsible for the eventual flush to durable storage) and it goes cold. Triggered by sustained absence of entities from its area.
 
 **Instance entry**:
-A **Player**'s entity leaves the **Overworld** and enters an **Instance** by overlapping a **Portal**. Mechanically a process handoff like a **Boundary crossing**, but distinct: the Player's **Warm set** is torn down and a fresh one is built around the Instance's center, the **View window** switches to the Instance's topic space, and on disconnect any in-Instance state is lost.
+A **Player** leaves the **Overworld** and enters an **Instance** by overlapping a **Portal**. The Player is re-homed onto a fresh Instance-scoped **Island** built around the Instance's center, the **View window** switches to the Instance's space, and on disconnect any in-Instance state is lost.
 _Avoid_: Portal travel, teleport, dungeon enter, zone-in.
 
 **Instance exit**:
@@ -75,47 +79,49 @@ The reverse — a **Player**'s entity overlaps the Instance's return-**Portal** 
 _Avoid_: Portal exit, dungeon leave, zone-out.
 
 **Warm set**:
-The set of **Chunks** a connected **Player**'s session keeps hot on their behalf — currently the 5×5 grid centered on the **Chunk** the Player occupies. A **Chunk** stays hot as long as at least one session has it in its warm set.
+The set of **Chunks** an **Island** keeps hot — the area its entities occupy plus a surrounding margin, so an entity reaching the edge doesn't stall on a cold **Chunk**. A Chunk stays hot as long as some Island holds it.
 _Avoid_: Warm zone, warm radius (the radius is a parameter; the set is the concept).
 
 **View window**:
-The set of **Chunks** a connected client subscribes to for snapshot streams — currently the 3×3 grid centered on the **Chunk** the Player occupies. Strictly smaller than (or equal to, inside an **Instance**) the **Warm set**; the outer ring of the warm set is pre-activated to hide chunk-activation latency when the Player crosses a boundary into it.
+The area around a **Player** that their **Session** streams to the client. The server owns and drives it: the Session pulls the changed state in that area from the world read-model and pushes it to the client, which subscribes only to its own **Player** topic and renders whatever it receives. Contained within the region the Player's **Island** keeps hot (the **Warm set**), whose margin hides **Chunk activation** latency as the Player moves.
 _Avoid_: Visible chunks, subscription window, AOI (AOI is the general concept; the view window is our specific implementation).
 
 **Datastore**:
-The single in-memory persistence chokepoint per node. All durable reads and writes for the running world go through it. **Chunks** emit state changes via synchronous calls; the Datastore buffers them as **pending writes** and flushes to durable storage on its own cadence. Chunks hydrate through it too — it returns the freshest view by merging **pending writes** with the last-flushed DB state. Under overload it engages **backpressure** rather than dropping writes or crashing.
+The single in-memory persistence chokepoint per node. All durable reads and writes for the running world go through it. **Islands** emit state changes via synchronous calls; the Datastore buffers them as **pending writes** and flushes to durable storage on its own cadence. Islands hydrate through it too — it returns the freshest view by merging **pending writes** with the last-flushed DB state. Under overload it engages **backpressure** rather than dropping writes or crashing.
 _Avoid_: Repo, persistence layer, cache, store. Don't say "actor" in domain language — that's its implementation, not its role.
 
 **Pending writes**:
-The **Datastore**'s in-memory buffer of state changes that have been emitted by **Chunks** but not yet confirmed durable. Per-key, last-write-wins; a delete is a tombstone entry that supersedes any prior upsert at the same key. An entry leaves pending only when its DB flush is confirmed.
+The **Datastore**'s in-memory buffer of state changes that have been emitted by **Islands** but not yet confirmed durable. Per-key, last-write-wins; a delete is a tombstone entry that supersedes any prior upsert at the same key. An entry leaves pending only when its DB flush is confirmed.
 _Avoid_: WAL (the buffer is not a log — it's a keyed map of effective state), write queue, dirty set.
 
 **Backpressure**:
-The **Datastore**'s overload-protection mode. When **pending writes** exceed a size threshold or any entry has aged past a time threshold, the Datastore stops replying to incoming write calls — caller `GenServer.call`s block. Upstream **Chunks** freeze whole-mailbox — every **Player** colocated in a frozen **Chunk**, not only the one whose verb triggered the park, freezes with it. The mode clears when the Datastore drains — usually because the DB recovered, or an operator deployed a fix via hot code reload for a stuck flush. Parked callers then receive their replies in FIFO order and upstream resumes naturally.
+The **Datastore**'s overload-protection mode. When **pending writes** exceed a size threshold or any entry has aged past a time threshold, the Datastore stops replying to incoming write calls — caller `GenServer.call`s block. Upstream **Islands** freeze whole-mailbox — every **Player** in a frozen **Island**, not only the one whose verb triggered the park, freezes with it. The mode clears when the Datastore drains — usually because the DB recovered, or an operator deployed a fix via hot code reload for a stuck flush. Parked callers then receive their replies in FIFO order and upstream resumes naturally.
 
 ## Relationships
 
 - A **World** is composed of one **Overworld** and zero-or-more live **Instances**
 - The **Overworld** is partitioned into a grid of **Chunks**
-- Each **Chunk** is owned by exactly one process at a time (sharding)
+- Dynamic simulation is partitioned by *interaction locality* into **Islands**, not by geography: the **Cartographer** assigns **Players** and hot **Chunks** to Islands and merges/splits them so any two Players who can interact share one Island
+- There is exactly one **Cartographer**; it assigns authority but does not simulate
+- A hot **Chunk**'s live state is owned by exactly one **Island** at a time
 - An **Instance** is partitioned into its own private grid of **Chunks**, scoped to that Instance and disjoint from the **Overworld**'s grid
-- A **Player** exists in exactly one **Chunk** (if in the **Overworld**) or one **Instance** at a time
+- A **Player** occupies one **Chunk**'s area (in the **Overworld**) or one **Instance** at a time, and is simulated by exactly one **Island**
 - A username uniquely identifies a **Player**; there is no separate account or character roster
 - An **Overworld Chunk** holds zero-or-more **Resource nodes**, zero-or-more **Structures**, and zero-or-more **Portals**; an **Instance Chunk** holds only **Portals** (no **Resource nodes**, no **Structures**)
 - A **Structure** belongs to the **Chunk** it sits in; ownership is per-Structure (a Player owns the Structure)
 - Every **Resource node** and every **Structure** has a **Footprint**; **Players** and **Portals** do not. A **Player** cannot move to a position where their body would overlap any Footprint
 - Each **Player** has exactly one **Inventory**; an **Inventory** holds zero-or-more **ItemStacks**; each **ItemStack** is a quantity of exactly one **Item**
 - A **Resource node** yields one or more **ItemStacks** when harvested; a **Structure**'s build cost is expressed as one or more **ItemStacks** drawn from the placing Player's **Inventory**
-- A **Chunk** is either hot (running) or cold (state in durable storage only)
-- Each connected **Player** has a **Warm set** (kept hot) and a **View window** (snapshots subscribed); the View window is a strict subset of the Warm set
-- A **Chunk** stays hot while it is in any session's **Warm set**; **Chunk deactivation** fires after the last interested session releases it
-- All durable reads and writes flow through the **Datastore**; **Chunks** do not talk to durable storage directly
+- A **Chunk** is either hot (held and simulated by an **Island**) or cold (state in the **Datastore** only)
+- An **Island** keeps a **Warm set** of **Chunks** hot; each connected **Player**'s **Session** streams a **View window** to its client, contained within the region its Island holds hot
+- A **Chunk** stays hot while some **Island** holds it; **Chunk deactivation** fires when no Island does
+- All durable reads and writes flow through the **Datastore**; **Islands** do not talk to durable storage directly
 - **Instance** **Chunks** do not emit to the **Datastore** — Instance state is in-memory only
 
 ## Example dialogue
 
-> **Dev:** "When a **Party** enters a dungeon, what happens to their **Chunk** subscriptions?"
-> **Designer:** "They drop them. The **Party** is now in an **Instance** — the **Overworld** is irrelevant. When they leave the **Instance** they're placed back in the **Chunk** they entered from."
+> **Dev:** "When a **Party** enters a dungeon, what happens to their place in the world?"
+> **Designer:** "Their **Players** are re-homed onto fresh **Islands** scoped to the **Instance**. The **Overworld** is irrelevant to them until they leave, at which point they're placed back in the **Chunk** they entered from."
 >
 > **Dev:** "And if a **Player** disconnects mid-Instance?"
 > **Designer:** "They leave the **Party**. If the **Party** is now empty, the **Instance** is destroyed."
@@ -127,4 +133,4 @@ The **Datastore**'s overload-protection mode. When **pending writes** exceed a s
 
 - "Player" vs "Character" — collapsed to a single concept (**Player**). Revisit if/when a roster feature is wanted.
 - "Private" — earlier framing said "private Instances," but Instances are *Party-scoped*, not owned. There is no per-Player private space in v1.
-- Cross-chunk collision — v1 enforces Footprints only against obstacles in the **Player**'s current **Chunk**. A **Structure** placed within ~0.5u of a Chunk boundary can produce a visible "clip-and-stop" when a Player crosses in from the neighbor side. Revisit when combat or PvP makes the artifact gameplay-relevant.
+- Cross-chunk collision — *resolved* by the **Island** model: an Island owns every **Chunk** its **Players** span, so collision is evaluated against the full local neighborhood rather than a single Chunk. The old "clip-and-stop" artifact at Chunk boundaries no longer arises.

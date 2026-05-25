@@ -1,0 +1,142 @@
+# IDEA: interaction-clustered simulation — Rust shared-memory prototype
+
+**Status: exploratory.** This is the *Rust shared-memory* branch of the design conversation. It
+consciously **diverges from the committed BEAM design in [ADR-0001](./docs/adr/0001-islands-and-cartographer.md)**
+(process-per-Island, message handoffs). Goal here: a **proof-of-concept that the core simulation
+model holds** before deciding whether to pursue a Rust path at all. Nothing here supersedes
+ADR-0001 yet — it's a parallel investigation.
+
+Glossary note: the **Labeler** is the **Cartographer** in its shared-memory form — it *relabels a
+partition* rather than brokering process handoffs.
+
+## The model in brief
+
+One shared ECS world. Dynamic simulation is partitioned by *interaction locality* into **clusters**;
+clusters are packed onto **workers** (threads) for execution; a single **Labeler** owns the partition
+and the topology changes. Actions run inside a cluster (single authority → every interaction resolved
+in one place); observation is a separate changed-only delta stream.
+
+### The simplification that makes the POC tractable: chunk-granular membership
+
+An actor's interaction footprint is its **chunk + the surrounding ring** (3×3). From that, everything
+discrete:
+
+- A **cluster owns a set of chunks** (the union of its actors' 3×3 footprints) plus the actors in them.
+- **Membership / merge:** two clusters whose chunk-sets touch (share or border a chunk) **must merge** —
+  detected as a chunk claimed by two clusters. No continuous union-find; just chunk-graph overlap.
+- **Split (`should_split?`):** a cluster whose chunk-set has **≥2 disconnected components** can split into
+  them. The cluster computes this itself over chunk adjacency.
+
+**Soundness rests on one inequality: `interaction_range ≤ chunk_size`.** Given that, two actors can only
+interact when within ~1 chunk, while clusters merge when within ~2 chunks (their rings overlap) — a full
+chunk of margin. So *any two actors that can interact already share a cluster, by construction.* (Holds
+because interactions are "very local, no long range.")
+
+## Components
+
+**Actor** — rows in the ECS (Position, Velocity, …). Carries a **per-tick intent** slot (movement /
+action input), written from outside, read by its cluster at tick start. Interaction footprint =
+its chunk + surrounding ring.
+
+**Cluster** — owns a set of actors + the chunks they span. Each tick: drain intents → integrate
+movement → collide against **static footprints in its chunks** → resolve intra-cluster interactions.
+Outputs three things the Labeler consumes:
+- **boundary** = its chunk-set (for merge detection),
+- **tick-time** = EWMA of wall time per tick (for repack),
+- **`should_split?`** = chunk-set connected-components (proposed partition, or "indivisible" single component).
+Also emits **changed-only deltas** (the entities it touched this tick) to the read-model.
+
+**Worker** — a thread that ticks its assigned clusters. (Phase 1: a single worker, sequential — no
+`unsafe`. Phase 2: many workers with disjoint `&mut` into the shared world behind a documented `unsafe`
+boundary justified by the partition's disjointness.)
+
+**Labeler** — owns the registry (`actor→cluster`, `chunk→cluster`, `cluster→worker`) and is the **sole,
+serialized executor of topology changes**:
+- **places unclustered actors** (into an overlapping cluster, else a new one),
+- **merges** clusters whose chunk-sets overlap,
+- **executes splits** proposed by clusters,
+- **repacks** clusters across workers by tick-time (minimize worker count; split an over-budget worker by
+  reassigning whole clusters — free, since clusters don't interact across the cut; a single indivisible
+  cluster is the one-core floor).
+Analysis is distributed (clusters self-assess splits; cheap central merge broad-phase over chunk-sets);
+**execution is serialized through the Labeler** to keep the partition single-writer.
+
+**Read-model** — `ArcSwap<Snapshot>` (per cluster or per region), holding published changed-only deltas.
+Observers read it lock-free.
+
+**Datastore (stub in POC)** — clusters **periodically flush upserts** of changed entities. Real Datastore
+integration is later.
+
+**Sessions / transport (deferred detail)** — a session is the per-player endpoint that feeds intent in
+and pulls a **View window** (chunks around the player) out of the read-model, streaming changed-only
+upserts/removes over the **existing wire contract** (`apps/game_web/priv/contract`). Exact shape **TBD** —
+resolved when we wire transport (Phase 4). POC stubs it.
+
+## Plan — POC first
+
+The POC is **test-driven**: the core simulation layer is proven by a unit + integration suite (below)
+before any parallelism, persistence, or transport is added.
+
+**Phase 0 — skeleton.** A standalone Rust crate (e.g. `/sim`, *not* under `apps/`). ECS via `hecs`
+(we want our own tick scheduling, not Bevy's frame scheduler), chunk geometry, the id/registry types,
+`serde` deltas shaped to the existing contract. Stand up the **test harness** here: a deterministic
+clock, a scripted-intent driver, and world/topology assertion helpers.
+
+**Phase 1 — prove the core model (PRIORITY, test-first, single-threaded, no `unsafe`).** Structure the
+simulation core as **pure, testable functions** — chunk-graph connectivity, placement, merge detection,
+`should_split?`, repack *policy*, delta diffing — and drive their development **test-first**. The
+deliverable is a **unit + integration suite that exercises every major topology case**, written before
+(or alongside) the implementation. One worker ticks all clusters sequentially; actors are driven by
+scripted/synthetic intent (no real sessions). Major cases:
+
+- *Placement* — an unclustered actor joins an overlapping cluster; spawns a new cluster when none overlaps.
+- *Crossing* — an actor moves across a chunk boundary inside a cluster (chunk-set updates, no topology change).
+- *Merge* — two clusters' chunk-sets come to overlap → one cluster; triggered by a crossing.
+- *Split* — a cluster's chunk-set disconnects → splits into components; actors land in the right child;
+  hysteresis prevents churn at the boundary.
+- *Repack policy* (pure decision, no threads yet) — given cluster tick-times, minimize workers within
+  budget; an over-budget worker sheds whole clusters; a single indivisible cluster stays put.
+- *Deltas* — each tick emits exactly the changed entities (upserts) + removes; baseline on cell-enter; idempotent.
+- *Determinism* — identical inputs produce identical output.
+- *The core invariant (property test)* — over randomized movement sequences, **any two actors within
+  `interaction_range` are always in the same cluster** (never-under-merge).
+
+Integration tests drive the whole single-threaded loop with scripted intent over many ticks, asserting the
+expected topology transitions and the invariant on every tick. Only once the suite is green is the *model*
+proven — all the genuinely novel logic — with zero concurrency risk.
+
+**Phase 2 — parallelism + the `unsafe` boundary.** Multiple workers; disjoint `&mut` into the shared
+world behind a small documented `unsafe` API whose soundness precondition is the Labeler's disjoint
+partition; safe-point flag-check for relabels (workers self-tick, check a "pending relabel?" flag at
+tick boundaries — no per-tick Labeler permission). Drive worker assignment with the **repack policy
+already unit-tested in Phase 1**. Stress-test, and **measure the single-core dense-cluster ceiling** (the
+limit we accepted). Validate disjointness with `miri`/stress where feasible.
+
+**Phase 3 — persistence.** Periodic upsert flush to a Datastore (stub → real), decoupled from the tick.
+
+**Phase 4 — observation & transport.** Wire deltas to the existing contract; define **sessions** and the
+**View window** pull; connect a real client. (This is where the "sessions — not sure" question gets
+settled.)
+
+**Deferred:** NPCs and their AI (run inside clusters when added), combat specifics, crash/fault handling
+(explicitly not a concern for now).
+
+## Invariants & parameters to pin
+
+- `interaction_range ≤ chunk_size` — the soundness precondition. Per-actor interaction radius allowed, but
+  the **max** radius present must stay ≤ chunk_size (else the 3×3 footprint margin is insufficient).
+- **Never under-merge:** chunk-set overlap ⇒ merge. Over-merging only costs parallelism; under-merging is
+  a correctness break.
+- **Hysteresis:** split distance (chunk-disconnection) strictly looser than merge (overlap) so a cluster at
+  the boundary doesn't churn.
+- **Conflict-check cadence** must be faster than chunk-crossing time (`chunk_size / max_speed`) — with a
+  full chunk of margin this is many ticks, so it's cheap.
+- **Tick-time** smoothed (EWMA); repack thresholds banded (e.g. split a worker >~75%, consolidate <~20%).
+
+## Open questions
+
+- **Sessions**: shape of the per-player endpoint; how it feeds intent and pulls the view window. (Phase 4.)
+- **Delta ↔ contract mapping**: exact correspondence between cluster deltas and the committed wire schemas.
+- **`unsafe` validation strategy**: how far to push `miri`/`loom`/stress on the disjoint-access boundary.
+- Whether, after the POC, this path is worth pursuing over ADR-0001's BEAM design — explicitly a decision
+  to make *after* Phase 1–2 give us the model-correctness result and the single-core ceiling number.
