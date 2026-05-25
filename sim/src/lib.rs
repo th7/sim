@@ -14,11 +14,14 @@ pub mod catalogue;
 pub mod chunkgraph;
 pub mod collision;
 pub mod components;
+pub mod delta;
 pub mod geometry;
 pub mod harness;
 pub mod ids;
 pub mod labeler;
+pub mod repack;
 pub mod sim;
+pub mod wire;
 pub mod world;
 pub mod worldgen;
 
