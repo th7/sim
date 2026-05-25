@@ -2,7 +2,7 @@
 
 A cooperative, persistent, isometric, real-time world where players fight, craft, and gather. PvP is an eventual concern, not v1.
 
-Elixir/Phoenix backend over an ECS with chunks-as-processes; Vite + Three.js client speaking Phoenix Channels.
+Elixir/Phoenix backend over an ECS with chunks-as-processes; Vite + Three.js client speaking Phoenix Channels. A planned redesign moves simulation from chunks-as-processes to interaction-clustered **Islands** — see [ADR-0001](./docs/adr/0001-islands-and-cartographer.md).
 
 ## Layout
 
@@ -13,7 +13,10 @@ Elixir/Phoenix backend over an ECS with chunks-as-processes; Vite + Three.js cli
   - `frontend/test/` — vitest specs against a live Phoenix on `:4000`
   - `frontend/e2e/` — Playwright specs against a dedicated e2e Phoenix on `:4001`
 - [`CONTEXT.md`](./CONTEXT.md) — the locked language: glossary + relationships
+- [`DESIGN.md`](./DESIGN.md) — what the running system does today, from outside
 - [`PLAN.md`](./PLAN.md) — work not yet implemented, in three triage buckets
+- [`docs/adr/`](./docs/adr/) — architecture decision records
+- [`IDEA.md`](./IDEA.md) — exploratory Rust POC plan for the Islands redesign
 
 ## Running locally
 

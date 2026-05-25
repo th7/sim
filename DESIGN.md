@@ -2,6 +2,11 @@
 
 What the running system does, from outside. See `CONTEXT.md` for domain language and `PLAN.md` for upcoming work.
 
+> **Note:** This is the *as-built* system. The Chunk-as-process model and client-driven 3×3 View window
+> below are superseded *in design* by [ADR-0001](./docs/adr/0001-islands-and-cartographer.md) (Islands +
+> Cartographer, server-driven streaming) and the updated `CONTEXT.md` — but **not yet in code**, so this
+> remains what actually runs.
+
 ## Player
 
 A connected Player...
