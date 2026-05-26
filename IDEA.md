@@ -200,17 +200,57 @@ Phase 4 (observation & transport):
 - **dev:stats** maps chunk lifecycle to hot (cluster-owned) / cold; the cluster model has no idle-armed
   timer, so `idle_ms_remaining` is always null — a documented divergence.
 
-## Verdict (after Phases 0–4)
+Persistence parity + e2e validation:
+
+- **Postgres `DurableStore`** (`pgstore.rs`): the in-memory `MemStore` is now joined by a Postgres backend
+  so players/structures/depletions survive a real process restart. The blocking pg client can't run on a
+  Tokio worker (nested-runtime panic), so it lives on its own thread behind a synchronous request/response
+  handle — the same shape as the Elixir Datastore being a separate process. `Sim` holds a *boxed* store
+  (`with_store`), the server picks Postgres when `SIM_DATABASE_URL` is set, flushes on SIGTERM, and anchors
+  its clock to wall-clock so depletion respawn is absolute across a restart.
+- **The existing e2e suite runs against the Rust backend** via `frontend/playwright.rust.config.ts` (specs
+  pointed at Vite on :3000, which proxies `/socket` to the Rust server) and a guarded `E2E_BACKEND=rust`
+  branch in `bin/restart-e2e.sh` that restarts the Rust server. Scorecard (Elixir-authored specs, Rust
+  backend): **phase1, phase3, phase6_5, phase8, phase9 pass; phase5 fails — and fails *identically* against
+  the Elixir backend** (worldgen puts a tree at every chunk centre, blocking phase5's due-east walk along
+  y=8 at x≈23.2). So phase5 is a pre-existing test/worldgen tension, not a Rust regression; parity holds.
+  A `tests/pg_restart.rs` integration test also proves cross-restart durability (gated on
+  `SIM_TEST_DATABASE_URL`; the default 94-test suite needs no database).
+
+## Decisions to revisit (moderate-to-low confidence)
+
+- **Own Postgres schema, not the Elixir Ecto schema.** The Rust server uses its own DB (`sim_rust`) with
+  `CREATE TABLE IF NOT EXISTS`; `depleted_until` is stored as epoch-ms `BIGINT` rather than the Elixir
+  `timestamptz`. Fine for a standalone backend; revisit if the two implementations must share one DB.
+- **Wall-clock-anchored server clock.** The server sets `clock_ms` to wall-clock at startup so depletion
+  respawn times are absolute and survive restart (tests keep the deterministic logical clock from 0).
+  Across a restart the downtime counts toward respawn (matching the Elixir wall-clock `depleted_until`).
+  Revisit if we want downtime *not* to count, or a monotonic clock.
+- **Blocking DB on a dedicated thread, synchronous calls.** Flush/load block the tick briefly (a few ms at
+  ~1s cadence, tiny e2e volume). Production may want a connection pool / async batching / non-blocking
+  reads. The `DurableStore` trait is unchanged, so this is swappable.
+- **DB flush cadence 1s, heartbeat 5s.** Chosen to match the Elixir Datastore so phase8's 1.5s pre-restart
+  wait captures the write; SIGTERM flush covers the rest. Revisit cadence under real load.
+- **`restart-e2e.sh` gained a guarded `E2E_BACKEND=rust` branch.** Touches a shared script; the default
+  Elixir path is unchanged. Revisit if a cleaner harness split is wanted.
+- **phase5 left unchanged.** It's a pre-existing suite bug (fails in both backends); fixing it means nudging
+  the test off the tree-center row — a change for the suite owners, not the Rust impl.
+
+## Verdict (after Phases 0–4 + persistence parity)
 
 The interaction-clustered model is **proven and fully wire/feature-compatible** with the Elixir
 implementation, on the radically different internal structure described above. Never-under-merge holds by
 construction; the single-core dense-cluster ceiling is generous (~0.085 ms/tick at 500×1500); parallelism
-is sound with zero `unsafe`. Remaining work is real-DB persistence and NPC/combat (deferred).
+is sound with zero `unsafe`; players/structures/depletions persist across a real restart via Postgres, and
+the Elixir-authored e2e suite passes (5/6; the 6th fails identically in both backends). Remaining work is
+NPC/combat and the non-persistence ADR-0002 items (fault isolation / crash re-home, hot reload).
 
 ## Open questions (remaining)
 
-- **Real Datastore**: swap `MemStore` for Postgres behind the `DurableStore` trait; persist the sim clock
-  so depletion respawn timing survives a true process restart.
+- **Fault isolation / crash re-home and hot reload** — the remaining ADR-0002 acceptance items the Rust
+  path still owes vs the BEAM design (catch per-cluster/worker panics and re-home from the Datastore;
+  fast restart-from-Postgres covers deploys). The persistence item is now done.
+- **NPC / combat** — the interaction the cluster model exists for beyond movement; unbuilt in both designs.
 - Whether to pursue this Rust path over ADR-0001's BEAM design — recorded in
   [ADR-0002](./docs/adr/0002-rust-clustered-simulation-runtime.md) (proposed: adopt the Rust runtime
   contingent on closing the fault-tolerance/persistence gap; else stay on ADR-0001).

@@ -83,9 +83,11 @@ What the Rust path **gives up** relative to ADR-0001, and what it owes before ac
   supervise the tick loop so a panic restarts the runtime rather than exits. **Acceptance checklist item.**
 - **Hot code reload** is gone; deploys are process restarts. Restart-from-Datastore must be fast and
   lossless to compensate. **Acceptance checklist item.**
-- **Persistence.** The POC ships an in-memory `MemStore` behind a `DurableStore` trait. A real Postgres
-  backend (replacing Ecto's role) and **sim-clock persistence** (so depletion respawn timing survives a
-  true restart) are required. **Acceptance checklist item.**
+- **Persistence.** *Done* — a Postgres `DurableStore` (`sim/src/pgstore.rs`) now persists
+  players/structures/depletions; the server flushes on SIGTERM and anchors its clock to wall-clock so
+  depletion timing survives a real restart. Proven by the e2e specs phase3 + phase8 running green against
+  the Rust backend, and by `sim/tests/pg_restart.rs`. (Uses its own DB schema, not Ecto's — fine for a
+  standalone backend.)
 - **Two languages.** The web/persistence apps are Elixir; the sim core would be Rust. Either the transport
   + persistence move to Rust (the POC already speaks the wire protocol) or a boundary is maintained.
 - **NPCs / combat** — the interaction the model exists for beyond movement — are still unbuilt in both
