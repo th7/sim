@@ -102,6 +102,35 @@ impl DurableStore for MemStore {
     }
 }
 
+/// Lets a boxed trait object be used wherever a `DurableStore` is expected, so
+/// `Sim` can hold either a [`MemStore`] or a Postgres store without generics.
+impl DurableStore for Box<dyn DurableStore + Send> {
+    fn load_player(&self, username: &str) -> Option<PlayerRecord> {
+        (**self).load_player(username)
+    }
+    fn save_player(&mut self, rec: &PlayerRecord) {
+        (**self).save_player(rec)
+    }
+    fn load_structures(&self, coord: ChunkCoord) -> Vec<StructureRecord> {
+        (**self).load_structures(coord)
+    }
+    fn save_structure(&mut self, rec: &StructureRecord) {
+        (**self).save_structure(rec)
+    }
+    fn delete_structure(&mut self, x: i64, y: i64) {
+        (**self).delete_structure(x, y)
+    }
+    fn load_depletions(&self, coord: ChunkCoord) -> Vec<DepletionRecord> {
+        (**self).load_depletions(coord)
+    }
+    fn save_depletion(&mut self, rec: &DepletionRecord) {
+        (**self).save_depletion(rec)
+    }
+    fn delete_depletion(&mut self, x: i64, y: i64) {
+        (**self).delete_depletion(x, y)
+    }
+}
+
 /// Backpressure mode. `Flowing` accepts writes; `Backpressured` would park them
 /// (the sim is single-threaded so we surface the mode rather than block).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

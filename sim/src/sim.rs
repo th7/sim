@@ -9,7 +9,7 @@
 
 use crate::components::{Inventory, Position, PortalDirection, StructureKind};
 use crate::consts::{FLUSH_MS, TICK_MS};
-use crate::datastore::{Datastore, MemStore, PersistEvent, PlayerRecord};
+use crate::datastore::{Datastore, DurableStore, MemStore, PersistEvent, PlayerRecord};
 use crate::geometry::{chunk_center, coord_for, ChunkCoord};
 use crate::ids::{ClusterId, Realm};
 use crate::verbs::VerbError;
@@ -37,8 +37,12 @@ pub struct Sim {
     pending: Vec<OutboundEvent>,
     next_instance: u64,
     pool: Option<crate::parallel::WorkerPool>,
-    datastore: Datastore<MemStore>,
+    datastore: Datastore<BoxedStore>,
 }
+
+/// The durable backend `Sim` persists through — boxed so it can be either an
+/// in-memory [`MemStore`] (tests, fast default) or a Postgres store (the server).
+pub type BoxedStore = Box<dyn DurableStore + Send>;
 
 impl Default for Sim {
     fn default() -> Self {
@@ -48,12 +52,13 @@ impl Default for Sim {
 
 impl Sim {
     pub fn new() -> Self {
-        Sim::with_persistence(MemStore::default())
+        Sim::with_store(MemStore::default())
     }
 
-    /// Construct a Sim over an existing durable store — modelling a process
-    /// restart that resumes from persisted state.
-    pub fn with_persistence(store: MemStore) -> Self {
+    /// Construct a Sim over any durable backend (in-memory or Postgres),
+    /// resuming from whatever state it already holds — i.e. modelling a process
+    /// restart.
+    pub fn with_store(store: impl DurableStore + Send + 'static) -> Self {
         Sim {
             clock_ms: 0,
             tick_count: 0,
@@ -64,23 +69,36 @@ impl Sim {
             pending: Vec::new(),
             next_instance: 1,
             pool: None,
-            datastore: Datastore::new(store),
+            datastore: Datastore::new(Box::new(store)),
         }
     }
 
-    /// Force a Datastore flush (test/operator hook).
+    /// Resume from an existing store (kept for tests that round-trip
+    /// `into_store` → `with_persistence` to model a restart).
+    pub fn with_persistence(store: impl DurableStore + Send + 'static) -> Self {
+        Sim::with_store(store)
+    }
+
+    /// Set the simulation clock's starting value (sub-unit-free, milliseconds).
+    /// The server anchors this to wall-clock so depletion respawn timing is
+    /// absolute and survives a real restart; tests leave it at 0 (deterministic).
+    pub fn set_clock_ms(&mut self, ms: u64) {
+        self.clock_ms = ms;
+    }
+
+    /// Force a Datastore flush (test/operator/shutdown hook).
     pub fn flush_now(&mut self) {
         self.datastore.flush();
     }
 
     /// Consume the Sim and return its durable store (after flushing pending
     /// writes) — hand to [`Sim::with_persistence`] to model a restart.
-    pub fn into_store(mut self) -> MemStore {
+    pub fn into_store(mut self) -> BoxedStore {
         self.datastore.flush();
         self.datastore.into_durable()
     }
 
-    pub fn datastore(&self) -> &Datastore<MemStore> {
+    pub fn datastore(&self) -> &Datastore<BoxedStore> {
         &self.datastore
     }
 
@@ -248,15 +266,20 @@ impl Sim {
         }
     }
 
-    /// Periodic flush + player heartbeat, on the [`FLUSH_MS`] cadence.
+    /// Player heartbeat (every FLUSH_MS) + Datastore flush-to-durable (every
+    /// DB_FLUSH_MS). Heartbeat keeps standing players' positions fresh; the
+    /// flush makes pending writes durable so they survive a restart.
     fn maybe_flush(&mut self) {
-        let period = (FLUSH_MS / TICK_MS).max(1);
-        if self.tick_count % period == 0 {
+        let heartbeat_period = (FLUSH_MS / TICK_MS).max(1);
+        if self.tick_count % heartbeat_period == 0 {
             for u in self.players_in(Realm::Overworld) {
                 if let Some(ev) = self.overworld.player_upsert(&u) {
                     self.datastore.apply(ev);
                 }
             }
+        }
+        let flush_period = (crate::consts::DB_FLUSH_MS / TICK_MS).max(1);
+        if self.tick_count % flush_period == 0 {
             self.datastore.flush();
         }
     }

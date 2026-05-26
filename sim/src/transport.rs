@@ -33,10 +33,22 @@ pub struct Shared {
 
 impl Shared {
     pub fn new() -> Arc<Self> {
+        Shared::with_sim(Sim::new())
+    }
+
+    /// Build shared state around a pre-configured `Sim` (e.g. one backed by
+    /// Postgres with its clock anchored to wall-clock).
+    pub fn with_sim(sim: Sim) -> Arc<Self> {
         Arc::new(Shared {
-            sim: Mutex::new(Sim::new()),
+            sim: Mutex::new(sim),
             conns: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Flush pending writes to durable storage — call on graceful shutdown so a
+    /// restart resumes the latest state.
+    pub fn flush(&self) {
+        self.sim.lock().unwrap().flush_now();
     }
 }
 

@@ -21,6 +21,7 @@ pub mod harness;
 pub mod ids;
 pub mod labeler;
 pub mod parallel;
+pub mod pgstore;
 pub mod phx;
 pub mod repack;
 pub mod server;
@@ -39,8 +40,10 @@ pub mod consts {
     pub const BROADCAST_EVERY: u64 = 2;
     /// Default player speed: 4 world units/sec = 4000 sub-units/sec.
     pub const DEFAULT_SPEED: f64 = 4_000.0;
-    /// Periodic persistence flush cadence.
+    /// Periodic player heartbeat cadence (re-upsert live positions).
     pub const FLUSH_MS: u64 = 5_000;
+    /// Datastore flush-to-durable cadence (mirrors the Elixir Datastore's 1s).
+    pub const DB_FLUSH_MS: u64 = 1_000;
     /// Resource-node respawn delay after harvest.
     pub const RESPAWN_MS: u64 = 30_000;
     /// Interact range squared, in sub-units² (1.0 world unit, squared).

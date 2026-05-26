@@ -50,6 +50,12 @@ impl ResourceKind {
             ResourceKind::Tree => "tree",
         }
     }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "tree" => Some(ResourceKind::Tree),
+            _ => None,
+        }
+    }
 }
 
 /// A gatherable Resource node (harvestable now). Mutually exclusive with
@@ -79,6 +85,12 @@ impl Item {
     pub fn as_str(self) -> &'static str {
         match self {
             Item::Wood => "wood",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "wood" => Some(Item::Wood),
+            _ => None,
         }
     }
 }

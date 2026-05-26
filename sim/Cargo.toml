@@ -11,6 +11,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal"] }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
+postgres = { version = "0.19", features = ["with-serde_json-1"] }
 
 [[bin]]
 name = "server"

@@ -6,6 +6,33 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+REPO="$(pwd)"
+
+# Rust-backend mode (E2E_BACKEND=rust): restart the Rust sim server instead of
+# the BEAM, to prove the Rust Postgres persistence survives a real restart.
+# SIGTERM lets the server flush pending writes before it exits; the fresh
+# process rehydrates from Postgres. Default (Elixir) path below is unchanged.
+if [ "${E2E_BACKEND:-}" = "rust" ]; then
+  PORT="${SIM_PORT:-4000}"
+  for pid in $(pgrep -f 'release/server' || true); do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for _ in $(seq 1 100); do
+    pgrep -f 'release/server' >/dev/null 2>&1 || break
+    sleep 0.1
+  done
+  RLOG="${SIM_LOG:-/tmp/sim-server.log}"
+  ( cd "$REPO/sim" && \
+    SIM_PORT="$PORT" SIM_DATABASE_URL="${SIM_DATABASE_URL:?set SIM_DATABASE_URL for rust e2e}" \
+    nohup ./target/release/server >"$RLOG" 2>&1 & )
+  for _ in $(seq 1 120); do
+    if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then exec 3>&-; exit 0; fi
+    sleep 0.1
+  done
+  echo "rust sim server failed to come back up. Log tail:" >&2
+  tail -30 "$RLOG" >&2 || true
+  exit 1
+fi
 
 bin/kill-e2e.sh
 
