@@ -211,5 +211,6 @@ is sound with zero `unsafe`. Remaining work is real-DB persistence and NPC/comba
 
 - **Real Datastore**: swap `MemStore` for Postgres behind the `DurableStore` trait; persist the sim clock
   so depletion respawn timing survives a true process restart.
-- Whether to pursue this Rust path over ADR-0001's BEAM design — now a decision the POC can actually
-  inform: it works, it's deterministic by construction, and the single-core ceiling is high.
+- Whether to pursue this Rust path over ADR-0001's BEAM design — recorded in
+  [ADR-0002](./docs/adr/0002-rust-clustered-simulation-runtime.md) (proposed: adopt the Rust runtime
+  contingent on closing the fault-tolerance/persistence gap; else stay on ADR-0001).
