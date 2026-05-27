@@ -1,6 +1,6 @@
 //! Wire-facing observation: per-entity state and the per-chunk `snapshot`
 //! payload, shaped to match the committed contract
-//! (`apps/game_web/priv/contract/contract.json`) byte-for-byte. Positions are
+//! (`contract/contract.json`) byte-for-byte. Positions are
 //! sub-unit integers; the frontend divides by 1000.
 //!
 //! The cluster authors observation as changed-only deltas (see

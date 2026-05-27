@@ -1,7 +1,7 @@
 //! Wire-compatible WebSocket server: speaks the Phoenix Channels v2 protocol the
 //! existing frontend's `phoenix` JS client uses, backed by the interaction-
 //! clustered simulation. Drop-in for the Elixir `GameWeb` socket — same topics,
-//! events, and payloads (`apps/game_web/priv/contract`).
+//! events, and payloads (`contract`).
 //!
 //! Run: `cargo run --release --bin server` (listens on `SIM_PORT`, default
 //! 4000). In dev, Vite on :3000 proxies `/socket` here.

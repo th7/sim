@@ -1,5 +1,5 @@
 //! Verb result errors, with `as_str` matching the contract's `reason` enums
-//! exactly (`apps/game_web/priv/contract/contract.json`). The order in which
+//! exactly (`contract/contract.json`). The order in which
 //! the verb implementations check these mirrors the Elixir `with` chains so the
 //! same input yields the same reason.
 

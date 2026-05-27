@@ -1,5 +1,5 @@
 //! Contract conformance: validate the payloads this implementation emits against
-//! the committed wire schemas in `apps/game_web/priv/contract/contract.json`.
+//! the committed wire schemas in `contract/contract.json`.
 //! A minimal JSON-Schema-subset validator covers exactly the constructs the
 //! contract uses (strict objects, map-objects, arrays, enums, oneOf, nullable).
 
@@ -12,10 +12,7 @@ use sim::sim::Sim;
 use sim::wire::{chunk_snapshot, inventory_payload, relocated_payload};
 
 fn load_contract() -> Value {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../apps/game_web/priv/contract/contract.json"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../contract/contract.json");
     let text = std::fs::read_to_string(path).expect("read contract.json");
     serde_json::from_str(&text).expect("parse contract.json")
 }

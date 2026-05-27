@@ -1,20 +1,17 @@
-// Generates the frontend's view of the wire contract from the backend export.
+// Generates the frontend's view of the wire contract from the canonical export.
 //
-//   apps/game_web/priv/contract/contract.json   (backend = source of truth)
+//   contract/contract.json                       (source of truth)
 //        -> frontend/src/contract/types.ts       (TypeScript types, prod-imported)
 //        -> frontend/src/contract/contract.json   (verbatim copy, test-imported for ajv)
 //
 // Run via `npm run gen:contract`. The committed output must stay in sync;
-// the consumer suite fails if the copy drifts from the backend export.
+// the consumer suite fails if the copy drifts from the canonical contract.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { compile } from 'json-schema-to-typescript';
 
-const backendUrl = new URL(
-  '../../apps/game_web/priv/contract/contract.json',
-  import.meta.url,
-);
+const backendUrl = new URL('../../contract/contract.json', import.meta.url);
 const outDirUrl = new URL('../src/contract/', import.meta.url);
 
 const raw = readFileSync(fileURLToPath(backendUrl), 'utf8');

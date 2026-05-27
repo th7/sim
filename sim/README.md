@@ -30,5 +30,5 @@ cargo test --release --test ceiling -- --nocapture   # single-core ceiling + par
 ```
 
 The server is a drop-in for the Elixir `GameWeb` socket: same topics (`player:<u>`, `chunk:x:y`,
-`instance:<id>:chunk:x:y`, `dev:stats`), events, and payloads (`../apps/game_web/priv/contract`). In dev,
+`instance:<id>:chunk:x:y`, `dev:stats`), events, and payloads (`../contract`). In dev,
 Vite on :3000 proxies `/socket` to it; the existing frontend connects unchanged.

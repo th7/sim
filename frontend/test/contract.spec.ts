@@ -10,10 +10,7 @@ import Ajv from 'ajv';
 // cannot check because the server never echoes them.
 
 const localUrl = new URL('../src/contract/contract.json', import.meta.url);
-const backendUrl = new URL(
-  '../../apps/game_web/priv/contract/contract.json',
-  import.meta.url,
-);
+const backendUrl = new URL('../../contract/contract.json', import.meta.url);
 
 const contract = JSON.parse(readFileSync(fileURLToPath(localUrl), 'utf8'));
 const ajv = new Ajv({ allowUnionTypes: true });
