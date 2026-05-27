@@ -100,8 +100,12 @@ dependencies = [
 name = "client"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "protocol",
  "serde_json",
+ "sim",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

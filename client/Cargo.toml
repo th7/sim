@@ -11,5 +11,9 @@ path = "src/lib.rs"
 [dependencies]
 protocol = { path = "../protocol" }
 serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
 
 [dev-dependencies]
+sim = { path = "../sim" }

@@ -5,4 +5,6 @@
 //! thin `three-d`/egui view + WebSocket driver layered on top. Only the model
 //! is unit/integration tested; the rendering is verified manually.
 
+pub mod conn;
 pub mod model;
+pub mod session;
