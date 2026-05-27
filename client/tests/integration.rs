@@ -74,6 +74,31 @@ async fn harvest_yields_wood() {
 }
 
 #[tokio::test]
+async fn dev_mode_receives_stats() {
+    let port = start_server().await;
+    let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
+    assert!(alice.pump_until(T, |m| m.player_pos("alice").is_some()).await);
+    // No stats until dev mode is on.
+    assert!(alice.model().stats().is_none());
+
+    alice.set_dev(true).await.unwrap();
+    // The server pushes dev:stats once per second to subscribers.
+    let got = alice.pump_until(Duration::from_secs(3), |m| m.stats().is_some()).await;
+    assert!(got, "enabling dev mode should start receiving dev:stats pushes");
+
+    let stats = alice.model().stats().unwrap();
+    assert!(stats.active_chunks >= 1, "alice's chunk is hot");
+    assert!(stats.total_players >= 1);
+    // The overlay ring is the 7×7 chunks centred on alice (chunk 0,0).
+    assert_eq!(stats.around.len(), 49);
+    assert!(stats.around.iter().any(|c| c.cx == 0 && c.cy == 0));
+
+    // Turning dev off drops the cached stats.
+    alice.set_dev(false).await.unwrap();
+    assert!(alice.model().stats().is_none());
+}
+
+#[tokio::test]
 async fn walking_into_the_portal_enters_an_instance() {
     let port = start_server().await;
     // chunk (0,0) holds the into_instance portal at world (4,4); spawn at (8,8).

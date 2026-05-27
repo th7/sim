@@ -36,6 +36,7 @@ pub struct RenderState {
 pub enum Input {
     Movement { north: bool, south: bool, east: bool, west: bool },
     Click { wx: f64, wy: f64 },
+    ToggleDev,
 }
 
 pub struct Session {
@@ -46,6 +47,7 @@ pub struct Session {
     player_join_ref: String,
     next_join_ref: u64,
     chunk_join_refs: BTreeMap<ChunkCoord, String>,
+    dev_join_ref: Option<String>,
 }
 
 impl Session {
@@ -73,6 +75,7 @@ impl Session {
             player_join_ref,
             next_join_ref: 1,
             chunk_join_refs: BTreeMap::new(),
+            dev_join_ref: None,
         };
         s.execute(cmds).await?;
         Ok(s)
@@ -122,6 +125,11 @@ impl Session {
                         let cmds = self.model.click(wx, wy);
                         self.execute(cmds).await.ok();
                     }
+                    Some(Input::ToggleDev) => {
+                        let on = !self.model.dev_enabled();
+                        let cmds = self.model.set_dev(on);
+                        self.execute(cmds).await.ok();
+                    }
                     None => break,
                 },
                 _ = heartbeat.tick() => { self.conn.heartbeat().await.ok(); }
@@ -139,6 +147,12 @@ impl Session {
 
     pub async fn click(&mut self, wx: f64, wy: f64) -> Result<(), String> {
         let cmds = self.model.click(wx, wy);
+        self.execute(cmds).await
+    }
+
+    /// Turn the dev overlay on/off (joins or leaves `dev:stats`).
+    pub async fn set_dev(&mut self, on: bool) -> Result<(), String> {
+        let cmds = self.model.set_dev(on);
         self.execute(cmds).await
     }
 
@@ -233,6 +247,16 @@ impl Session {
                     self.conn
                         .push(&self.player_join_ref, &self.player_topic, event, payload)
                         .await?;
+                }
+                Cmd::SubscribeDevStats => {
+                    let jr = self.next_join_ref();
+                    self.dev_join_ref = Some(jr.clone());
+                    self.conn.join(&jr, "dev:stats", json!({ "username": self.username })).await?;
+                }
+                Cmd::UnsubscribeDevStats => {
+                    if let Some(jr) = self.dev_join_ref.take() {
+                        self.conn.leave(&jr, "dev:stats").await?;
+                    }
                 }
             }
         }
