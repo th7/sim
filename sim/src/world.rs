@@ -393,10 +393,15 @@ impl RealmWorld {
                 (now != home).then_some((actor, now))
             })
             .collect();
+        let crossed = !crossings.is_empty();
         for (actor, new_home) in crossings {
             events.extend(self.labeler.move_actor(actor, new_home));
         }
-        if !events.is_empty() {
+        // Hydrate whenever the owned chunk-set may have shifted — i.e. on any
+        // crossing, not only on merge/split. A lone player walking into new
+        // territory produces no topology events, but its cluster's footprint
+        // still slides onto fresh chunks that need their content seeded.
+        if crossed {
             self.hydrate_owned_chunks();
         }
         self.respawn_due(clock_ms);

@@ -11,6 +11,25 @@ fn at(x: i64, y: i64) -> Position {
     Position { x, y }
 }
 
+/// Tick up to `max` times, stopping as soon as `pred` holds; assert it did.
+fn tick_until(sim: &mut Sim, max: usize, pred: impl Fn(&Sim) -> bool) {
+    for _ in 0..max {
+        if pred(sim) {
+            return;
+        }
+        sim.tick();
+    }
+    assert!(pred(sim), "predicate not satisfied within {max} ticks");
+}
+
+/// True iff the resource node `wid` is present and depleted in the live world.
+fn tree_depleted(sim: &Sim, wid: &str) -> bool {
+    matches!(
+        entity_states(sim.overworld()).get(&WireId(wid.into())),
+        Some(EntityWire::Node { depleted: true, .. })
+    )
+}
+
 #[test]
 fn reconnect_resumes_position_and_inventory() {
     let mut sim = Sim::new();
@@ -172,6 +191,54 @@ fn idle_chunk_deactivates_then_rehydrates_from_persistence() {
     );
     // And worldgen content is back too.
     assert!(states.contains_key(&WireId("tree:8000:8000".into())));
+}
+
+#[test]
+fn tree_depletion_survives_walking_away_until_chunk_stops() {
+    // A connected Player harvests a tree, then *walks* far enough that the
+    // cluster releases the tree's chunk and it idle-deactivates (stops). When
+    // the Player walks back, the chunk restarts and the tree must still be
+    // depleted — its state was persisted and rehydrated, not regenerated.
+    let mut sim = Sim::new();
+    sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
+    assert_eq!(sim.harvest("alice", 8_000, 8_000), Ok(()));
+
+    // Sanity: the centre tree is depleted and its chunk is hot (owned).
+    assert!(tree_depleted(&sim, "tree:8000:8000"));
+    assert!(sim.chunk_status(Realm::Overworld, ChunkCoord::new(0, 0)).0, "chunk hot while owned");
+
+    // Step south off the tree row (still in chunk row cy=0), then walk far east
+    // — past chunk (0,0)'s 3×3 footprint — so the cluster releases chunk (0,0).
+    sim.set_intent("alice", 0.0, 1.0);
+    tick_until(&mut sim, 60, |s| s.position("alice").unwrap().y > 10_500);
+    sim.set_intent("alice", 1.0, 0.0);
+    tick_until(&mut sim, 300, |s| s.position("alice").unwrap().chunk().cx >= 3);
+    sim.set_intent("alice", 0.0, 0.0); // stop, far away
+
+    // The chunk is unowned the moment the Player leaves its footprint; the
+    // actual stop (unload) follows after the idle window. Wait for the unload,
+    // signalled by the chunk's entities being gone.
+    assert!(!sim.chunk_status(Realm::Overworld, ChunkCoord::new(0, 0)).0, "chunk released");
+    tick_until(&mut sim, 200, |s| s.chunk_status(Realm::Overworld, ChunkCoord::new(0, 0)).1 == 0);
+    let (hot, count) = sim.chunk_status(Realm::Overworld, ChunkCoord::new(0, 0));
+    assert!(!hot, "chunk (0,0) stopped after the Player walked away");
+    assert_eq!(count, 0, "its tree was unloaded with the chunk");
+    assert!(
+        entity_states(sim.overworld()).get(&WireId("tree:8000:8000".into())).is_none(),
+        "the depleted tree is gone from the live world while the chunk is cold"
+    );
+
+    // Walk back west until chunk (0,0) is owned again → it restarts/rehydrates.
+    sim.set_intent("alice", -1.0, 0.0);
+    tick_until(&mut sim, 400, |s| s.chunk_status(Realm::Overworld, ChunkCoord::new(0, 0)).0);
+    sim.tick(); // let the persisted-state overlay reapply
+
+    // The depletion was maintained across the chunk stop + restart (and we are
+    // well within the 30s respawn window, so it has not regenerated).
+    assert!(
+        tree_depleted(&sim, "tree:8000:8000"),
+        "harvested tree must still be depleted after its chunk stopped and restarted"
+    );
 }
 
 #[test]
