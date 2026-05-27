@@ -24,12 +24,12 @@ async function readX(page: Page, username: string): Promise<number> {
   return page.evaluate((name) => window.__game.players()[name]?.x ?? 0, username);
 }
 
-test('phase 3: a Player\'s position survives a BEAM restart', async ({ browser }) => {
+test('phase 3: a Player\'s position survives a server restart', async ({ browser }) => {
   test.setTimeout(180_000);
   const username = uniq('persistent');
 
-  // 1) Connect, drive east until x clears 1.0, then disconnect (channel
-  //    terminate flushes the saved position to Postgres).
+  // 1) Connect, drive east until x clears 1.0, then disconnect (the disconnect
+  //    flushes the saved position to Postgres).
   const ctx1 = await browser.newContext();
   const page1 = await ctx1.newPage();
   await openAs(page1, username);
@@ -44,11 +44,12 @@ test('phase 3: a Player\'s position survives a BEAM restart', async ({ browser }
   const savedX = await readX(page1, username);
   await ctx1.close();
 
-  // Belt-and-suspenders: the chunk also flushes on its periodic timer and
-  // on terminate; give the channel.terminate a moment to land in Postgres.
+  // Belt-and-suspenders: the server also flushes on its ~1s periodic timer and
+  // on SIGTERM; give the disconnect flush a moment to land in Postgres.
   await new Promise((r) => setTimeout(r, 500));
 
-  // 2) Restart phx.server.
+  // 2) Restart the server (SIGTERM flushes pending writes; the fresh process
+  //    rehydrates from Postgres).
   await exec(resolve(__dirname, '../../bin/restart-e2e.sh'), [], { timeout: 90_000 });
 
   // 3) Reconnect; the new chunk hydrates from Postgres and our cube should

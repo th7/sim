@@ -19,10 +19,9 @@ async function openAtHome(page: Page, username: string): Promise<void> {
 // Golden path: the full Instance round-trip through a real browser — realm
 // transition, camera follow, and return. The server-side semantics (entry/exit
 // migration, inventory survival, instance isolation, no Resource nodes,
-// disconnect teardown) are pinned at the backend seam in game_core
-// (instances_test, session_instance_transitions_test); this spec is the one
-// browser-observable path the backend can't reach (rendered realm switch +
-// camera).
+// disconnect teardown) are pinned in the Rust backend (`sim/tests/verbs.rs`,
+// `sim/tests/persistence.rs`); this spec is the one browser-observable path the
+// backend tests can't reach (rendered realm switch + camera).
 test('phase 9: walk into the Portal, around the Instance, and back out — camera follows', async ({
   browser,
 }) => {

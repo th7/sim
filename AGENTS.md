@@ -1,23 +1,18 @@
-Elixir umbrella for a real-time multiplayer game. Gameplay (ECS, chunks-as-processes) lives in `game_core`; persistence in `game_persistence`; Phoenix Channels in `game_web`. No LiveView.
+Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per realm, partitioned by interaction locality into **clusters**; a serialized **Labeler** owns the partition; a Postgres-backed Datastore persists; a Phoenix-Channels-v2 WebSocket + static-file server is the wire. A Vite + Three.js client (`frontend/`) speaks that wire. See `IDEA.md` for the model and `CONTEXT.md` for the domain language.
 
 ## Project guidelines
 
 - Prefer obvious tests and obvious code over documentation. When documentation is unavoidable, keep it terse.
-- Run `mix precommit` before considering work done.
-- Use `Req` for HTTP — not `:httpoison`, `:tesla`, or `:httpc`.
+- The wire contract (`contract/contract.json`) is the shared schema; the backend conforms to it (`sim/tests/contract.rs`) and the frontend generates its types from it (`npm run gen:contract`). Don't change one side's wire shape without the other.
+- Before considering work done: `cd sim && cargo test` (and `cargo build --all-targets` warning-free), `cd frontend && npm test`.
 
-## Elixir guidelines
+## Rust guidelines
 
-- Lists don't support `mylist[i]`; use `Enum.at/2`, pattern matching, or `List`.
-- Block expressions return values — bind the result; don't rebind a variable inside the block.
-- Don't nest multiple modules in one file.
-- Structs don't implement Access — use `struct.field`, not `struct[:field]`.
-- Don't `String.to_atom/1` on user input (memory leak).
-- Predicates end in `?`; reserve `is_*` for guards.
-- `DynamicSupervisor` and `Registry` children need `name:` in the child spec.
-- For concurrent enumeration with back-pressure, use `Task.async_stream/3` with `timeout: :infinity`.
+- Determinism matters: order with `BTreeMap`/`BTreeSet`, tick clusters in id order, keep the sim clock explicit. The never-under-merge invariant must hold *by construction* (the Labeler reconciles to the canonical partition), not "usually".
+- Match the Elixir numeric constants and the wire contract exactly — positions are sub-units (1 unit = 1000); the client divides by 1000.
+- Keep `unsafe` out (Phase 2 found it unnecessary). The blocking Postgres client must not run on a Tokio worker — it lives on its own thread (see `sim/src/pgstore.rs`).
 
 ## Test guidelines
 
-- Start processes with `start_supervised!/1` for automatic cleanup.
-- No `Process.sleep/1` or `Process.alive?/1` — wait via `Process.monitor/1` + `assert_receive {:DOWN, ...}`. To flush a GenServer's mailbox before the next call, use `_ = :sys.get_state(pid)`.
+- The Rust suite is unit + integration (`sim/tests/`); the cross-restart Postgres test self-skips unless `SIM_TEST_DATABASE_URL` is set.
+- `frontend/e2e/` (Playwright) is the load-bearing end-to-end description; run with `npm run test:e2e`.

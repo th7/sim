@@ -1,8 +1,13 @@
 ---
-status: proposed (decision record; supersedes ADR-0001 if accepted)
+status: accepted; implemented (the Rust runtime is the backend; the Elixir/BEAM implementation has been removed)
 ---
 
 # Simulation runtime: Rust shared-memory clusters vs BEAM Islands
+
+> **Accepted and implemented.** The Rust interaction-clustered runtime (`sim/`) is the backend; the Elixir
+> umbrella (`apps/`) has been removed. The remaining acceptance items below — fault isolation / crash
+> re-home and hot reload — are tracked follow-ups, not blockers. Persistence is done (Postgres
+> `DurableStore`); the full e2e suite passes against the Rust backend.
 
 ## Context
 

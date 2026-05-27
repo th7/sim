@@ -1,11 +1,12 @@
 # Design
 
-What the running system does, from outside. See `CONTEXT.md` for domain language and `PLAN.md` for upcoming work.
+What the running system does, from outside. See `CONTEXT.md` for domain language and `IDEA.md` for the design + build log.
 
-> **Note:** This is the *as-built* system. The Chunk-as-process model and client-driven 3×3 View window
-> below are superseded *in design* by [ADR-0001](./docs/adr/0001-islands-and-cartographer.md) (Islands +
-> Cartographer, server-driven streaming) and the updated `CONTEXT.md` — but **not yet in code**, so this
-> remains what actually runs.
+> **Note:** The running system is the **interaction-clustered** Rust backend
+> ([ADR-0002](./docs/adr/0002-rust-clustered-simulation-runtime.md)): one shared ECS world per realm,
+> partitioned into **clusters** by a serialized **Labeler** (the Cartographer in its shared-memory form),
+> with no per-chunk processes. `CONTEXT.md`'s Island/Cartographer language describes this model; the wire
+> behaviour below is unchanged from the prior Elixir implementation.
 
 ## Player
 
@@ -24,10 +25,10 @@ A connected Player...
 
 ## World
 
-- Single shared Overworld, partitioned into Chunks (24×24 world units; 1 world unit = 1000 sub-units).
-- Each Chunk is a process. Tick rate 20 Hz internal, 10 Hz snapshot broadcast.
-- Chunks activate on demand based on player proximity and deactivate after sustained inactivity.
-- Each connected Player keeps a 5×5 Warm set of Chunks hot around their current Chunk; their 3×3 View window drives snapshot subscriptions.
+- Single shared Overworld, partitioned into Chunks (16×16 world units; 1 world unit = 1000 sub-units).
+- One shared ECS world, ticked at 20 Hz; snapshots broadcast at 10 Hz. Chunks are data, not processes.
+- Chunks activate on demand when a cluster's footprint covers them and deactivate after sustained inactivity.
+- Each connected Player's 3×3 View window drives snapshot subscriptions, contained within the chunks their cluster keeps hot.
 - Resource nodes (trees) and Portals are placed deterministically by Worldgen.
 - Instances are ephemeral, in-memory 3×3 grids spawned on Portal entry. Destroyed when the entering Player leaves or disconnects.
 
@@ -44,5 +45,5 @@ A connected Player...
 
 ## Operator
 
-- Single BEAM node. `mix phx.server` runs everything.
-- Postgres required; dev defaults to a local socket.
+- A single Rust binary (`sim` server) runs everything: it serves the built client and the WebSocket on one port (`SIM_PORT`, default 4000).
+- Postgres optional — set `SIM_DATABASE_URL` to persist (players, structures, depletions survive a restart); unset uses an in-memory store. Flushes pending writes on SIGTERM.

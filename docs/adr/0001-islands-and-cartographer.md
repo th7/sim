@@ -1,8 +1,14 @@
 ---
-status: accepted (design; not yet implemented)
+status: superseded by ADR-0002 (the interaction-clustered model, realized in Rust rather than on the BEAM)
 ---
 
 # Simulation authority is interaction-clustered (Islands), not geographic (Chunks)
+
+> **Superseded by [ADR-0002](./0002-rust-clustered-simulation-runtime.md).** The interaction-clustered
+> *model* this ADR argued for was adopted and built — but in a Rust shared-memory runtime (clusters +
+> a serialized Labeler), not the BEAM realization (process-per-Island + Cartographer) described below.
+> The Context and Decision remain the canonical rationale for *why* simulation is partitioned by
+> interaction locality; the BEAM-specific "How it works" is historical.
 
 ## Context
 

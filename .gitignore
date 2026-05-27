@@ -1,22 +1,4 @@
-# The directory Mix will write compiled artifacts to.
-/_build/
-
-# If you run "mix test --cover", coverage assets end up here.
-/cover/
-
-# The directory Mix downloads your dependencies sources to.
-/deps/
-
-# Where third-party dependencies like ExDoc output generated docs.
-/doc/
-
-# If the VM crashes, it generates a dump, let's ignore it too.
-erl_crash.dump
-
-# Also ignore archive artifacts (built via "mix archive.build").
-*.ez
-
-# Temporary files, for example, from tests.
+# Temporary files (e.g. server logs, pidfiles written under /tmp at repo root).
 /tmp/
 
 # Local Postgres data dir managed by .my-agent/scripts/pg-start.sh.
@@ -28,8 +10,8 @@ erl_crash.dump
 /test-results/
 /playwright-report/
 
-# Rust build output for the /sim crate
+# Rust build output for the /sim crate.
 /sim/target/
 
-# Frontend production build (served by the Rust server via SIM_STATIC_DIR)
+# Frontend production build (served by the Rust server via SIM_STATIC_DIR).
 /frontend/dist/

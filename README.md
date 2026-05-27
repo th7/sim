@@ -2,42 +2,48 @@
 
 A cooperative, persistent, isometric, real-time world where players fight, craft, and gather. PvP is an eventual concern, not v1.
 
-Elixir/Phoenix backend over an ECS with chunks-as-processes; Vite + Three.js client speaking Phoenix Channels. A planned redesign moves simulation from chunks-as-processes to interaction-clustered **Islands** — see [ADR-0001](./docs/adr/0001-islands-and-cartographer.md).
+A **Rust** backend simulating one shared ECS world, partitioned by *interaction locality* into **clusters** (the interaction-clustered model — see [ADR-0002](./docs/adr/0002-rust-clustered-simulation-runtime.md)); a Vite + Three.js client speaking the Phoenix Channels wire protocol. The backend serves both the built client and the socket from one process.
 
 ## Layout
 
-- `apps/game_core/` — ECS, chunks, sessions, collision, worldgen
-- `apps/game_persistence/` — Datastore (single per-node write chokepoint) and Ecto schemas
-- `apps/game_web/` — Phoenix Channels (no LiveView)
+- `sim/` — the Rust backend: ECS + clusters, the serialized Labeler, collision, worldgen, the Postgres-backed Datastore, and a Phoenix-Channels-v2 WebSocket + static-file server (`sim/src/bin/server.rs`). See [`sim/README.md`](./sim/README.md).
 - `frontend/` — Vite + Three.js client
-  - `frontend/test/` — vitest specs against a live Phoenix on `:4000`
-  - `frontend/e2e/` — Playwright specs against a dedicated e2e Phoenix on `:4001`
+  - `frontend/test/` — vitest contract specs (no backend needed)
+  - `frontend/e2e/` — Playwright golden-path specs against the running backend
+- `contract/contract.json` — the wire contract (the shared schema both sides conform to)
 - [`CONTEXT.md`](./CONTEXT.md) — the locked language: glossary + relationships
 - [`DESIGN.md`](./DESIGN.md) — what the running system does today, from outside
-- [`PLAN.md`](./PLAN.md) — work not yet implemented, in three triage buckets
 - [`docs/adr/`](./docs/adr/) — architecture decision records
-- [`IDEA.md`](./IDEA.md) — exploratory Rust POC plan for the Islands redesign
+- [`IDEA.md`](./IDEA.md) — the design + build log of the interaction-clustered Rust backend
 
 ## Running locally
 
-Requires Elixir, Node, and a running Postgres reachable via Unix socket at `/tmp`.
+Requires Rust, Node, and a running Postgres (reachable as `postgres@127.0.0.1:5432`).
 
 ```bash
-mix deps.get && (cd frontend && npm install)
-mix ecto.create && mix ecto.migrate
+createdb -h 127.0.0.1 -U postgres sim_rust          # once
 
-mix phx.server                  # Phoenix on :4000
-(cd frontend && npm run dev)    # Vite on :3000, proxies /api + /socket to :4000
+# Single binary: the backend serves the built client + the socket on :4000.
+(cd frontend && npm install && npm run build)
+(cd sim && SIM_DATABASE_URL=postgres://postgres@127.0.0.1:5432/sim_rust \
+           SIM_STATIC_DIR="$PWD/../frontend/dist" \
+           cargo run --release --bin server)
+# → open http://localhost:4000/?u=alice
+
+# Or, for frontend hot-reload, run Vite in front and let it proxy /socket:
+(cd sim && SIM_DATABASE_URL=postgres://postgres@127.0.0.1:5432/sim_rust cargo run --release --bin server)
+(cd frontend && npm run dev)   # Vite on :3000, proxies /socket to :4000
+# → open http://localhost:3000/?u=alice
 ```
 
-Open <http://localhost:3000/?u=alice>.
+`SIM_DATABASE_URL` is optional — without it the backend uses an in-memory store (no persistence across restart). `?dev=1` shows the dev HUD.
 
 ## Tests
 
 ```bash
-mix test                                # Elixir unit + integration
-(cd frontend && npm test)               # vitest channel specs (needs mix phx.server up)
-(cd frontend && npm run test:e2e)       # Playwright (spins up its own Phoenix on :4001)
+(cd sim && cargo test)             # Rust unit + integration (sim core, wire, persistence, contract)
+(cd frontend && npm test)          # vitest contract specs
+(cd frontend && npm run test:e2e)  # Playwright golden-path browser specs
 ```
 
-The e2e specs under `frontend/e2e/` are the load-bearing description of what the game does end-to-end — read them when you want to know what "works" means.
+The e2e specs under `frontend/e2e/` are the load-bearing description of what the game does end-to-end — read them when you want to know what "works" means. `npm run test:e2e` (→ `bin/e2e.sh`) builds the bundle, spins up a dedicated backend on `:4001` against a fresh `sim_e2e` database, runs the specs, and tears it down.
