@@ -118,6 +118,14 @@ impl Lerp {
 }
 
 fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::mpsc::UnboundedSender<Input>) {
+    // Bail before touching winit if there's no display: its `EventLoop::new`
+    // panics (rather than returning an error) when no GL backend is available,
+    // so the `Window::new` error path below can't catch a headless environment.
+    if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        eprintln!("client: no display (DISPLAY/WAYLAND_DISPLAY unset) — cannot open a window; exiting.");
+        return;
+    }
+
     let window = match Window::new(WindowSettings {
         title: format!("sim — {}", cfg.username),
         max_size: Some((1280, 800)),
