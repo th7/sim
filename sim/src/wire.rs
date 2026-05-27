@@ -11,9 +11,12 @@ use crate::components::*;
 use crate::geometry::ChunkCoord;
 use crate::ids::Realm;
 use crate::world::RealmWorld;
-use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+
+// The serializable per-chunk snapshot payloads now live in the shared `protocol`
+// crate (so the client deserializes the exact structs the server serializes).
+pub use protocol::wire::{ChunkSnapshot, NodeWire, PlayerWire, PortalWire, StructureWire};
 
 /// The `self` event payload: `{"inventory": {"wood": 3, ...}}` (string-keyed).
 pub fn inventory_payload(inv: &Inventory) -> Value {
@@ -101,51 +104,6 @@ pub fn entity_states(rw: &RealmWorld) -> BTreeMap<WireId, EntityWire> {
         );
     }
     out
-}
-
-// --- Serializable per-chunk snapshot (the `snapshot` wire payload) ---
-
-#[derive(Debug, Serialize, PartialEq)]
-pub struct PlayerWire {
-    pub x: i64,
-    pub y: i64,
-}
-
-#[derive(Debug, Serialize, PartialEq)]
-pub struct NodeWire {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub x: i64,
-    pub y: i64,
-    pub depleted: bool,
-}
-
-#[derive(Debug, Serialize, PartialEq)]
-pub struct StructureWire {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub x: i64,
-    pub y: i64,
-    pub hp: i64,
-    pub owner: String,
-}
-
-#[derive(Debug, Serialize, PartialEq)]
-pub struct PortalWire {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub direction: String,
-    pub x: i64,
-    pub y: i64,
-}
-
-/// The full `snapshot` payload for a single chunk, matching the contract.
-#[derive(Debug, Serialize, PartialEq, Default)]
-pub struct ChunkSnapshot {
-    pub players: BTreeMap<String, PlayerWire>,
-    pub resource_nodes: BTreeMap<String, NodeWire>,
-    pub structures: BTreeMap<String, StructureWire>,
-    pub portals: BTreeMap<String, PortalWire>,
 }
 
 /// Build the full snapshot of one chunk from a set of entity states (those

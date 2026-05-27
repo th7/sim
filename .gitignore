@@ -11,7 +11,7 @@
 /playwright-report/
 
 # Rust build output for the /sim crate.
-/sim/target/
+/target/
 
 # Frontend production build (served by the Rust server via SIM_STATIC_DIR).
 /frontend/dist/

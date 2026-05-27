@@ -1,6 +1,10 @@
-//! ECS components. These mirror the Elixir `GameCore.Components.*` so the
-//! simulation produces wire-identical state. Stored in a `hecs::World` per
-//! realm (see [`crate::world`]).
+//! ECS components for the server's `hecs::World` per realm (see [`crate::world`]).
+//! The shared game *kinds* (Item, ResourceKind, StructureKind, PortalKind,
+//! PortalDirection) live in the `protocol` crate and are re-exported here so the
+//! server's `crate::components::Item` etc. paths keep working; the components
+//! that carry ECS/collision data stay server-side.
+
+pub use protocol::types::{Item, PortalDirection, PortalKind, ResourceKind, StructureKind};
 
 use crate::geometry::{coord_for, ChunkCoord};
 use crate::ids::ActorId;
@@ -38,26 +42,6 @@ pub enum Footprint {
     Aabb { w: i64, h: i64 },
 }
 
-/// Resource kinds (trees today; rock/ore later).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResourceKind {
-    Tree,
-}
-
-impl ResourceKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ResourceKind::Tree => "tree",
-        }
-    }
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "tree" => Some(ResourceKind::Tree),
-            _ => None,
-        }
-    }
-}
-
 /// A gatherable Resource node (harvestable now). Mutually exclusive with
 /// [`Depleted`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,82 +58,12 @@ pub struct Depleted {
     pub respawn_at_ms: u64,
 }
 
-/// Item kinds — the *type* of a stackable substance. A quantity of one is an
-/// ItemStack (an entry in [`Inventory`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Item {
-    Wood,
-}
-
-impl Item {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Item::Wood => "wood",
-        }
-    }
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "wood" => Some(Item::Wood),
-            _ => None,
-        }
-    }
-}
-
-/// Structure kinds (only the wooden palisade "wall" in v1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StructureKind {
-    Wall,
-}
-
-impl StructureKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            StructureKind::Wall => "wall",
-        }
-    }
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "wall" => Some(StructureKind::Wall),
-            _ => None,
-        }
-    }
-}
-
 /// A player-placed Structure anchored to a chunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Structure {
     pub kind: StructureKind,
     pub owner: String,
     pub hp: i64,
-}
-
-/// Portal role discriminator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PortalDirection {
-    IntoInstance,
-    OutOfInstance,
-}
-
-impl PortalDirection {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            PortalDirection::IntoInstance => "into_instance",
-            PortalDirection::OutOfInstance => "out_of_instance",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PortalKind {
-    Dungeon,
-}
-
-impl PortalKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            PortalKind::Dungeon => "dungeon",
-        }
-    }
 }
 
 /// A worldgen-placed Overworld→Instance entry or Instance→Overworld exit point.

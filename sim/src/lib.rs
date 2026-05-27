@@ -10,19 +10,21 @@
 //! under `apps/`, but its internal structure is entirely different: there are
 //! no per-chunk processes and no message handoffs.
 
+// Shared with the native client via the `protocol` crate. Re-exported so the
+// server's internal `crate::geometry` / `crate::ids` / `crate::phx` /
+// `crate::consts` paths keep working unchanged.
+pub use protocol::{consts, geometry, ids, phx};
+
 pub mod catalogue;
 pub mod chunkgraph;
 pub mod collision;
 pub mod components;
 pub mod datastore;
 pub mod delta;
-pub mod geometry;
 pub mod harness;
-pub mod ids;
 pub mod labeler;
 pub mod parallel;
 pub mod pgstore;
-pub mod phx;
 pub mod repack;
 pub mod server;
 pub mod sim;
@@ -31,29 +33,3 @@ pub mod verbs;
 pub mod wire;
 pub mod world;
 pub mod worldgen;
-
-/// Game-wide constants, matching the Elixir implementation's values exactly.
-pub mod consts {
-    /// Tick period in milliseconds (20 Hz internal simulation).
-    pub const TICK_MS: u64 = 50;
-    /// Snapshots broadcast every Nth tick (10 Hz observation).
-    pub const BROADCAST_EVERY: u64 = 2;
-    /// Default player speed: 4 world units/sec = 4000 sub-units/sec.
-    pub const DEFAULT_SPEED: f64 = 4_000.0;
-    /// Periodic player heartbeat cadence (re-upsert live positions).
-    pub const FLUSH_MS: u64 = 5_000;
-    /// Datastore flush-to-durable cadence (mirrors the Elixir Datastore's 1s).
-    pub const DB_FLUSH_MS: u64 = 1_000;
-    /// Resource-node respawn delay after harvest.
-    pub const RESPAWN_MS: u64 = 30_000;
-    /// Interact range squared, in sub-units² (1.0 world unit, squared).
-    pub const INTERACT_RANGE_SQ: i64 = 1_000 * 1_000;
-    /// Portal-overlap trigger range squared (0.5 world units squared).
-    pub const PORTAL_OVERLAP_RANGE_SQ: i64 = 250_000;
-    /// Player body-circle radius, in sub-units.
-    pub const PLAYER_BODY_RADIUS: i64 = 300;
-    /// HP removed per damage click.
-    pub const DAMAGE_PER_CLICK: i64 = 25;
-    /// Chunk idle-deactivation timeout.
-    pub const IDLE_TIMEOUT_MS: u64 = 5_000;
-}
