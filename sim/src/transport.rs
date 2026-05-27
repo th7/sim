@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio_tungstenite::tungstenite::Message;
@@ -252,6 +252,18 @@ async fn serve_http(
     head: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let path = request_path(head);
+
+    // Consume the request head (we only peeked it). Closing the socket with
+    // unread bytes in the receive buffer makes the OS send a TCP RST instead of
+    // a clean FIN, which browsers surface as ERR_CONNECTION_RESET.
+    let mut scratch = [0u8; 1024];
+    let mut seen = Vec::new();
+    while !seen.windows(4).any(|w| w == b"\r\n\r\n") && seen.len() < 64 * 1024 {
+        match stream.read(&mut scratch).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => seen.extend_from_slice(&scratch[..n]),
+        }
+    }
 
     let (status, ctype, body): (&str, &str, Vec<u8>) = match &shared.static_dir {
         Some(dir) => match read_static(dir, &path) {
