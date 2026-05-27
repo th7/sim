@@ -7,10 +7,36 @@
 use crate::conn::PhxConn;
 use crate::model::{ClientModel, Cmd, Outbound};
 use protocol::geometry::ChunkCoord;
-use protocol::wire::{ChunkSnapshot, RealmWire, RelocatedPayload, SelfPayload, StatsPayload};
+use protocol::wire::{
+    ChunkSnapshot, NodeWire, PlayerWire, PortalWire, RealmWire, RelocatedPayload, SelfPayload,
+    StatsPayload, StructureWire,
+};
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// A cloneable snapshot of everything the view renders, published by the session
+/// task after each update and read by the render thread each frame.
+#[derive(Debug, Clone)]
+pub struct RenderState {
+    pub own: String,
+    pub realm: RealmWire,
+    pub window_center: ChunkCoord,
+    pub players: BTreeMap<String, PlayerWire>,
+    pub nodes: BTreeMap<String, NodeWire>,
+    pub structures: BTreeMap<String, StructureWire>,
+    pub portals: BTreeMap<String, PortalWire>,
+    pub inventory: BTreeMap<String, u32>,
+    pub stats: Option<StatsPayload>,
+}
+
+/// User input the render thread hands to the session task.
+#[derive(Debug, Clone, Copy)]
+pub enum Input {
+    Movement { north: bool, south: bool, east: bool, west: bool },
+    Click { wx: f64, wy: f64 },
+}
 
 pub struct Session {
     conn: PhxConn,
@@ -54,6 +80,54 @@ impl Session {
 
     pub fn model(&self) -> &ClientModel {
         &self.model
+    }
+
+    /// A cloneable render snapshot of the current model state.
+    pub fn render_state(&self) -> RenderState {
+        RenderState {
+            own: self.username.clone(),
+            realm: self.model.realm(),
+            window_center: self.model.window_center(),
+            players: self.model.players(),
+            nodes: self.model.nodes(),
+            structures: self.model.structures(),
+            portals: self.model.portals(),
+            inventory: self.model.inventory().clone(),
+            stats: self.model.stats().cloned(),
+        }
+    }
+
+    /// Drive the session for the life of the connection: dispatch inbound frames,
+    /// apply input from `input_rx`, heartbeat, and publish a [`RenderState`] into
+    /// `shared` after every change. Returns when the socket or input channel closes.
+    pub async fn run(
+        mut self,
+        mut input_rx: tokio::sync::mpsc::UnboundedReceiver<Input>,
+        shared: Arc<Mutex<RenderState>>,
+    ) {
+        *shared.lock().unwrap() = self.render_state();
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
+        loop {
+            tokio::select! {
+                frame = self.conn.recv() => match frame {
+                    Some(m) => { self.dispatch(m).await.ok(); }
+                    None => break,
+                },
+                inp = input_rx.recv() => match inp {
+                    Some(Input::Movement { north, south, east, west }) => {
+                        let cmds = self.model.set_movement(north, south, east, west);
+                        self.execute(cmds).await.ok();
+                    }
+                    Some(Input::Click { wx, wy }) => {
+                        let cmds = self.model.click(wx, wy);
+                        self.execute(cmds).await.ok();
+                    }
+                    None => break,
+                },
+                _ = heartbeat.tick() => { self.conn.heartbeat().await.ok(); }
+            }
+            *shared.lock().unwrap() = self.render_state();
+        }
     }
 
     // --- input ---
