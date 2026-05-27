@@ -50,7 +50,7 @@ test('phase 3: a Player\'s position survives a server restart', async ({ browser
 
   // 2) Restart the server (SIGTERM flushes pending writes; the fresh process
   //    rehydrates from Postgres).
-  await exec(resolve(__dirname, '../../bin/restart-e2e.sh'), [], { timeout: 90_000 });
+  await exec(resolve(__dirname, '../../bin/restart-e2e'), [], { timeout: 90_000 });
 
   // 3) Reconnect; the new chunk hydrates from Postgres and our cube should
   //    appear at savedX, not at the origin.

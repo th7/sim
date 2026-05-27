@@ -133,7 +133,7 @@ test('phase 8: gather → build → persistence round-trip', async ({ browser })
   await new Promise((r) => setTimeout(r, 1_500));
 
   // Restart Phoenix; the wall row is in Postgres and inventory has flushed.
-  await exec(resolve(__dirname, '../../bin/restart-e2e.sh'), [], { timeout: 90_000 });
+  await exec(resolve(__dirname, '../../bin/restart-e2e'), [], { timeout: 90_000 });
 
   // Reconnect as the same user and verify the wall + inventory hydrate.
   const ctx2 = await browser.newContext();

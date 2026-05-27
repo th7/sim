@@ -46,4 +46,4 @@ createdb -h 127.0.0.1 -U postgres sim_rust          # once
 (cd frontend && npm run test:e2e)  # Playwright golden-path browser specs
 ```
 
-The e2e specs under `frontend/e2e/` are the load-bearing description of what the game does end-to-end — read them when you want to know what "works" means. `npm run test:e2e` (→ `bin/e2e.sh`) builds the bundle, spins up a dedicated backend on `:4001` against a fresh `sim_e2e` database, runs the specs, and tears it down.
+The e2e specs under `frontend/e2e/` are the load-bearing description of what the game does end-to-end — read them when you want to know what "works" means. `npm run test:e2e` (→ `bin/e2e`) builds the bundle, spins up a dedicated backend on `:4001` against a fresh `sim_e2e` database, runs the specs, and tears it down.

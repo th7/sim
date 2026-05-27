@@ -210,7 +210,7 @@ Persistence parity + e2e validation:
   its clock to wall-clock so depletion respawn is absolute across a restart.
 - **The existing e2e suite passes against the Rust backend (6/6)** via `frontend/playwright.rust.config.ts`
   (specs pointed at Vite on :3000, which proxies `/socket` to the Rust server) and a guarded
-  `E2E_BACKEND=rust` branch in `bin/restart-e2e.sh` that restarts the Rust server. phase3/phase8 exercise a
+  `E2E_BACKEND=rust` branch in `bin/restart-e2e` that restarts the Rust server. phase3/phase8 exercise a
   real restart through Postgres. (phase5 was a pre-existing suite bug — it walked due east along y=8, the
   chunk-centre tree row, and was blocked at x≈23.2 in *both* backends; fixed by stepping off that row
   first, and verified green against Elixir too.) A `tests/pg_restart.rs` integration test also proves

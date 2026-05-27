@@ -5,9 +5,9 @@
 #   - start the server on :4001 serving the bundle + socket,
 #   - run the specs (baseURL :4001), then stop the server.
 #
-# The phase3/phase8 specs restart the server mid-run via bin/restart-e2e.sh,
+# The phase3/phase8 specs restart the server mid-run via bin/restart-e2e,
 # which shares the pidfile + port below. Args are passed through to playwright
-# (e.g. `bin/e2e.sh phase9`).
+# (e.g. `bin/e2e phase9`).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
