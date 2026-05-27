@@ -161,6 +161,15 @@ const nodeMeshes = new Map<string, THREE.Group>();
 const structureMeshes = new Map<string, THREE.Group>();
 const portalMeshes = new Map<string, THREE.Group>();
 
+// A player crossing a chunk boundary briefly appears in no chunk snapshot —
+// the per-chunk `snapshot` messages arrive separately, so the "left chunk X"
+// update can be processed before "entered chunk Y". Debounce mesh removal by a
+// few broadcast intervals so a crossing doesn't blink the cube out; a genuinely
+// gone player (disconnect) still clears after the grace window. Realm
+// transitions remove meshes immediately via clearAllChunkSubscriptions.
+const playerLastSeen = new Map<string, number>();
+const PLAYER_REMOVE_GRACE_MS = 400;
+
 function updateRenderedFromMerge(): void {
   const union = new Map<string, PlayerPos>();
   for (const m of channelSnapshots.values()) {
@@ -168,6 +177,7 @@ function updateRenderedFromMerge(): void {
   }
   const now = performance.now();
   for (const [name, target] of union) {
+    playerLastSeen.set(name, now);
     let mesh = playerMeshes.get(name);
     let from: PlayerPos;
     if (!mesh) {
@@ -185,11 +195,12 @@ function updateRenderedFromMerge(): void {
     playerLerps.set(name, { from, target, start: now });
   }
   for (const [name, mesh] of playerMeshes) {
-    if (!union.has(name)) {
-      scene.remove(mesh);
-      playerMeshes.delete(name);
-      playerLerps.delete(name);
-    }
+    if (union.has(name)) continue;
+    if (now - (playerLastSeen.get(name) ?? 0) < PLAYER_REMOVE_GRACE_MS) continue;
+    scene.remove(mesh);
+    playerMeshes.delete(name);
+    playerLerps.delete(name);
+    playerLastSeen.delete(name);
   }
 
   // Resource nodes (trees + stumps).
@@ -441,6 +452,14 @@ function clearAllChunkSubscriptions(): void {
   channelNodes.clear();
   channelStructures.clear();
   channelPortals.clear();
+  // Realm transition: remove player meshes immediately (bypassing the removal
+  // grace) so the cube doesn't slide across the overworld→instance jump.
+  for (const [name, mesh] of playerMeshes) {
+    scene.remove(mesh);
+    playerMeshes.delete(name);
+    playerLerps.delete(name);
+    playerLastSeen.delete(name);
+  }
 }
 
 // One persistent player channel hosts all input verbs and per-Player events.

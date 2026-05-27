@@ -1,52 +1,45 @@
 #!/usr/bin/env bash
-# Kill the running e2e phx.server and start a new one in the background.
-# Used by phase3 and phase8 Playwright specs to prove that Player state
-# survives a real BEAM restart. Scoped to the e2e BEAM so a dev BEAM
-# running in parallel on :4000 is left alone.
+# Restart the e2e Rust sim server. Used by the phase3/phase8 Playwright specs to
+# prove that Player/Structure/depletion state survives a real process restart:
+# SIGTERM lets the server flush pending writes to Postgres before it exits, then
+# a fresh process rehydrates from Postgres.
+#
+# Scoped to the e2e server via a pidfile (SIM_PIDFILE) and its own port
+# (SIM_PORT, default 4001), so a dev server on :4000 is left alone.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 
-# Rust-backend mode (E2E_BACKEND=rust): restart the Rust sim server instead of
-# the BEAM, to prove the Rust Postgres persistence survives a real restart.
-# SIGTERM lets the server flush pending writes before it exits; the fresh
-# process rehydrates from Postgres. Default (Elixir) path below is unchanged.
-if [ "${E2E_BACKEND:-}" = "rust" ]; then
-  PORT="${SIM_PORT:-4000}"
-  for pid in $(pgrep -f 'release/server' || true); do
+PORT="${SIM_PORT:-4001}"
+PIDFILE="${SIM_PIDFILE:-/tmp/sim-e2e.pid}"
+RLOG="${SIM_LOG:-/tmp/sim-e2e.log}"
+
+# Stop the current e2e server (graceful: lets it flush to Postgres).
+if [ -f "$PIDFILE" ]; then
+  pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+  if [ -n "${pid:-}" ]; then
     kill -TERM "$pid" 2>/dev/null || true
-  done
-  for _ in $(seq 1 100); do
-    pgrep -f 'release/server' >/dev/null 2>&1 || break
-    sleep 0.1
-  done
-  RLOG="${SIM_LOG:-/tmp/sim-server.log}"
-  ( cd "$REPO/sim" && \
-    SIM_PORT="$PORT" SIM_DATABASE_URL="${SIM_DATABASE_URL:?set SIM_DATABASE_URL for rust e2e}" \
-    nohup ./target/release/server >"$RLOG" 2>&1 & )
-  for _ in $(seq 1 120); do
-    if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then exec 3>&-; exit 0; fi
-    sleep 0.1
-  done
-  echo "rust sim server failed to come back up. Log tail:" >&2
-  tail -30 "$RLOG" >&2 || true
-  exit 1
+    for _ in $(seq 1 100); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+  fi
 fi
 
-bin/kill-e2e.sh
-
-LOG=/tmp/phx-e2e-restart.log
-nohup env MIX_ENV=e2e PORT=4001 mix phx.server >"$LOG" 2>&1 &
-disown || true
+# Start a fresh one, serving the same bundle from the same database.
+( cd "$REPO/sim" && \
+  SIM_PORT="$PORT" \
+  SIM_DATABASE_URL="${SIM_DATABASE_URL:?set SIM_DATABASE_URL for e2e}" \
+  SIM_STATIC_DIR="${SIM_STATIC_DIR:-}" \
+  nohup ./target/release/server >"$RLOG" 2>&1 &
+  echo $! >"$PIDFILE" )
 
 for _ in $(seq 1 120); do
-  if curl -sf -o /dev/null http://localhost:4001/; then
-    exit 0
-  fi
-  sleep 0.5
+  if curl -sf -o /dev/null "http://127.0.0.1:$PORT/"; then exit 0; fi
+  sleep 0.25
 done
 
-echo "e2e phx.server failed to come back up within 60s. Log tail:" >&2
-tail -30 "$LOG" >&2 || true
+echo "e2e sim server failed to come back up. Log tail:" >&2
+tail -30 "$RLOG" >&2 || true
 exit 1
