@@ -41,10 +41,21 @@ test("phase 5: a Player walks across multiple chunk boundaries without glitches"
   }, alice);
 
   await page.locator('canvas').focus();
-  await page.keyboard.down('d');
 
-  // Alice spawns at chunk (0,0) center, world (8, 8). Crosses into (1,0)
-  // at x=16, into (2,0) at x=32. Wait until she's safely inside (2,0).
+  // Alice spawns at chunk (0,0) centre, world (8, 8). Worldgen clusters trees
+  // around every chunk centre (y ≈ 8), so a due-east walk along y=8 would
+  // collide with the next chunk's centre tree and never cross a boundary.
+  // Step south to a tree-free row first (still in chunk row cy=0), then walk
+  // east — crossing into (1,0) at x=16 and (2,0) at x=32.
+  await page.keyboard.down('s');
+  await page.waitForFunction(
+    (name) => (window.__game.players()[name]?.y ?? 0) > 10,
+    alice,
+    { timeout: 10_000 },
+  );
+  await page.keyboard.up('s');
+
+  await page.keyboard.down('d');
   await page.waitForFunction(
     (name) => (window.__game.players()[name]?.x ?? 0) > 33,
     alice,
