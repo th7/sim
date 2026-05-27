@@ -214,7 +214,10 @@ Persistence parity + e2e validation:
   real restart through Postgres. (phase5 was a pre-existing suite bug — it walked due east along y=8, the
   chunk-centre tree row, and was blocked at x≈23.2 in *both* backends; fixed by stepping off that row
   first, and verified green against Elixir too.) A `tests/pg_restart.rs` integration test also proves
-  cross-restart durability (gated on `SIM_TEST_DATABASE_URL`; the default 94-test suite needs no database).
+  cross-restart durability (gated on `SIM_TEST_DATABASE_URL`; the default suite needs no database). A test
+  for tree depletion surviving a *walk-away* chunk stop (`tree_depletion_survives_walking_away_until_chunk_stops`)
+  also fixed a latent bug: newly-owned chunks are now hydrated on **any** crossing, not only when a crossing
+  produced a merge/split — a lone player walking into fresh territory previously left those chunks unseeded.
 
 ## Decisions to revisit (moderate-to-low confidence)
 
