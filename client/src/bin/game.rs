@@ -9,9 +9,18 @@
 use client::session::{Input, RenderState, Session};
 use protocol::geometry::{ChunkCoord, SUB_UNITS_PER_UNIT};
 use protocol::wire::RealmWire;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use three_d::*;
+
+/// World units per chunk edge (matches the server's `CHUNK_SIZE`).
+const CHUNK_SIZE: f32 = 16.0;
+/// Snapshots arrive at ~10 Hz; lerp toward each new target over this window so
+/// motion stays smooth without client-side prediction (mirrors the old client).
+const SNAPSHOT_INTERVAL_MS: f64 = 100.0;
+/// Keep rendering a player this long after they vanish from snapshots, so a
+/// chunk-boundary crossing (briefly in no snapshot) doesn't blink the cube out.
+const PLAYER_REMOVE_GRACE_MS: f64 = 400.0;
 
 fn main() {
     let cfg = Args::parse();
@@ -43,6 +52,11 @@ fn main() {
                 }
             });
         });
+    }
+
+    // Start in dev mode if requested (the session joins dev:stats on toggle).
+    if cfg.dev {
+        let _ = input_tx.send(Input::ToggleDev);
     }
 
     run_view(cfg, shared, input_tx);
@@ -82,6 +96,27 @@ fn w(sub: i64) -> f32 {
     sub as f32 / SUB_UNITS_PER_UNIT as f32
 }
 
+/// Per-player interpolation state: lerp the visible cube from `from` toward
+/// `target` over `SNAPSHOT_INTERVAL_MS` starting at `start`. `last_seen` drives
+/// the removal grace.
+#[derive(Clone, Copy)]
+struct Lerp {
+    from: (f32, f32),
+    target: (f32, f32),
+    start: f64,
+    last_seen: f64,
+}
+
+impl Lerp {
+    fn visible(&self, now: f64) -> (f32, f32) {
+        let t = (((now - self.start) / SNAPSHOT_INTERVAL_MS).clamp(0.0, 1.0)) as f32;
+        (
+            self.from.0 + (self.target.0 - self.from.0) * t,
+            self.from.1 + (self.target.1 - self.from.1) * t,
+        )
+    }
+}
+
 fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::mpsc::UnboundedSender<Input>) {
     let window = match Window::new(WindowSettings {
         title: format!("sim — {}", cfg.username),
@@ -96,35 +131,42 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
     };
     let context = window.gl();
 
+    // Fixed isometric offset; the camera re-frames the local player every frame.
+    let cam_offset = vec3(12.0, 12.0, 12.0);
+    let mut cam_target = vec3(cfg.chunk.cx as f32 * CHUNK_SIZE, 0.0, cfg.chunk.cy as f32 * CHUNK_SIZE);
     let mut camera = Camera::new_perspective(
         window.viewport(),
-        vec3(8.0, 16.0, 24.0),
-        vec3(8.0, 0.0, 8.0),
+        cam_target + cam_offset,
+        cam_target,
         vec3(0.0, 1.0, 0.0),
-        degrees(45.0),
+        degrees(50.0),
         0.1,
-        1000.0,
+        500.0,
     );
-    let sun = DirectionalLight::new(&context, 2.0, Srgba::WHITE, vec3(-0.5, -1.0, -0.3));
-    let ambient = AmbientLight::new(&context, 0.5, Srgba::WHITE);
+    // Key light aimed down the old client's (-6,10,-3) offset → travel dir (6,-10,3).
+    let sun = DirectionalLight::new(&context, 2.8, Srgba::WHITE, vec3(0.5, -0.83, 0.25));
+    let ambient = AmbientLight::new(&context, 1.0, Srgba::WHITE);
 
     let mut keys = Keys::default();
     let mut gui = GUI::new(&context);
-    let dev = cfg.dev;
+    let mut dev_view = cfg.dev;
+    let mut lerps: HashMap<String, Lerp> = HashMap::new();
+    let mut last_realm = RealmWire::Overworld;
 
     window.render_loop(move |mut frame_input| {
         camera.set_viewport(frame_input.viewport);
+        let now = frame_input.accumulated_time;
 
         // --- input ---
         let mut moved = false;
         for event in frame_input.events.iter() {
             match event {
-                Event::KeyPress { kind, .. } => {
-                    moved |= keys.set(*kind, true);
+                Event::KeyPress { kind: Key::Tab, .. } => {
+                    dev_view = !dev_view;
+                    let _ = input_tx.send(Input::ToggleDev);
                 }
-                Event::KeyRelease { kind, .. } => {
-                    moved |= keys.set(*kind, false);
-                }
+                Event::KeyPress { kind, .. } => moved |= keys.set(*kind, true),
+                Event::KeyRelease { kind, .. } => moved |= keys.set(*kind, false),
                 Event::MousePress { button: MouseButton::Left, position, .. } => {
                     if let Some((wx, wy)) = ground_pick(&camera, *position) {
                         let _ = input_tx.send(Input::Click { wx, wy });
@@ -142,45 +184,118 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
             });
         }
 
-        // --- build the scene from the latest render state ---
         let rs = shared.lock().unwrap().clone();
+
+        // --- player interpolation + removal grace ---
+        // A realm switch teleports the player; clear lerp state so the cube
+        // doesn't slide across the jump (mirrors clearAllChunkSubscriptions).
+        if rs.realm != last_realm {
+            lerps.clear();
+            last_realm = rs.realm;
+        }
+        for (name, p) in &rs.players {
+            let target = (w(p.x), w(p.y));
+            match lerps.get_mut(name) {
+                None => {
+                    lerps.insert(
+                        name.clone(),
+                        Lerp { from: target, target, start: now, last_seen: now },
+                    );
+                }
+                Some(l) => {
+                    l.last_seen = now;
+                    if l.target != target {
+                        l.from = l.visible(now); // keep motion continuous mid-segment
+                        l.target = target;
+                        l.start = now;
+                    }
+                }
+            }
+        }
+        lerps.retain(|_, l| now - l.last_seen < PLAYER_REMOVE_GRACE_MS);
+
+        // --- build the scene ---
         let mut objects: Vec<Gm<Mesh, PhysicalMaterial>> = Vec::new();
 
-        // Players (own = brighter).
-        for (name, p) in &rs.players {
-            let color = if *name == rs.own { Srgba::new(80, 200, 120, 255) } else { player_color(name) };
-            objects.push(box_at(&context, w(p.x), 0.5, w(p.y), 0.6, 1.0, 0.6, color));
+        // Ground plane.
+        objects.push(box_at(&context, 0.0, -0.01, 0.0, 4000.0, 0.02, 4000.0, rgb(0x3a3a3a)));
+
+        // Players (body + head), at the interpolated position.
+        for (name, l) in &lerps {
+            let (x, z) = l.visible(now);
+            objects.push(box_at(&context, x, 0.5, z, 0.6, 1.0, 0.6, hash_color(name)));
+            objects.push(box_at(&context, x, 1.25, z, 0.5, 0.5, 0.5, rgb(0xeac9a0)));
         }
-        // Resource nodes (trees): live = green, depleted = brown stump.
+        // Resource nodes: trunk always; conical foliage only when not depleted.
         for n in rs.nodes.values() {
-            let (h, color) = if n.depleted {
-                (0.4, Srgba::new(110, 80, 50, 255))
-            } else {
-                (1.4, Srgba::new(46, 125, 50, 255))
-            };
-            objects.push(box_at(&context, w(n.x), h / 2.0, w(n.y), 0.5, h, 0.5, color));
+            let (x, z) = (w(n.x), w(n.y));
+            objects.push(cylinder_at(&context, x, 0.0, z, 0.16, 0.6, rgb(0x6d4c41)));
+            if !n.depleted {
+                objects.push(cone_at(&context, x, 0.5, z, 0.55, 0.7, rgb(0x2e7d32)));
+                objects.push(cone_at(&context, x, 1.0, z, 0.40, 0.55, rgb(0x2e7d32)));
+            }
         }
-        // Structures (walls).
+        // Structures (walls): three planks along x.
+        const PLANK_COLORS: [u32; 3] = [0x8d6e63, 0x795548, 0x6d4c41];
         for s in rs.structures.values() {
-            objects.push(box_at(&context, w(s.x), 0.5, w(s.y), 1.0, 1.0, 1.0, Srgba::new(141, 110, 99, 255)));
+            let (x, z) = (w(s.x), w(s.y));
+            for (i, c) in PLANK_COLORS.iter().enumerate() {
+                let px = x + (i as f32 - 1.0) * 0.29; // pitch 0.28 + 0.01 gap
+                objects.push(box_at(&context, px, 0.5, z, 0.28, 1.0, 0.9, rgb(*c)));
+            }
         }
-        // Portals.
+        // Portals: a flat disc, coloured by direction (the torus ring the old
+        // client drew has no three-d primitive — omitted, see port notes).
         for p in rs.portals.values() {
-            let color = if p.direction == "out_of_instance" {
-                Srgba::new(255, 112, 67, 255)
-            } else {
-                Srgba::new(126, 87, 194, 255)
-            };
-            objects.push(box_at(&context, w(p.x), 0.5, w(p.y), 0.9, 0.2, 0.9, color));
+            let color = if p.direction == "into_instance" { rgb(0x7e57c2) } else { rgb(0xff7043) };
+            objects.push(cylinder_at(&context, w(p.x), 0.0, w(p.y), 0.65, 0.04, color));
         }
 
-        // Camera follows the player.
-        if let Some(me) = rs.players.get(&rs.own) {
-            let (tx, tz) = (w(me.x), w(me.y));
-            camera.set_view(vec3(tx, 16.0, tz + 16.0), vec3(tx, 0.0, tz), vec3(0.0, 1.0, 0.0));
+        // Dev chunk-lifecycle overlay (transparent, drawn after opaque geometry).
+        if let Some(stats) = &rs.stats {
+            for e in &stats.around {
+                let x0 = e.cx as f32 * CHUNK_SIZE;
+                let z0 = e.cy as f32 * CHUNK_SIZE;
+                let (fill, alpha) = match e.lifecycle.as_str() {
+                    "hot" => (0x244d24, 64),
+                    "idle_armed" => (0x6e5a1f, 64),
+                    _ => (0x222222, 13), // cold
+                };
+                objects.push(flat_quad(
+                    &context,
+                    x0 + CHUNK_SIZE / 2.0,
+                    0.005,
+                    z0 + CHUNK_SIZE / 2.0,
+                    CHUNK_SIZE,
+                    CHUNK_SIZE,
+                    rgba(fill, alpha),
+                ));
+                // Shrinking idle countdown bar.
+                if e.lifecycle == "idle_armed" {
+                    if let Some(rem) = e.idle_ms_remaining {
+                        let frac = (rem as f32 / 5000.0).clamp(0.0, 1.0);
+                        objects.push(flat_quad(
+                            &context,
+                            x0 + CHUNK_SIZE * frac / 2.0,
+                            0.012,
+                            z0 + 0.5,
+                            CHUNK_SIZE * frac,
+                            0.5,
+                            rgba(0xffcc00, 204),
+                        ));
+                    }
+                }
+            }
         }
 
-        // HUD: inventory always; dev overlay with ?dev.
+        // Camera follows the local player's interpolated position.
+        if let Some(l) = lerps.get(&rs.own) {
+            let (x, z) = l.visible(now);
+            cam_target = vec3(x, 0.0, z);
+        }
+        camera.set_view(cam_target + cam_offset, cam_target, vec3(0.0, 1.0, 0.0));
+
+        // HUD: inventory always; dev panel (user/realm/pos/chunk/view/active/total) with dev mode.
         gui.update(
             &mut frame_input.events,
             frame_input.accumulated_time,
@@ -196,7 +311,7 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
                         ui.label(format!("{item}: {n}"));
                     }
                 });
-                if dev {
+                if dev_view {
                     EWindow::new("dev").anchor(Align2::RIGHT_TOP, [-8.0, 8.0]).show(ctx, |ui| {
                         ui.label(format!("user:   {}", rs.own));
                         let realm = match rs.realm {
@@ -204,6 +319,21 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
                             RealmWire::Instance { id } => format!("instance:{id}"),
                         };
                         ui.label(format!("realm:  {realm}"));
+                        let (pos, chunk) = match rs.players.get(&rs.own) {
+                            Some(p) => {
+                                let (px, py) = (w(p.x), w(p.y));
+                                (
+                                    format!("({px:.1}, {py:.1})"),
+                                    format!(
+                                        "({}, {})",
+                                        (px / CHUNK_SIZE).floor() as i32,
+                                        (py / CHUNK_SIZE).floor() as i32
+                                    ),
+                                )
+                            }
+                            None => ("—".to_string(), "—".to_string()),
+                        };
+                        ui.label(format!("pos:    {pos}  chunk: {chunk}"));
                         let (active, total) = rs
                             .stats
                             .as_ref()
@@ -216,9 +346,9 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
         );
 
         let bg = if matches!(rs.realm, RealmWire::Instance { .. }) {
-            (0.10, 0.06, 0.18)
+            (0.102, 0.063, 0.188) // INSTANCE_BG 0x1a1030
         } else {
-            (0.06, 0.06, 0.07)
+            (0.063, 0.063, 0.063) // OVERWORLD_BG 0x101010
         };
         frame_input
             .screen()
@@ -257,26 +387,66 @@ impl Keys {
     }
 }
 
-fn box_at(
-    context: &Context,
-    x: f32,
-    y: f32,
-    z: f32,
-    sx: f32,
-    sy: f32,
-    sz: f32,
-    color: Srgba,
-) -> Gm<Mesh, PhysicalMaterial> {
+fn rgb(hex: u32) -> Srgba {
+    Srgba::new(((hex >> 16) & 0xff) as u8, ((hex >> 8) & 0xff) as u8, (hex & 0xff) as u8, 255)
+}
+
+fn rgba(hex: u32, a: u8) -> Srgba {
+    let c = rgb(hex);
+    Srgba::new(c.r, c.g, c.b, a)
+}
+
+/// A box centred at `(x, y, z)` with full extents `(sx, sy, sz)`.
+fn box_at(context: &Context, x: f32, y: f32, z: f32, sx: f32, sy: f32, sz: f32, color: Srgba) -> Gm<Mesh, PhysicalMaterial> {
     let mut mesh = Gm::new(
         Mesh::new(context, &CpuMesh::cube()),
-        PhysicalMaterial::new_opaque(
-            context,
-            &CpuMaterial { albedo: color, ..Default::default() },
-        ),
+        PhysicalMaterial::new_opaque(context, &CpuMaterial { albedo: color, ..Default::default() }),
     );
-    // CpuMesh::cube spans [-1, 1] (side 2), so halve the scale.
+    // CpuMesh::cube spans [-1, 1] (side 2), so halve the extents.
     mesh.set_transformation(
         Mat4::from_translation(vec3(x, y, z)) * Mat4::from_nonuniform_scale(sx / 2.0, sy / 2.0, sz / 2.0),
+    );
+    mesh
+}
+
+/// A thin transparent quad centred at `(cx, y, cz)` spanning `sx × sz` on the
+/// ground plane — used for the dev overlay.
+fn flat_quad(context: &Context, cx: f32, y: f32, cz: f32, sx: f32, sz: f32, color: Srgba) -> Gm<Mesh, PhysicalMaterial> {
+    let mut mesh = Gm::new(
+        Mesh::new(context, &CpuMesh::cube()),
+        PhysicalMaterial::new_transparent(context, &CpuMaterial { albedo: color, ..Default::default() }),
+    );
+    mesh.set_transformation(
+        Mat4::from_translation(vec3(cx, y, cz)) * Mat4::from_nonuniform_scale(sx / 2.0, 0.001, sz / 2.0),
+    );
+    mesh
+}
+
+/// A vertical cylinder of `radius`/`height` standing on `base_y`. `CpuMesh::cylinder`
+/// runs along +x in [0,1] with radius 1, so we scale then rotate +x→+y.
+fn cylinder_at(context: &Context, x: f32, base_y: f32, z: f32, radius: f32, height: f32, color: Srgba) -> Gm<Mesh, PhysicalMaterial> {
+    let mut mesh = Gm::new(
+        Mesh::new(context, &CpuMesh::cylinder(16)),
+        PhysicalMaterial::new_opaque(context, &CpuMaterial { albedo: color, ..Default::default() }),
+    );
+    mesh.set_transformation(
+        Mat4::from_translation(vec3(x, base_y, z))
+            * Mat4::from_angle_z(degrees(90.0))
+            * Mat4::from_nonuniform_scale(height, radius, radius),
+    );
+    mesh
+}
+
+/// A vertical cone with its base (`radius`) on `base_y` and apex `height` above.
+fn cone_at(context: &Context, x: f32, base_y: f32, z: f32, radius: f32, height: f32, color: Srgba) -> Gm<Mesh, PhysicalMaterial> {
+    let mut mesh = Gm::new(
+        Mesh::new(context, &CpuMesh::cone(16)),
+        PhysicalMaterial::new_opaque(context, &CpuMaterial { albedo: color, ..Default::default() }),
+    );
+    mesh.set_transformation(
+        Mat4::from_translation(vec3(x, base_y, z))
+            * Mat4::from_angle_z(degrees(90.0))
+            * Mat4::from_nonuniform_scale(height, radius, radius),
     );
     mesh
 }
@@ -296,16 +466,12 @@ fn ground_pick(camera: &Camera, pixel: PhysicalPoint) -> Option<(f64, f64)> {
     Some((hit.x as f64, hit.z as f64))
 }
 
-fn player_color(name: &str) -> Srgba {
-    const PALETTE: [(u8, u8, u8); 6] = [
-        (76, 175, 80),
-        (33, 150, 243),
-        (255, 152, 0),
-        (233, 30, 99),
-        (156, 39, 176),
-        (255, 235, 59),
-    ];
-    let h = name.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
-    let (r, g, b) = PALETTE[(h as usize) % PALETTE.len()];
-    Srgba::new(r, g, b, 255)
+/// Stable per-name body colour, matching the old client's palette + hash.
+fn hash_color(name: &str) -> Srgba {
+    const PALETTE: [u32; 6] = [0x4caf50, 0x2196f3, 0xff9800, 0xe91e63, 0x9c27b0, 0xffeb3b];
+    let mut h: i32 = 0;
+    for b in name.bytes() {
+        h = h.wrapping_mul(31).wrapping_add(b as i32);
+    }
+    rgb(PALETTE[(h.unsigned_abs() as usize) % PALETTE.len()])
 }
