@@ -208,14 +208,13 @@ Persistence parity + e2e validation:
   handle — the same shape as the Elixir Datastore being a separate process. `Sim` holds a *boxed* store
   (`with_store`), the server picks Postgres when `SIM_DATABASE_URL` is set, flushes on SIGTERM, and anchors
   its clock to wall-clock so depletion respawn is absolute across a restart.
-- **The existing e2e suite runs against the Rust backend** via `frontend/playwright.rust.config.ts` (specs
-  pointed at Vite on :3000, which proxies `/socket` to the Rust server) and a guarded `E2E_BACKEND=rust`
-  branch in `bin/restart-e2e.sh` that restarts the Rust server. Scorecard (Elixir-authored specs, Rust
-  backend): **phase1, phase3, phase6_5, phase8, phase9 pass; phase5 fails — and fails *identically* against
-  the Elixir backend** (worldgen puts a tree at every chunk centre, blocking phase5's due-east walk along
-  y=8 at x≈23.2). So phase5 is a pre-existing test/worldgen tension, not a Rust regression; parity holds.
-  A `tests/pg_restart.rs` integration test also proves cross-restart durability (gated on
-  `SIM_TEST_DATABASE_URL`; the default 94-test suite needs no database).
+- **The existing e2e suite passes against the Rust backend (6/6)** via `frontend/playwright.rust.config.ts`
+  (specs pointed at Vite on :3000, which proxies `/socket` to the Rust server) and a guarded
+  `E2E_BACKEND=rust` branch in `bin/restart-e2e.sh` that restarts the Rust server. phase3/phase8 exercise a
+  real restart through Postgres. (phase5 was a pre-existing suite bug — it walked due east along y=8, the
+  chunk-centre tree row, and was blocked at x≈23.2 in *both* backends; fixed by stepping off that row
+  first, and verified green against Elixir too.) A `tests/pg_restart.rs` integration test also proves
+  cross-restart durability (gated on `SIM_TEST_DATABASE_URL`; the default 94-test suite needs no database).
 
 ## Decisions to revisit (moderate-to-low confidence)
 
@@ -233,8 +232,8 @@ Persistence parity + e2e validation:
   wait captures the write; SIGTERM flush covers the rest. Revisit cadence under real load.
 - **`restart-e2e.sh` gained a guarded `E2E_BACKEND=rust` branch.** Touches a shared script; the default
   Elixir path is unchanged. Revisit if a cleaner harness split is wanted.
-- **phase5 left unchanged.** It's a pre-existing suite bug (fails in both backends); fixing it means nudging
-  the test off the tree-center row — a change for the suite owners, not the Rust impl.
+- **phase5 spec edited** to step off the chunk-centre tree row before walking east (it was a pre-existing
+  suite bug, blocked in both backends). Verified green against Elixir too, so it's a backend-agnostic fix.
 
 ## Verdict (after Phases 0–4 + persistence parity)
 
@@ -242,8 +241,8 @@ The interaction-clustered model is **proven and fully wire/feature-compatible** 
 implementation, on the radically different internal structure described above. Never-under-merge holds by
 construction; the single-core dense-cluster ceiling is generous (~0.085 ms/tick at 500×1500); parallelism
 is sound with zero `unsafe`; players/structures/depletions persist across a real restart via Postgres, and
-the Elixir-authored e2e suite passes (5/6; the 6th fails identically in both backends). Remaining work is
-NPC/combat and the non-persistence ADR-0002 items (fault isolation / crash re-home, hot reload).
+the Elixir-authored e2e suite passes 6/6 against the Rust backend. Remaining work is NPC/combat and the
+non-persistence ADR-0002 items (fault isolation / crash re-home, hot reload).
 
 ## Open questions (remaining)
 
