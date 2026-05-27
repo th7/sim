@@ -5,9 +5,9 @@
 # child PIDs are the real processes, not a `cargo run` wrapper).
 #
 # Usage:
-#   bin/dev.sh                    # server on :4000 + client as "alice"
-#   bin/dev.sh --user bob         # name the player
-#   bin/dev.sh --dev              # extra client flags are forwarded
+#   bin/dev                       # server on :4000 + client as "alice"
+#   bin/dev --user bob            # name the player
+#   bin/dev --dev                 # extra client flags are forwarded
 #
 # Env:
 #   SIM_PORT          server port (default 4000); the client points here too
