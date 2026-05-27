@@ -233,18 +233,24 @@ Persistence parity + e2e validation:
   reads. The `DurableStore` trait is unchanged, so this is swappable.
 - **DB flush cadence 1s, heartbeat 5s.** Chosen to match the Elixir Datastore so phase8's 1.5s pre-restart
   wait captures the write; SIGTERM flush covers the rest. Revisit cadence under real load.
-- **`restart-e2e.sh` gained a guarded `E2E_BACKEND=rust` branch.** Touches a shared script; the default
-  Elixir path is unchanged. Revisit if a cleaner harness split is wanted.
 - **phase5 spec edited** to step off the chunk-centre tree row before walking east (it was a pre-existing
   suite bug, blocked in both backends). Verified green against Elixir too, so it's a backend-agnostic fix.
+- **Frontend mesh-removal debounce** (`PLAYER_REMOVE_GRACE_MS`). Per-chunk snapshots arrive as separate
+  messages, so a boundary crossing could process "left chunk X" before "entered chunk Y" and blink the
+  cube out for a frame; debouncing removal fixes it (realm transitions still clear immediately). Exposed
+  by serving the bundle directly from the Rust server (faster than the old Vite proxy).
+- **Server serves HTTP + WS on one port** by peeking each connection (WS upgrade → channel; plain GET →
+  static file from `SIM_STATIC_DIR` / health). The drain-before-respond is load-bearing — without it the
+  socket closes with unread bytes and the OS sends RST, which browsers surface as ERR_CONNECTION_RESET.
 
-## Verdict (after Phases 0–4 + persistence parity)
+## Verdict — conversion complete
 
-The interaction-clustered model is **proven and fully wire/feature-compatible** with the Elixir
-implementation, on the radically different internal structure described above. Never-under-merge holds by
-construction; the single-core dense-cluster ceiling is generous (~0.085 ms/tick at 500×1500); parallelism
-is sound with zero `unsafe`; players/structures/depletions persist across a real restart via Postgres, and
-the Elixir-authored e2e suite passes 6/6 against the Rust backend. Remaining work is NPC/combat and the
+The Elixir backend has been **removed**; the interaction-clustered **Rust server is the only backend**, a
+single binary serving the built client and the Phoenix-Channels socket on one port (Postgres-backed).
+Never-under-merge holds by construction; the single-core dense-cluster ceiling is generous (~0.085 ms/tick
+at 500×1500); parallelism is sound with zero `unsafe`; players/structures/depletions persist across a real
+restart via Postgres. 95 Rust tests + 13 vitest contract tests pass; the (formerly Elixir-authored)
+Playwright suite passes **6/6** against the Rust backend. Remaining work is NPC/combat and the
 non-persistence ADR-0002 items (fault isolation / crash re-home, hot reload).
 
 ## Open questions (remaining)
