@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["protocol", "sim"]
+members = ["protocol", "sim", "client"]
 
 [profile.release]
 opt-level = 3

@@ -1,0 +1,15 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2021"
+description = "Native game client (three-d + egui) for the sim server — see docs/adr/0003"
+
+[lib]
+name = "client"
+path = "src/lib.rs"
+
+[dependencies]
+protocol = { path = "../protocol" }
+serde_json = "1"
+
+[dev-dependencies]
