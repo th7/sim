@@ -74,6 +74,95 @@ async fn harvest_yields_wood() {
 }
 
 #[tokio::test]
+async fn walking_across_multiple_chunk_boundaries_stays_visible() {
+    let port = start_server().await;
+    let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
+    assert!(alice.pump_until(T, |m| m.player_pos("alice").is_some()).await);
+
+    // Walk south past the first boundary, then far east across several more.
+    alice.movement(false, true, false, false).await.unwrap(); // south
+    assert!(
+        alice.pump_until(T, |m| m.player_pos("alice").map(|p| p.y > 10_000).unwrap_or(false)).await
+    );
+    alice.movement(false, false, false, false).await.unwrap();
+
+    // Walk east to x > 33u — across the boundaries at 16u and 32u — sampling as
+    // we go. The window pans to keep alice's chunk subscribed, so she stays in
+    // the merged view the whole way and her x never jumps backward.
+    alice.movement(false, false, true, false).await.unwrap();
+    let mut prev_x = alice.model().player_pos("alice").unwrap().x;
+    let mut reached = false;
+    for _ in 0..120 {
+        alice.pump_for(Duration::from_millis(100)).await;
+        let p = alice.model().player_pos("alice").expect("alice stays visible across boundaries");
+        assert!(p.x + 1 >= prev_x, "x is monotonic (no backward glitch on a pan)");
+        prev_x = p.x;
+        if p.x > 33_000 {
+            reached = true;
+            break;
+        }
+    }
+    alice.movement(false, false, false, false).await.unwrap();
+    assert!(reached, "alice reaches x > 33u within the sampling budget");
+    // She crossed into chunk x=2 and the view window followed her.
+    assert_eq!(alice.model().window_center().cx, 2);
+}
+
+#[tokio::test]
+async fn gather_build_and_destroy_a_wall() {
+    let port = start_server().await;
+    let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
+    // The five worldgen trees around the chunk centre load in.
+    assert!(alice.pump_until(T, |m| m.nodes().len() >= 5).await, "all five trees visible");
+
+    // Chop all five (alice spawns within interact range of the cluster) → 5 wood.
+    let (cx, cy) = (8_000_i64, 8_000_i64);
+    for (dx, dy) in [(500, 500), (500, -500), (-500, 500), (-500, -500), (0, 0)] {
+        alice.send_harvest(cx + dx, cy + dy).await.unwrap();
+        alice.pump_for(Duration::from_millis(150)).await;
+    }
+    assert!(
+        alice.pump_until(T, |m| m.inventory().get("wood").copied().unwrap_or(0) >= 5).await,
+        "five trees yield five wood"
+    );
+
+    // Walk east, clear of the depleted-but-still-solid tree cluster, then settle.
+    alice.movement(false, false, true, false).await.unwrap();
+    assert!(
+        alice.pump_until(T, |m| m.player_pos("alice").map(|p| p.x >= 10_500).unwrap_or(false)).await,
+        "alice walks east out of the cluster"
+    );
+    alice.movement(false, false, false, false).await.unwrap();
+    alice.pump_for(Duration::from_millis(500)).await;
+
+    // Place the wall 1u east: its AABB clears alice's body and sits exactly at
+    // interact range (mirrors the old phase-8 e2e's hand-computed placement).
+    let me = alice.model().player_pos("alice").unwrap();
+    let (wx, wy) = (me.x + 1_000, me.y);
+    alice.send_build("wall", wx, wy).await.unwrap();
+
+    assert!(alice.pump_until(T, |m| !m.structures().is_empty()).await, "the wall appears");
+    let wall = alice.model().structures().values().next().cloned().unwrap();
+    assert_eq!(wall.hp, 100);
+    assert_eq!(wall.owner, "alice");
+    assert_eq!(wall.kind, "wall");
+    assert!(
+        alice.pump_until(T, |m| m.inventory().get("wood").copied().unwrap_or(0) == 0).await,
+        "the five wood is spent on the wall"
+    );
+
+    // Damage it to destruction: 4 clicks × 25 HP = 100.
+    for _ in 0..4 {
+        alice.send_damage(wx, wy).await.unwrap();
+        alice.pump_for(Duration::from_millis(150)).await;
+    }
+    assert!(
+        alice.pump_until(T, |m| m.structures().is_empty()).await,
+        "the wall is destroyed after 100 damage"
+    );
+}
+
+#[tokio::test]
 async fn dev_mode_receives_stats() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();

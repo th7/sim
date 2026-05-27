@@ -5,10 +5,19 @@ that we should sanity-check together later.
 
 ## Status
 
-- **Behavioural parity: done and tested.** The client *logic* (`ClientModel` + `Session`) re-pins the phase
-  behaviours via model unit tests + 6 integration tests that boot the real server in-process and drive the
-  native WS/phx client: connect/see-self, two clients, movement, harvest→inventory, **dev-mode dev:stats**
-  (phase6.5), and portal→instance realm switch. 117 workspace tests green, zero warnings.
+- **Behavioural parity: done and tested.** The client *logic* (`ClientModel` + `Session`) re-pins every
+  phase the old Playwright suite covered, via model unit tests + 8 integration tests that boot the real
+  server in-process and drive the native WS/phx client:
+  - phase1 — two clients see each other;
+  - phase3 — movement (server-restart persistence is a server concern, covered by sim's own tests);
+  - phase5 — walking across multiple chunk boundaries stays visible + monotonic (window pan);
+  - phase6.5 — dev-mode `dev:stats` subscription + overlay ring;
+  - phase8 — gather → build → damage-to-destruction round-trip (hp/owner/cost);
+  - phase9 — walk into a portal, switch realm, see the return portal.
+
+  118 workspace tests green, zero warnings. (The `Session::send_harvest/build/damage` helpers are the
+  test seam analog of the old client's `__game.{harvest,build,damage}` hooks — used by phase8 to place a
+  wall at hand-computed coords where the click cell-snap + collision margins are too tight to drive.)
 - **Rendering parity: ported faithfully, compiles, NOT visually verified.** `client/src/bin/game.rs`
   (three-d + egui) is a direct port of the old `main.ts` / `models.ts` rendering — same meshes, palette,
   camera offset, backgrounds, interpolation, dev overlay (see below). It compiles, but this environment has

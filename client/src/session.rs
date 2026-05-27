@@ -156,6 +156,30 @@ impl Session {
         self.execute(cmds).await
     }
 
+    // --- raw verb pushes ---
+    //
+    // The analog of the old client's `__game.harvest/build/damage` test hooks:
+    // push a verb at exact sub-unit coordinates, bypassing `click`'s tree/grid
+    // heuristic. Used by tests that need to place a target at a precise spot
+    // (e.g. a wall just clear of the player's body) where cell-snapping the
+    // click would land it out of range.
+
+    pub async fn send_harvest(&mut self, x: i64, y: i64) -> Result<(), String> {
+        self.push_verb("harvest", json!({ "x": x, "y": y })).await
+    }
+
+    pub async fn send_build(&mut self, kind: &str, x: i64, y: i64) -> Result<(), String> {
+        self.push_verb("build", json!({ "type": kind, "x": x, "y": y })).await
+    }
+
+    pub async fn send_damage(&mut self, x: i64, y: i64) -> Result<(), String> {
+        self.push_verb("damage", json!({ "x": x, "y": y })).await
+    }
+
+    async fn push_verb(&mut self, event: &str, payload: serde_json::Value) -> Result<(), String> {
+        self.conn.push(&self.player_join_ref, &self.player_topic, event, payload).await
+    }
+
     pub async fn heartbeat(&mut self) -> Result<(), String> {
         self.conn.heartbeat().await
     }
