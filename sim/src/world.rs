@@ -18,6 +18,7 @@ use crate::ids::{ActorId, ClusterId, Realm};
 use crate::labeler::{Labeler, TopologyEvent};
 use crate::verbs::VerbError;
 use crate::worldgen;
+use protocol::wire::ChunkLifecycle;
 use hecs::{Entity, World};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -485,6 +486,22 @@ impl RealmWorld {
     /// Whether `coord` is owned by a cluster (hot).
     pub fn is_chunk_hot(&self, coord: ChunkCoord) -> bool {
         self.labeler.owner_of_chunk(coord).is_some()
+    }
+
+    /// Dev-overlay lifecycle of `coord` at `now_ms`: `Hot` if a cluster owns it,
+    /// `IdleArmed` (with ms left until unload) if loaded but unowned, `Cold` if
+    /// not loaded. The `IdleArmed` window is the [`IDLE_TIMEOUT_MS`] grace before
+    /// [`Self::deactivate_idle_chunks`] despawns the chunk's static content.
+    pub fn chunk_lifecycle(&self, coord: ChunkCoord, now_ms: u64) -> (ChunkLifecycle, Option<i64>) {
+        if self.is_chunk_hot(coord) {
+            (ChunkLifecycle::Hot, None)
+        } else if self.loaded.contains(&coord) {
+            let last = self.chunk_last_owned.get(&coord).copied().unwrap_or(now_ms);
+            let remaining = IDLE_TIMEOUT_MS as i64 - now_ms.saturating_sub(last) as i64;
+            (ChunkLifecycle::IdleArmed, Some(remaining.max(0)))
+        } else {
+            (ChunkLifecycle::Cold, None)
+        }
     }
 
     /// Count of positioned entities whose position falls in `coord`.

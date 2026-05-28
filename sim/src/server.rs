@@ -9,12 +9,12 @@
 //! `phoenix` heartbeat.
 
 use crate::components::StructureKind;
-use crate::geometry::{coord_for, ChunkCoord};
+use crate::geometry::ChunkCoord;
 use crate::ids::Realm;
 use crate::phx::{push, PhxMessage};
 use crate::sim::Sim;
 use crate::wire::{chunk_snapshot, inventory_payload};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashSet;
 
 /// Per-connection channel state.
@@ -125,7 +125,8 @@ fn on_join(sim: &mut Sim, conn: &mut ConnState, msg: &PhxMessage) -> Outcome {
         Some(Topic::DevStats) => {
             conn.dev_username = msg.payload.get("username").and_then(|v| v.as_str()).map(String::from);
             conn.topics.insert(msg.topic.clone());
-            let pushes = vec![push(&msg.topic, "stats", stats_payload(sim, conn.dev_username.as_deref()))];
+            let pushes =
+                vec![push(&msg.topic, "stats", crate::dev::stats_payload(sim, conn.dev_username.as_deref()))];
             Outcome { reply: Some(msg.ok()), pushes, disconnected: false }
         }
         _ => Outcome { reply: Some(msg.error_reason("bad_topic")), ..Default::default() },
@@ -193,38 +194,6 @@ pub fn chunk_snapshot_push(
     Some(push(topic, "snapshot", serde_json::to_value(snap).ok()?))
 }
 
-/// Build the `stats` payload for the dev overlay, centred on `dev_username`.
-pub fn stats_payload(sim: &Sim, dev_username: Option<&str>) -> Value {
-    let around = match dev_username.and_then(|u| sim.realm_of(u).map(|r| (u, r))) {
-        Some((u, realm)) => {
-            let radius = if realm.is_overworld() { 3 } else { 1 };
-            let center = sim
-                .position(u)
-                .map(|p| coord_for(p.x, p.y))
-                .unwrap_or(ChunkCoord::new(0, 0));
-            crate::geometry::neighborhood(center, radius)
-                .into_iter()
-                .map(|c| {
-                    let (hot, count) = sim.chunk_status(realm, c);
-                    json!({
-                        "cx": c.cx,
-                        "cy": c.cy,
-                        "lifecycle": if hot { "hot" } else { "cold" },
-                        "idle_ms_remaining": Value::Null,
-                        "entity_count": count,
-                    })
-                })
-                .collect::<Vec<_>>()
-        }
-        None => Vec::new(),
-    };
-    json!({
-        "active_chunks": sim.active_chunk_count(),
-        "total_players": sim.player_count(),
-        "around": around,
-    })
-}
-
 fn parse_initial_chunk(payload: &Value) -> ChunkCoord {
     payload
         .get("initial_chunk")
@@ -249,6 +218,7 @@ fn xy(payload: &Value) -> Option<(i64, i64)> {
 mod tests {
     use super::*;
     use crate::components::Item;
+    use serde_json::json;
 
     fn join(topic: &str, payload: Value) -> PhxMessage {
         PhxMessage {
@@ -337,16 +307,5 @@ mod tests {
         };
         let out = route(&mut sim, &mut conn, &msg);
         assert_eq!(out.reply.unwrap().payload["response"]["reason"], "invalid_type");
-    }
-
-    #[test]
-    fn stats_payload_shape() {
-        let mut sim = Sim::new();
-        sim.connect("alice", ChunkCoord::new(0, 0));
-        let v = stats_payload(&sim, Some("alice"));
-        assert!(v["active_chunks"].as_u64().unwrap() >= 1);
-        assert_eq!(v["total_players"], 1);
-        // 7×7 ring around the player in the overworld.
-        assert_eq!(v["around"].as_array().unwrap().len(), 49);
     }
 }

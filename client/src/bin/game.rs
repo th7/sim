@@ -7,8 +7,9 @@
 //! of ADR-0003's parity bar) must be done on a machine with a display.
 
 use client::session::{Input, RenderState, Session};
+use protocol::consts::IDLE_TIMEOUT_MS;
 use protocol::geometry::{ChunkCoord, SUB_UNITS_PER_UNIT};
-use protocol::wire::RealmWire;
+use protocol::wire::{ChunkLifecycle, RealmWire, StatsPayload};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use three_d::*;
@@ -274,39 +275,7 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
 
         // Dev chunk-lifecycle overlay (transparent, drawn after opaque geometry).
         if let Some(stats) = &rs.stats {
-            for e in &stats.around {
-                let x0 = e.cx as f32 * CHUNK_SIZE;
-                let z0 = e.cy as f32 * CHUNK_SIZE;
-                let (fill, alpha) = match e.lifecycle.as_str() {
-                    "hot" => (0x244d24, 64),
-                    "idle_armed" => (0x6e5a1f, 64),
-                    _ => (0x222222, 13), // cold
-                };
-                objects.push(flat_quad(
-                    &context,
-                    x0 + CHUNK_SIZE / 2.0,
-                    DEV_OVERLAY_Y,
-                    z0 + CHUNK_SIZE / 2.0,
-                    CHUNK_SIZE,
-                    CHUNK_SIZE,
-                    rgba(fill, alpha),
-                ));
-                // Shrinking idle countdown bar, just above the tile overlay.
-                if e.lifecycle == "idle_armed" {
-                    if let Some(rem) = e.idle_ms_remaining {
-                        let frac = (rem as f32 / 5000.0).clamp(0.0, 1.0);
-                        objects.push(flat_quad(
-                            &context,
-                            x0 + CHUNK_SIZE * frac / 2.0,
-                            DEV_OVERLAY_Y + 0.04,
-                            z0 + 0.5,
-                            CHUNK_SIZE * frac,
-                            0.5,
-                            rgba(0xffcc00, 204),
-                        ));
-                    }
-                }
-            }
+            dev_overlay(&context, stats, &mut objects);
         }
 
         // Camera follows the local player's interpolated position.
@@ -333,35 +302,9 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
                     }
                 });
                 if dev_view {
-                    EWindow::new("dev").anchor(Align2::RIGHT_TOP, [-8.0, 8.0]).show(ctx, |ui| {
-                        ui.label(format!("user:   {}", rs.own));
-                        let realm = match rs.realm {
-                            RealmWire::Overworld => "overworld".to_string(),
-                            RealmWire::Instance { id } => format!("instance:{id}"),
-                        };
-                        ui.label(format!("realm:  {realm}"));
-                        let (pos, chunk) = match rs.players.get(&rs.own) {
-                            Some(p) => {
-                                let (px, py) = (w(p.x), w(p.y));
-                                (
-                                    format!("({px:.1}, {py:.1})"),
-                                    format!(
-                                        "({}, {})",
-                                        (px / CHUNK_SIZE).floor() as i32,
-                                        (py / CHUNK_SIZE).floor() as i32
-                                    ),
-                                )
-                            }
-                            None => ("—".to_string(), "—".to_string()),
-                        };
-                        ui.label(format!("pos:    {pos}  chunk: {chunk}"));
-                        let (active, total) = rs
-                            .stats
-                            .as_ref()
-                            .map(|s| (s.active_chunks, s.total_players))
-                            .unwrap_or((0, 0));
-                        ui.label(format!("view: {}  active: {}  total: {}", rs.players.len(), active, total));
-                    });
+                    EWindow::new("dev")
+                        .anchor(Align2::RIGHT_TOP, [-8.0, 8.0])
+                        .show(ctx, |ui| dev_panel(ui, &rs));
                 }
             },
         );
@@ -380,6 +323,69 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
 
         FrameOutput::default()
     });
+}
+
+/// The dev chunk-lifecycle overlay: a translucent tile per chunk in the stats
+/// ring, coloured by lifecycle, with a shrinking countdown bar over chunks armed
+/// for idle unload. Built into `objects`, drawn after the opaque scene.
+fn dev_overlay(context: &Context, stats: &StatsPayload, objects: &mut Vec<Gm<Mesh, PhysicalMaterial>>) {
+    for e in &stats.around {
+        let x0 = e.cx as f32 * CHUNK_SIZE;
+        let z0 = e.cy as f32 * CHUNK_SIZE;
+        let (fill, alpha) = match e.lifecycle {
+            ChunkLifecycle::Hot => (0x244d24, 64),
+            ChunkLifecycle::IdleArmed => (0x6e5a1f, 64),
+            ChunkLifecycle::Cold => (0x222222, 13),
+        };
+        objects.push(flat_quad(
+            context,
+            x0 + CHUNK_SIZE / 2.0,
+            DEV_OVERLAY_Y,
+            z0 + CHUNK_SIZE / 2.0,
+            CHUNK_SIZE,
+            CHUNK_SIZE,
+            rgba(fill, alpha),
+        ));
+        // Shrinking idle countdown bar, just above the tile overlay.
+        if e.lifecycle == ChunkLifecycle::IdleArmed {
+            if let Some(rem) = e.idle_ms_remaining {
+                let frac = (rem as f32 / IDLE_TIMEOUT_MS as f32).clamp(0.0, 1.0);
+                objects.push(flat_quad(
+                    context,
+                    x0 + CHUNK_SIZE * frac / 2.0,
+                    DEV_OVERLAY_Y + 0.04,
+                    z0 + 0.5,
+                    CHUNK_SIZE * frac,
+                    0.5,
+                    rgba(0xffcc00, 204),
+                ));
+            }
+        }
+    }
+}
+
+/// The dev HUD panel: user, realm, position/chunk, and the global counters.
+fn dev_panel(ui: &mut three_d::egui::Ui, rs: &RenderState) {
+    ui.label(format!("user:   {}", rs.own));
+    let realm = match rs.realm {
+        RealmWire::Overworld => "overworld".to_string(),
+        RealmWire::Instance { id } => format!("instance:{id}"),
+    };
+    ui.label(format!("realm:  {realm}"));
+    let (pos, chunk) = match rs.players.get(&rs.own) {
+        Some(p) => {
+            let (px, py) = (w(p.x), w(p.y));
+            (
+                format!("({px:.1}, {py:.1})"),
+                format!("({}, {})", (px / CHUNK_SIZE).floor() as i32, (py / CHUNK_SIZE).floor() as i32),
+            )
+        }
+        None => ("—".to_string(), "—".to_string()),
+    };
+    ui.label(format!("pos:    {pos}  chunk: {chunk}"));
+    let (active, total) =
+        rs.stats.as_ref().map(|s| (s.active_chunks, s.total_players)).unwrap_or((0, 0));
+    ui.label(format!("view: {}  active: {}  total: {}", rs.players.len(), active, total));
 }
 
 /// Tracked WASD state; `set` returns true if the state changed.

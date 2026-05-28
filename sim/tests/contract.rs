@@ -7,7 +7,7 @@ use serde_json::Value;
 use sim::components::{Inventory, Item, Position, StructureKind};
 use sim::geometry::ChunkCoord;
 use sim::ids::Realm;
-use sim::server::stats_payload;
+use sim::dev::stats_payload;
 use sim::sim::Sim;
 use sim::wire::{chunk_snapshot, inventory_payload, relocated_payload};
 

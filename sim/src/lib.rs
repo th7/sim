@@ -21,6 +21,7 @@ pub mod collision;
 pub mod components;
 pub mod datastore;
 pub mod delta;
+pub mod dev;
 pub mod harness;
 pub mod labeler;
 pub mod parallel;

@@ -495,7 +495,9 @@ impl Sim {
         self.player_realm.len()
     }
 
-    /// `(hot, entity_count)` for `coord` in `realm` — for the dev overlay ring.
+    /// `(hot, entity_count)` for `coord` in `realm` — a general chunk query
+    /// (chunk hotness + occupancy). The dev overlay's richer lifecycle (idle
+    /// countdown) lives in [`RealmWorld::chunk_lifecycle`].
     pub fn chunk_status(&self, realm: Realm, coord: ChunkCoord) -> (bool, usize) {
         match self.realm_world(realm) {
             Some(rw) => (rw.is_chunk_hot(coord), rw.entity_count_in(coord)),

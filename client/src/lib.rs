@@ -6,5 +6,6 @@
 //! is unit/integration tested; the rendering is verified manually.
 
 pub mod conn;
+pub mod dev;
 pub mod model;
 pub mod session;

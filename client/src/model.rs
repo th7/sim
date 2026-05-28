@@ -4,6 +4,7 @@
 //! and exposes the observable state the view renders. The native analog of the
 //! old `window.__game`. Positions are sub-units (1 world unit = 1000).
 
+use crate::dev::DevState;
 use protocol::consts::INTERACT_RANGE_SQ;
 use protocol::geometry::{coord_for, neighborhood, ChunkCoord, SUB_UNITS_PER_UNIT};
 use protocol::wire::{
@@ -49,8 +50,7 @@ pub struct ClientModel {
     snaps: BTreeMap<ChunkCoord, ChunkSnapshot>,
     subscribed: BTreeSet<ChunkCoord>,
     inventory: BTreeMap<String, u32>,
-    stats: Option<StatsPayload>,
-    dev_enabled: bool,
+    dev: DevState,
     last_intent: (f64, f64),
 }
 
@@ -66,8 +66,7 @@ impl ClientModel {
             snaps: BTreeMap::new(),
             subscribed: want.iter().copied().collect(),
             inventory: BTreeMap::new(),
-            stats: None,
-            dev_enabled: false,
+            dev: DevState::default(),
             last_intent: (0.0, 0.0),
         };
         let cmds = want.into_iter().map(Cmd::Subscribe).collect();
@@ -101,23 +100,12 @@ impl ClientModel {
     }
 
     pub fn on_stats(&mut self, payload: StatsPayload) {
-        self.stats = Some(payload);
+        self.dev.on_stats(payload);
     }
 
-    /// Turn the dev overlay on/off. Mirrors the old `setDevMode`: subscribing to
-    /// (or leaving) `dev:stats`, and dropping any cached stats when turned off.
-    /// Idempotent — a no-op (empty `Vec`) if already in the requested state.
+    /// Turn the dev overlay on/off (see [`DevState::set`]).
     pub fn set_dev(&mut self, on: bool) -> Vec<Cmd> {
-        if on == self.dev_enabled {
-            return Vec::new();
-        }
-        self.dev_enabled = on;
-        if on {
-            vec![Cmd::SubscribeDevStats]
-        } else {
-            self.stats = None;
-            vec![Cmd::UnsubscribeDevStats]
-        }
+        self.dev.set(on)
     }
 
     // --- user input ---
@@ -188,10 +176,10 @@ impl ClientModel {
         &self.inventory
     }
     pub fn stats(&self) -> Option<&StatsPayload> {
-        self.stats.as_ref()
+        self.dev.stats()
     }
     pub fn dev_enabled(&self) -> bool {
-        self.dev_enabled
+        self.dev.enabled()
     }
     pub fn subscribed(&self) -> &BTreeSet<ChunkCoord> {
         &self.subscribed
@@ -349,24 +337,6 @@ mod tests {
         inv.insert("wood".to_string(), 3);
         m.on_self(SelfPayload { inventory: inv });
         assert_eq!(m.inventory().get("wood"), Some(&3));
-    }
-
-    #[test]
-    fn set_dev_toggles_stats_subscription() {
-        let (mut m, _) = ClientModel::new("alice", cc(0, 0));
-        assert!(!m.dev_enabled());
-        // Turning on subscribes to dev:stats.
-        assert_eq!(m.set_dev(true), vec![Cmd::SubscribeDevStats]);
-        assert!(m.dev_enabled());
-        // Idempotent.
-        assert!(m.set_dev(true).is_empty());
-        // Stats can now flow in.
-        m.on_stats(StatsPayload { active_chunks: 1, total_players: 1, around: Vec::new() });
-        assert!(m.stats().is_some());
-        // Turning off unsubscribes and drops cached stats.
-        assert_eq!(m.set_dev(false), vec![Cmd::UnsubscribeDevStats]);
-        assert!(!m.dev_enabled());
-        assert!(m.stats().is_none());
     }
 
     #[test]

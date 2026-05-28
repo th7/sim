@@ -6,7 +6,8 @@
 
 use crate::consts::{BROADCAST_EVERY, TICK_MS};
 use crate::phx::{push, PhxMessage};
-use crate::server::{chunk_snapshot_push, parse_topic, route, stats_payload, ConnState, Topic};
+use crate::dev::stats_payload;
+use crate::server::{chunk_snapshot_push, parse_topic, route, ConnState, Topic};
 use crate::sim::{OutboundEvent, Sim};
 use crate::wire::{inventory_payload, relocated_payload};
 use futures_util::{SinkExt, StreamExt};

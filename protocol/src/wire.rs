@@ -74,12 +74,25 @@ pub struct RelocatedPayload {
     pub coord: [i32; 2],
 }
 
+/// A chunk's lifecycle in the dev overlay ring:
+/// - `Hot`: owned by a cluster and simulated this tick.
+/// - `IdleArmed`: loaded but no cluster owns it — counting down to unload, with
+///   `idle_ms_remaining` ms left of the idle timeout.
+/// - `Cold`: not loaded.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChunkLifecycle {
+    Hot,
+    IdleArmed,
+    Cold,
+}
+
 /// One chunk's lifecycle status in the dev overlay ring.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChunkStatWire {
     pub cx: i32,
     pub cy: i32,
-    pub lifecycle: String,
+    pub lifecycle: ChunkLifecycle,
     pub idle_ms_remaining: Option<i64>,
     pub entity_count: u64,
 }
