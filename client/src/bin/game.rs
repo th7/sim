@@ -21,6 +21,12 @@ const SNAPSHOT_INTERVAL_MS: f64 = 100.0;
 /// Keep rendering a player this long after they vanish from snapshots, so a
 /// chunk-boundary crossing (briefly in no snapshot) doesn't blink the cube out.
 const PLAYER_REMOVE_GRACE_MS: f64 = 400.0;
+/// Height of the dev chunk-lifecycle overlay above the ground plane (whose top
+/// is y=0). The overlay is a flat transparent decal; it must clear the depth
+/// buffer's resolution at the far edge of the 7×7 grid (~100 units from the
+/// camera) or it z-fights the ground and flickers green as the camera moves. The
+/// float is imperceptible on the featureless ground.
+const DEV_OVERLAY_Y: f32 = 0.08;
 
 fn main() {
     let cfg = Args::parse();
@@ -151,7 +157,11 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
         cam_target,
         vec3(0.0, 1.0, 0.0),
         degrees(50.0),
-        0.1,
+        // z_near/z_far bracket the scene: the camera sits ~20 units from the
+        // local player and nothing is nearer than ~16, so a 0.1 near plane just
+        // wrecked depth precision (a 5000:1 near:far ratio) and let the flat dev
+        // overlay z-fight the ground. 4.0 clips nothing and is ~40× more precise.
+        4.0,
         500.0,
     );
     // Key light aimed down the old client's (-6,10,-3) offset → travel dir (6,-10,3).
@@ -275,20 +285,20 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
                 objects.push(flat_quad(
                     &context,
                     x0 + CHUNK_SIZE / 2.0,
-                    0.005,
+                    DEV_OVERLAY_Y,
                     z0 + CHUNK_SIZE / 2.0,
                     CHUNK_SIZE,
                     CHUNK_SIZE,
                     rgba(fill, alpha),
                 ));
-                // Shrinking idle countdown bar.
+                // Shrinking idle countdown bar, just above the tile overlay.
                 if e.lifecycle == "idle_armed" {
                     if let Some(rem) = e.idle_ms_remaining {
                         let frac = (rem as f32 / 5000.0).clamp(0.0, 1.0);
                         objects.push(flat_quad(
                             &context,
                             x0 + CHUNK_SIZE * frac / 2.0,
-                            0.012,
+                            DEV_OVERLAY_Y + 0.04,
                             z0 + 0.5,
                             CHUNK_SIZE * frac,
                             0.5,
