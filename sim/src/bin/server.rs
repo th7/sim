@@ -1,10 +1,9 @@
-//! Wire-compatible WebSocket server: speaks the Phoenix Channels v2 protocol the
-//! existing frontend's `phoenix` JS client uses, backed by the interaction-
-//! clustered simulation. Drop-in for the Elixir `GameWeb` socket — same topics,
-//! events, and payloads (`contract`).
+//! WebSocket game server: speaks the Phoenix Channels v2 protocol (topics,
+//! events, and payloads per `contract/contract.json`) over `/socket/websocket`,
+//! backed by the interaction-clustered simulation. The native `client` crate
+//! connects here.
 //!
-//! Run: `cargo run --release --bin server` (listens on `SIM_PORT`, default
-//! 4000). In dev, Vite on :3000 proxies `/socket` here.
+//! Run: `cargo run --release --bin server` (listens on `SIM_PORT`, default 4000).
 //!
 //! Persistence: set `SIM_DATABASE_URL` to a libpq URL to persist through
 //! Postgres (players/structures/depletions survive a restart); unset uses an
@@ -14,7 +13,6 @@
 use sim::pgstore::PgStore;
 use sim::sim::Sim;
 use sim::transport::{serve, Shared};
-use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 
@@ -44,15 +42,10 @@ async fn main() {
     let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     sim.set_clock_ms(now_ms);
 
-    // Optionally serve the built frontend bundle (replacing Phoenix's static role).
-    let static_dir = std::env::var("SIM_STATIC_DIR").ok().filter(|s| !s.is_empty()).map(PathBuf::from);
-    if let Some(dir) = &static_dir {
-        eprintln!("sim: serving static frontend from {}", dir.display());
-    }
-    let shared = Shared::with_sim_static(sim, static_dir);
+    let shared = Shared::with_sim(sim);
 
     let listener = TcpListener::bind(("0.0.0.0", port)).await.expect("bind");
-    eprintln!("sim server listening on :{port} (HTTP + Phoenix Channels v2 at /socket/websocket)");
+    eprintln!("sim server listening on :{port} (Phoenix Channels v2 at /socket/websocket)");
 
     let serve_shared = shared.clone();
     tokio::spawn(async move { serve(listener, serve_shared).await });

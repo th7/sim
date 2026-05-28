@@ -11,7 +11,6 @@ use crate::sim::{OutboundEvent, Sim};
 use crate::wire::{inventory_payload, relocated_payload};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -27,12 +26,10 @@ struct ConnHandle {
     state: ConnState,
 }
 
-/// Shared server state: the single Sim, the live connection registry, and the
-/// optional directory of static frontend assets to serve over plain HTTP.
+/// Shared server state: the single Sim and the live connection registry.
 pub struct Shared {
     sim: Mutex<Sim>,
     conns: Mutex<HashMap<u64, ConnHandle>>,
-    static_dir: Option<PathBuf>,
 }
 
 impl Shared {
@@ -41,19 +38,11 @@ impl Shared {
     }
 
     /// Build shared state around a pre-configured `Sim` (e.g. one backed by
-    /// Postgres with its clock anchored to wall-clock). Serves no static assets.
+    /// Postgres with its clock anchored to wall-clock).
     pub fn with_sim(sim: Sim) -> Arc<Self> {
-        Shared::with_sim_static(sim, None)
-    }
-
-    /// As [`Shared::with_sim`], also serving the built frontend from
-    /// `static_dir` over plain HTTP (so the server replaces Phoenix's static +
-    /// socket roles in one process).
-    pub fn with_sim_static(sim: Sim, static_dir: Option<PathBuf>) -> Arc<Self> {
         Arc::new(Shared {
             sim: Mutex::new(sim),
             conns: Mutex::new(HashMap::new()),
-            static_dir,
         })
     }
 
@@ -173,13 +162,13 @@ async fn handle_conn(
     mut stream: TcpStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Peek (don't consume) the request head to tell a WebSocket upgrade from a
-    // plain HTTP GET. Non-upgrade requests are served as static files / health,
-    // so this one server replaces Phoenix's static + socket roles.
+    // plain HTTP GET. Non-upgrade requests get a plain health response (used by
+    // readiness checks); the game speaks only the Phoenix-Channels socket.
     let mut buf = [0u8; 2048];
     let n = stream.peek(&mut buf).await.unwrap_or(0);
     let head = String::from_utf8_lossy(&buf[..n]);
     if !head.to_ascii_lowercase().contains("upgrade: websocket") {
-        return serve_http(&shared, &mut stream, &head).await;
+        return serve_http(&mut stream).await;
     }
 
     let ws = tokio_tungstenite::accept_async(stream).await?;
@@ -243,19 +232,14 @@ async fn handle_conn(
     Ok(())
 }
 
-/// Serve a plain HTTP GET: a static asset from `static_dir` (with an
-/// `index.html` SPA fallback) if configured, else a 200 health response.
-/// One-shot (Connection: close); enough for serving the built frontend bundle.
+/// Serve a non-WebSocket request with a plain 200 health response. One-shot
+/// (Connection: close); just enough for liveness/readiness checks.
 async fn serve_http(
-    shared: &Arc<Shared>,
     stream: &mut TcpStream,
-    head: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let path = request_path(head);
-
     // Consume the request head (we only peeked it). Closing the socket with
     // unread bytes in the receive buffer makes the OS send a TCP RST instead of
-    // a clean FIN, which browsers surface as ERR_CONNECTION_RESET.
+    // a clean FIN, which clients surface as a connection reset.
     let mut scratch = [0u8; 1024];
     let mut seen = Vec::new();
     while !seen.windows(4).any(|w| w == b"\r\n\r\n") && seen.len() < 64 * 1024 {
@@ -265,71 +249,13 @@ async fn serve_http(
         }
     }
 
-    let (status, ctype, body): (&str, &str, Vec<u8>) = match &shared.static_dir {
-        Some(dir) => match read_static(dir, &path) {
-            Some((ct, bytes)) => ("200 OK", ct, bytes),
-            None => ("404 Not Found", "text/plain; charset=utf-8", b"not found".to_vec()),
-        },
-        // No bundle configured: act as a health endpoint so readiness checks pass.
-        None => ("200 OK", "text/plain; charset=utf-8", b"ok".to_vec()),
-    };
-
+    let body = b"ok";
     let header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(header.as_bytes()).await?;
-    stream.write_all(&body).await?;
+    stream.write_all(body).await?;
     stream.flush().await?;
     Ok(())
-}
-
-/// The request target of an HTTP request head, e.g. `GET /assets/x.js?v=1 HTTP/1.1`
-/// → `/assets/x.js`. Defaults to `/`.
-fn request_path(head: &str) -> String {
-    head.lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .map(|target| target.split('?').next().unwrap_or(target).to_string())
-        .unwrap_or_else(|| "/".to_string())
-}
-
-/// Read a static file for `path` from `dir`, returning `(content_type, bytes)`.
-/// `/` maps to `index.html`; an unknown path with no extension falls back to
-/// `index.html` (single-page app). Path traversal (`..`) is rejected.
-fn read_static(dir: &std::path::Path, path: &str) -> Option<(&'static str, Vec<u8>)> {
-    if path.contains("..") {
-        return None;
-    }
-    let rel = path.trim_start_matches('/');
-    let candidate = if rel.is_empty() { "index.html".to_string() } else { rel.to_string() };
-
-    let try_read = |name: &str| std::fs::read(dir.join(name)).ok();
-
-    let (name, bytes) = match try_read(&candidate) {
-        Some(b) => (candidate.as_str(), b),
-        // SPA fallback: extension-less paths → index.html.
-        None if !candidate.contains('.') => ("index.html", try_read("index.html")?),
-        None => return None,
-    };
-    Some((content_type(name), bytes))
-}
-
-fn content_type(name: &str) -> &'static str {
-    match name.rsplit('.').next().unwrap_or("") {
-        "html" => "text/html; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "json" => "application/json",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "ico" => "image/x-icon",
-        "wasm" => "application/wasm",
-        "woff2" => "font/woff2",
-        "woff" => "font/woff",
-        "map" => "application/json",
-        _ => "application/octet-stream",
-    }
 }
