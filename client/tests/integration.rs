@@ -334,3 +334,160 @@ async fn instance_objects_do_not_flicker_while_walking_around() {
     alice.movement(false, false, false, false).await.unwrap();
     assert!(panned, "the circuit should have panned the view window off the centre chunk");
 }
+
+// --- "build on the depleted cluster" is correctly rejected -------------------
+//
+// Depleted trees keep their Footprint by design: the cell looks visually clear
+// but stays solid until the tree respawns. From the chunk-centre spawn, every
+// cell-centre within interact range *is* a depleted-tree spot — the client
+// optimistically emits Build for each click (it doesn't know about footprints)
+// and the server correctly rejects each with `footprint_blocked`. (The reject
+// reason isn't currently surfaced to the player; that's a UX gap, tracked
+// separately. Walls placed *next to* the cluster work — see the sim test
+// `a_wall_can_be_built_next_to_the_depleted_cluster`.)
+
+#[tokio::test]
+async fn building_on_the_depleted_cluster_is_rejected() {
+    let port = start_server().await;
+    let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
+    assert!(alice.pump_until(T, |m| m.nodes().len() >= 5).await);
+
+    // Harvest the five trees clustered at chunk centre → 5 wood. They become
+    // `depleted: true` but their Footprint stays solid at (±500, ±500).
+    for (dx, dy) in [(500, 500), (500, -500), (-500, 500), (-500, -500), (0, 0)] {
+        alice.send_harvest(8_000 + dx, 8_000 + dy).await.unwrap();
+        alice.pump_for(Duration::from_millis(150)).await;
+    }
+    let centre_trees = [(8_000, 8_000), (7_500, 7_500), (7_500, 8_500), (8_500, 7_500), (8_500, 8_500)];
+    assert!(
+        alice
+            .pump_until(T, |m| {
+                m.inventory().get("wood").copied().unwrap_or(0) >= 5
+                    && centre_trees.iter().all(|(x, y)| {
+                        m.nodes().get(&format!("tree:{x}:{y}")).map(|n| n.depleted).unwrap_or(false)
+                    })
+            })
+            .await,
+        "five wood gathered and the centre cluster is depleted (footprints still solid)"
+    );
+
+    // Stay put. The four cell-centres within interact range of (8000, 8000) are
+    // exactly (±500, ±500) — every one of them is on a depleted-tree footprint.
+    // Click each via the user's path (the model's click selector). Each emits a
+    // Build the server rejects; the wall never appears.
+    for (dx, dy) in [(500, 500), (500, -500), (-500, 500), (-500, -500)] {
+        let wx = (8_000 + dx) as f64 / 1_000.0;
+        let wy = (8_000 + dy) as f64 / 1_000.0;
+        alice.click(wx, wy).await.unwrap();
+        alice.pump_for(Duration::from_millis(200)).await;
+    }
+    assert!(
+        alice.model().structures().is_empty(),
+        "no wall is placed — every reachable cell at chunk centre is footprint-blocked"
+    );
+    assert_eq!(
+        alice.model().inventory().get("wood").copied().unwrap_or(0),
+        5,
+        "wood stays at 5: rejected builds don't deduct materials"
+    );
+}
+
+/// The GUI version of `a_wall_can_be_built_next_to_the_depleted_cluster` (sim):
+/// drive the full ground-pick → cell-snap → server path the way an actual click
+/// does. The wall must land in the cell **immediately** adjacent to a depleted
+/// tree (centre-to-centre 1000 = one cell pitch); no "several wall-widths" of
+/// padding required. The diagonally-offset NW position is the key: from any
+/// pure-cardinal walk the player sits *on* the cell-grid axis and their body
+/// then overlaps the adjacent cell's AABB.
+#[tokio::test]
+async fn click_builds_a_wall_in_the_cell_directly_next_to_the_cluster() {
+    let port = start_server().await;
+    let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
+    assert!(alice.pump_until(T, |m| m.nodes().len() >= 5).await);
+
+    let centre_trees = [(8_000, 8_000), (7_500, 7_500), (7_500, 8_500), (8_500, 7_500), (8_500, 8_500)];
+    for (x, y) in centre_trees {
+        alice.send_harvest(x, y).await.unwrap();
+        alice.pump_for(Duration::from_millis(150)).await;
+    }
+    assert!(
+        alice
+            .pump_until(T, |m| {
+                m.inventory().get("wood").copied().unwrap_or(0) >= 5
+                    && centre_trees.iter().all(|(x, y)| {
+                        m.nodes().get(&format!("tree:{x}:{y}")).map(|n| n.depleted).unwrap_or(false)
+                    })
+            })
+            .await
+    );
+
+    // Walk NW (north past the cluster, then a hair west) so alice's body sits
+    // off the cell-grid axis the wall's AABB is on. From here she can click the
+    // adjacent cell without her own body blocking the placement.
+    alice.movement(true, false, false, false).await.unwrap();
+    assert!(
+        alice
+            .pump_until(T, |m| m.player_pos("alice").map(|p| p.y <= 6_500).unwrap_or(false))
+            .await,
+        "walks north past the cluster"
+    );
+    alice.movement(false, false, false, true).await.unwrap();
+    assert!(
+        alice
+            .pump_until(T, |m| m.player_pos("alice").map(|p| p.x <= 7_700).unwrap_or(false))
+            .await,
+        "steps west off the cell-grid axis"
+    );
+    alice.movement(false, false, false, false).await.unwrap();
+    alice.pump_for(Duration::from_millis(300)).await;
+
+    // Click the cell at world (8.5, 6.5) — its centre is (8500, 6500), exactly
+    // one cell pitch (1000 sub-units, one wall-width centre-to-centre) north of
+    // the depleted (8500, 7500) tree.
+    alice.click(8.5, 6.5).await.unwrap();
+    assert!(
+        alice.pump_until(T, |m| !m.structures().is_empty()).await,
+        "the click placed a wall in the cell directly adjacent to the cluster"
+    );
+    let wall = alice.model().structures().values().next().cloned().unwrap();
+    assert_eq!((wall.x, wall.y), (8_500, 6_500), "wall is in the cell directly N of (8500, 7500)");
+    assert_eq!((wall.kind.as_str(), wall.hp), ("wall", 100));
+}
+
+/// When the server rejects a verb, the reason is observable on the client model
+/// (which the view will show in the HUD), rather than failing silently like
+/// before. Setup mirrors `building_on_the_depleted_cluster_is_rejected`.
+#[tokio::test]
+async fn a_rejected_build_surfaces_footprint_blocked_in_last_error() {
+    let port = start_server().await;
+    let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
+    assert!(alice.pump_until(T, |m| m.nodes().len() >= 5).await);
+
+    let centre_trees = [(8_000, 8_000), (7_500, 7_500), (7_500, 8_500), (8_500, 7_500), (8_500, 8_500)];
+    for (x, y) in centre_trees {
+        alice.send_harvest(x, y).await.unwrap();
+        alice.pump_for(Duration::from_millis(150)).await;
+    }
+    assert!(
+        alice
+            .pump_until(T, |m| {
+                m.inventory().get("wood").copied().unwrap_or(0) >= 5
+                    && centre_trees.iter().all(|(x, y)| {
+                        m.nodes().get(&format!("tree:{x}:{y}")).map(|n| n.depleted).unwrap_or(false)
+                    })
+            })
+            .await
+    );
+
+    assert!(alice.model().last_error().is_none(), "no errors before any verb");
+
+    // Click on a depleted-tree cell: server rejects with footprint_blocked.
+    alice.click(8.5, 8.5).await.unwrap();
+    assert!(
+        alice.pump_until(T, |m| m.last_error() == Some("footprint_blocked")).await,
+        "the server's footprint_blocked reason becomes visible to the client"
+    );
+    // The view reads from RenderState, not directly from the model: the reason
+    // has to be wired through for the HUD to show it.
+    assert_eq!(alice.render_state().last_error.as_deref(), Some("footprint_blocked"));
+}

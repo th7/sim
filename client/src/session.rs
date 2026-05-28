@@ -29,6 +29,7 @@ pub struct RenderState {
     pub portals: BTreeMap<String, PortalWire>,
     pub inventory: BTreeMap<String, u32>,
     pub stats: Option<StatsPayload>,
+    pub last_error: Option<String>,
 }
 
 /// User input the render thread hands to the session task.
@@ -107,6 +108,7 @@ impl Session {
             portals: self.model.portals(),
             inventory: self.model.inventory().clone(),
             stats: self.model.stats().cloned(),
+            last_error: self.model.last_error().map(str::to_string),
         }
     }
 
@@ -264,7 +266,19 @@ impl Session {
                     self.model.on_stats(p);
                 }
             }
-            _ => {} // phx_reply and lifecycle frames carry no model state
+            "phx_reply" => {
+                // Surface error reasons from verb rejections (build/harvest/damage)
+                // into the model so the view can show them — otherwise the user
+                // sees clicks fail silently.
+                if m.payload.get("status").and_then(|v| v.as_str()) == Some("error") {
+                    if let Some(reason) =
+                        m.payload.get("response").and_then(|r| r.get("reason")).and_then(|s| s.as_str())
+                    {
+                        self.model.on_verb_error(reason.to_string());
+                    }
+                }
+            }
+            _ => {} // join/leave lifecycle frames carry no model state
         }
         Ok(())
     }

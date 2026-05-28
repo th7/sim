@@ -52,6 +52,7 @@ pub struct ClientModel {
     inventory: BTreeMap<String, u32>,
     dev: DevState,
     last_intent: (f64, f64),
+    last_error: Option<String>,
 }
 
 impl ClientModel {
@@ -68,6 +69,7 @@ impl ClientModel {
             inventory: BTreeMap::new(),
             dev: DevState::default(),
             last_intent: (0.0, 0.0),
+            last_error: None,
         };
         let cmds = want.into_iter().map(Cmd::Subscribe).collect();
         (model, cmds)
@@ -103,6 +105,12 @@ impl ClientModel {
         self.dev.on_stats(payload);
     }
 
+    /// A verb (harvest/build/damage) was rejected by the server. Surface the
+    /// reason so the view can show it instead of failing silently.
+    pub fn on_verb_error(&mut self, reason: String) {
+        self.last_error = Some(reason);
+    }
+
     /// Turn the dev overlay on/off (see [`DevState::set`]).
     pub fn set_dev(&mut self, on: bool) -> Vec<Cmd> {
         self.dev.set(on)
@@ -127,8 +135,18 @@ impl ClientModel {
 
     /// A click at world-unit `(wx, wy)`: harvest a live tree there, else damage a
     /// structure there, else build a wall on the empty cell if affordable and in
-    /// range. Mirrors the old `handleWorldClick`.
-    pub fn click(&self, wx: f64, wy: f64) -> Vec<Cmd> {
+    /// range. Mirrors the old `handleWorldClick`. Issuing any verb clears the
+    /// stale `last_error` — the user is retrying, the next phx_reply will say
+    /// whether it worked.
+    pub fn click(&mut self, wx: f64, wy: f64) -> Vec<Cmd> {
+        let cmds = self.decide_click(wx, wy);
+        if cmds.iter().any(|c| matches!(c, Cmd::Send(_))) {
+            self.last_error = None;
+        }
+        cmds
+    }
+
+    fn decide_click(&self, wx: f64, wy: f64) -> Vec<Cmd> {
         let Some(me) = self.player_pos(&self.username) else {
             return Vec::new();
         };
@@ -180,6 +198,9 @@ impl ClientModel {
     }
     pub fn dev_enabled(&self) -> bool {
         self.dev.enabled()
+    }
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
     }
     pub fn subscribed(&self) -> &BTreeSet<ChunkCoord> {
         &self.subscribed
@@ -429,7 +450,30 @@ mod tests {
         assert!(far.click(50.0, 50.0).is_empty(), "out of interact range");
 
         // In range but no wood → no build.
-        let near = model_with_player_at(3_200, 3_200);
+        let mut near = model_with_player_at(3_200, 3_200);
         assert!(near.click(3.2, 3.2).is_empty(), "insufficient materials");
+    }
+
+    #[test]
+    fn verb_error_is_captured_as_last_error() {
+        let (mut m, _) = ClientModel::new("alice", cc(0, 0));
+        assert!(m.last_error().is_none(), "starts clear");
+        m.on_verb_error("footprint_blocked".into());
+        assert_eq!(m.last_error(), Some("footprint_blocked"));
+    }
+
+    #[test]
+    fn emitting_a_verb_clears_last_error() {
+        // The user clicked again to retry — that intent makes the prior error
+        // stale. The next phx_reply will either confirm success or replace the
+        // error with whatever went wrong this time.
+        let mut m = model_with_player_at(3_200, 3_200);
+        let mut inv = BTreeMap::new();
+        inv.insert("wood".to_string(), 5);
+        m.on_self(SelfPayload { inventory: inv });
+        m.on_verb_error("footprint_blocked".into());
+        let cmds = m.click(3.2, 3.2);
+        assert!(matches!(cmds.as_slice(), [Cmd::Send(Outbound::Build(_))]));
+        assert_eq!(m.last_error(), None, "issuing a fresh verb clears the stale error");
     }
 }

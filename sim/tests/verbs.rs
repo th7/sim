@@ -199,3 +199,39 @@ fn instance_movement_is_bounded() {
         assert!(p.x >= 0, "instance movement stays in bounds");
     }
 }
+
+/// Depleted-but-not-respawned trees keep their footprint by design — walls
+/// can't be placed *on* the cluster (the existing `build_errors` pins that for
+/// live trees, and depleted ones behave the same way) but they *can* be placed
+/// in an adjacent cell. After harvesting the five worldgen trees at chunk
+/// centre, walk clear of the cluster and drop a wall one tile north of the NE
+/// tree — the still-solid footprints stop 300 sub-units out, so a wall whose
+/// centre is 1000 from any tree centre fits.
+#[test]
+fn a_wall_can_be_built_next_to_the_depleted_cluster() {
+    let mut sim = Sim::new();
+    sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
+
+    // Harvest the cluster → 5 wood; all five footprints remain solid.
+    for (dx, dy) in [(500, 500), (500, -500), (-500, 500), (-500, -500), (0, 0)] {
+        sim.harvest("alice", 8_000 + dx, 8_000 + dy).unwrap();
+    }
+    assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&5));
+
+    // Walk north of the cluster (alice is grandfathered through the still-solid
+    // footprints while overlapping any of them), then a hair west so her body
+    // clears the wall's AABB by more than her body radius.
+    sim.set_intent("alice", 0.0, -1.0);
+    while sim.position("alice").unwrap().y > 6_500 {
+        sim.tick();
+    }
+    sim.set_intent("alice", -1.0, 0.0);
+    while sim.position("alice").unwrap().x > 7_600 {
+        sim.tick();
+    }
+    sim.set_intent("alice", 0.0, 0.0);
+
+    // Now place the wall one tile north of the NE depleted tree (8500, 7500).
+    assert_eq!(sim.build("alice", StructureKind::Wall, 8_500, 6_500), Ok(()));
+    assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&0));
+}

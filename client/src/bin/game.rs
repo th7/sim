@@ -43,6 +43,7 @@ fn main() {
         portals: BTreeMap::new(),
         inventory: BTreeMap::new(),
         stats: None,
+        last_error: None,
     }));
     let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<Input>();
 
@@ -300,6 +301,13 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
                     for (item, n) in &rs.inventory {
                         ui.label(format!("{item}: {n}"));
                     }
+                    // The last server-side reject reason (cleared when the user
+                    // retries — see `ClientModel::click`). Without this the
+                    // user's clicks fail silently when the server says no.
+                    if let Some(err) = &rs.last_error {
+                        ui.separator();
+                        ui.label(format!("⚠ {}", err.replace('_', " ")));
+                    }
                 });
                 if dev_view {
                     EWindow::new("dev")
@@ -325,10 +333,61 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
     });
 }
 
+/// Dev mode grid: faint 1×1 lines at every world unit (so the click-snap cells
+/// are visible) and brighter lines at every chunk boundary (every 16 units).
+/// Sized to cover the stats `around` ring exactly.
+fn dev_grid(context: &Context, stats: &StatsPayload, objects: &mut Vec<Gm<Mesh, PhysicalMaterial>>) {
+    let Some((cx_min, cx_max, cy_min, cy_max)) = stats.around.iter().fold(
+        None,
+        |acc: Option<(i32, i32, i32, i32)>, e| match acc {
+            None => Some((e.cx, e.cx, e.cy, e.cy)),
+            Some((nx, xx, ny, xy)) => Some((nx.min(e.cx), xx.max(e.cx), ny.min(e.cy), xy.max(e.cy))),
+        },
+    ) else {
+        return;
+    };
+    let x_min = cx_min as f32 * CHUNK_SIZE;
+    let x_max = (cx_max + 1) as f32 * CHUNK_SIZE;
+    let z_min = cy_min as f32 * CHUNK_SIZE;
+    let z_max = (cy_max + 1) as f32 * CHUNK_SIZE;
+    let span_x = x_max - x_min;
+    let span_z = z_max - z_min;
+    let mid_x = x_min + span_x / 2.0;
+    let mid_z = z_min + span_z / 2.0;
+
+    // World-unit grid — every 1 unit, faint, below the lifecycle tiles.
+    let unit_y = DEV_OVERLAY_Y - 0.02;
+    let unit_color = rgba(0x888888, 36);
+    for x in x_min as i32..=x_max as i32 {
+        objects.push(flat_quad(context, x as f32, unit_y, mid_z, 0.04, span_z, unit_color));
+    }
+    for z in z_min as i32..=z_max as i32 {
+        objects.push(flat_quad(context, mid_x, unit_y, z as f32, span_x, 0.04, unit_color));
+    }
+
+    // Chunk boundaries — every 16 units, brighter and thicker, above the tiles
+    // so they read even through the hot/idle tints.
+    let chunk_y = DEV_OVERLAY_Y + 0.02;
+    let chunk_color = rgba(0xffcc44, 140);
+    for cx in cx_min..=cx_max + 1 {
+        let x = cx as f32 * CHUNK_SIZE;
+        objects.push(flat_quad(context, x, chunk_y, mid_z, 0.10, span_z, chunk_color));
+    }
+    for cy in cy_min..=cy_max + 1 {
+        let z = cy as f32 * CHUNK_SIZE;
+        objects.push(flat_quad(context, mid_x, chunk_y, z, span_x, 0.10, chunk_color));
+    }
+}
+
 /// The dev chunk-lifecycle overlay: a translucent tile per chunk in the stats
 /// ring, coloured by lifecycle, with a shrinking countdown bar over chunks armed
-/// for idle unload. Built into `objects`, drawn after the opaque scene.
+/// for idle unload. Built into `objects`, drawn after the opaque scene. The
+/// world-unit grid sits *under* the tiles so cell snap is visible at a glance;
+/// the chunk-boundary grid sits *above* the tiles so it reads even through the
+/// hot/idle tints.
 fn dev_overlay(context: &Context, stats: &StatsPayload, objects: &mut Vec<Gm<Mesh, PhysicalMaterial>>) {
+    dev_grid(context, stats, objects);
+
     for e in &stats.around {
         let x0 = e.cx as f32 * CHUNK_SIZE;
         let z0 = e.cy as f32 * CHUNK_SIZE;
