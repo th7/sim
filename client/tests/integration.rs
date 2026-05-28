@@ -2,10 +2,11 @@
 //! the native client's Session over a real WebSocket, re-pinning the phase
 //! behaviours (the browser Playwright suite's job) without a browser.
 
+use client::model::ClientModel;
 use client::session::Session;
 use protocol::geometry::ChunkCoord;
 use protocol::wire::RealmWire;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 async fn start_server() -> u16 {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -19,6 +20,25 @@ fn url(port: u16) -> String {
 }
 
 const T: Duration = Duration::from_secs(5);
+
+/// Is the instance's `out_of_instance` return portal currently in view?
+fn return_portal_visible(m: &ClientModel) -> bool {
+    m.portals().values().any(|p| p.direction == "out_of_instance")
+}
+
+/// Drive alice from her overworld spawn northwest onto the `into_instance`
+/// portal at world (4,4) and wait for the realm switch, then release movement so
+/// she ends up standing still inside a fresh instance.
+async fn enter_instance(alice: &mut Session) {
+    assert!(alice.pump_until(T, |m| m.player_pos("alice").is_some()).await);
+    assert_eq!(alice.model().realm(), RealmWire::Overworld);
+    alice.movement(true, false, false, true).await.unwrap(); // northwest
+    let entered = alice
+        .pump_until(Duration::from_secs(15), |m| matches!(m.realm(), RealmWire::Instance { .. }))
+        .await;
+    alice.movement(false, false, false, false).await.unwrap();
+    assert!(entered, "alice should relocate into an instance");
+}
 
 #[tokio::test]
 async fn connect_and_see_self() {
@@ -209,4 +229,108 @@ async fn walking_into_the_portal_enters_an_instance() {
             .await,
         "the instance's return portal should be visible after the realm switch"
     );
+}
+
+// --- flicker regressions -----------------------------------------------------
+//
+// "Flicker" = a visible object blinks out and back while the player stays inside
+// the instance. At the model layer that means an object disappears from the
+// merged view (`portals()` / `players()`) on some broadcast and returns on a
+// later one. These tests pin the invariant *do not flicker* by sampling the view
+// at ~20 Hz (twice the 10 Hz broadcast rate, so no dropped broadcast can be
+// skipped over) and asserting an object that has appeared never goes missing.
+//
+// The instance is a 3×3 chunk grid whose return portal sits in the centre chunk
+// (1,1); the player is clamped to that grid, so she is never more than one chunk
+// from centre. Hence (1,1) is *always* inside both her 3×3 view window and her
+// cluster's footprint — the portal has no legitimate reason to ever leave view.
+// If it does, that is the bug, and it is exercised end-to-end (real server, real
+// client model over a real socket), so it catches the fault whether it lives in
+// the server's per-chunk snapshot building or the client's subscription/merge.
+
+/// Standing still just inside an instance, the return portal and the player must
+/// stay continuously visible. Spans ~7 s — past the 5 s chunk idle-deactivation
+/// timeout and ~70 broadcasts — so a per-broadcast drop *or* an idle-deactivation
+/// of the centre chunk would surface as a missing object on some sample.
+#[tokio::test]
+async fn instance_objects_do_not_flicker_while_standing_still() {
+    let port = start_server().await;
+    let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
+    enter_instance(&mut alice).await;
+
+    // Let the instance's content load into view before we start watching.
+    assert!(
+        alice.pump_until(T, |m| return_portal_visible(m) && m.player_pos("alice").is_some()).await,
+        "the return portal and alice should be visible once inside the instance"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(7);
+    let mut samples = 0;
+    while Instant::now() < deadline {
+        alice.pump_for(Duration::from_millis(50)).await;
+        samples += 1;
+        assert!(
+            return_portal_visible(alice.model()),
+            "return portal vanished at sample {samples} — flicker while standing in the instance"
+        );
+        assert!(
+            alice.model().player_pos("alice").is_some(),
+            "player vanished at sample {samples} — flicker while standing in the instance"
+        );
+    }
+    assert!(samples >= 50, "expected to sample many broadcast cycles, got {samples}");
+}
+
+/// Walking a circuit through the instance's chunks pans the view window (chunks
+/// are subscribed and dropped), but the return portal in the centre chunk (1,1)
+/// — and the player, who is always in her own window — must never blink out.
+///
+/// The circuit roams *away* from the return portal at (24000,24000): the player
+/// spawns one unit west of it, so we head west/north/east/south through chunks
+/// (0,1),(0,0),(1,0) and back, staying clear of the portal's overlap trigger (we
+/// must not re-enter it and leave the instance) while keeping (1,1) in view the
+/// whole way. Any disappearance is flicker, not a legitimate view change.
+#[tokio::test]
+async fn instance_objects_do_not_flicker_while_walking_around() {
+    let port = start_server().await;
+    let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
+    enter_instance(&mut alice).await;
+    assert!(
+        alice.pump_until(T, |m| return_portal_visible(m)).await,
+        "the return portal should be visible once inside the instance"
+    );
+
+    // (north, south, east, west, dwell_ms). From spawn (23000,24000): west into
+    // chunk (0,1), north into (0,0), east along y≈8000 into (1,0) (far below the
+    // portal), south into (1,1). ~4 world-units/sec keeps every leg inside the
+    // 3×3 grid and well clear of the return portal.
+    let legs = [
+        (false, false, false, true, 3_000),
+        (true, false, false, false, 4_000),
+        (false, false, true, false, 4_000),
+        (false, true, false, false, 2_000),
+    ];
+    let mut panned = false;
+    for (n, s, e, w, dwell_ms) in legs {
+        alice.movement(n, s, e, w).await.unwrap();
+        let leg_end = Instant::now() + Duration::from_millis(dwell_ms);
+        while Instant::now() < leg_end {
+            alice.pump_for(Duration::from_millis(50)).await;
+            assert!(
+                matches!(alice.model().realm(), RealmWire::Instance { .. }),
+                "the circuit must stay inside the instance (not re-enter the return portal)"
+            );
+            assert!(
+                alice.model().player_pos("alice").is_some(),
+                "player vanished while walking — flicker inside the instance"
+            );
+            assert!(
+                return_portal_visible(alice.model()),
+                "return portal flickered while walking inside the instance"
+            );
+            panned |= alice.model().window_center() != ChunkCoord::new(1, 1);
+        }
+    }
+    alice.movement(false, false, false, false).await.unwrap();
+    assert!(panned, "the circuit should have panned the view window off the centre chunk");
 }

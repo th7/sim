@@ -39,6 +39,16 @@ pub enum Input {
     ToggleDev,
 }
 
+/// A joined chunk channel: the `join_ref` we used and the exact topic string we
+/// joined on. We keep the topic so we leave the channel we actually joined even
+/// after the realm has switched (on relocate the model flips to the new realm
+/// before the leave commands run), and so we can ignore snapshots arriving on
+/// any other topic for the same coord.
+struct ChunkSub {
+    join_ref: String,
+    topic: String,
+}
+
 pub struct Session {
     conn: PhxConn,
     model: ClientModel,
@@ -46,7 +56,7 @@ pub struct Session {
     player_topic: String,
     player_join_ref: String,
     next_join_ref: u64,
-    chunk_join_refs: BTreeMap<ChunkCoord, String>,
+    chunk_join_refs: BTreeMap<ChunkCoord, ChunkSub>,
     dev_join_ref: Option<String>,
 }
 
@@ -223,10 +233,18 @@ impl Session {
     async fn dispatch(&mut self, m: protocol::phx::PhxMessage) -> Result<(), String> {
         match m.event.as_str() {
             "snapshot" => {
+                // Only ingest a snapshot for a chunk channel we are currently
+                // joined to on this exact topic. Drops stragglers from a realm we
+                // have left (whose coord-keyed snapshot would otherwise clobber
+                // the current realm's in the model's by-coord merge — the source
+                // of the in-instance flicker).
                 if let Some(coord) = parse_chunk_topic(&m.topic) {
-                    if let Ok(snap) = serde_json::from_value::<ChunkSnapshot>(m.payload) {
-                        let cmds = self.model.on_snapshot(coord, snap);
-                        self.execute(cmds).await?;
+                    let joined = self.chunk_join_refs.get(&coord).map(|s| s.topic.as_str());
+                    if joined == Some(m.topic.as_str()) {
+                        if let Ok(snap) = serde_json::from_value::<ChunkSnapshot>(m.payload) {
+                            let cmds = self.model.on_snapshot(coord, snap);
+                            self.execute(cmds).await?;
+                        }
                     }
                 }
             }
@@ -257,13 +275,12 @@ impl Session {
                 Cmd::Subscribe(c) => {
                     let jr = self.next_join_ref();
                     let topic = self.chunk_topic(c);
-                    self.chunk_join_refs.insert(c, jr.clone());
+                    self.chunk_join_refs.insert(c, ChunkSub { join_ref: jr.clone(), topic: topic.clone() });
                     self.conn.join(&jr, &topic, json!({ "username": self.username })).await?;
                 }
                 Cmd::Unsubscribe(c) => {
-                    if let Some(jr) = self.chunk_join_refs.remove(&c) {
-                        let topic = self.chunk_topic(c);
-                        self.conn.leave(&jr, &topic).await?;
+                    if let Some(sub) = self.chunk_join_refs.remove(&c) {
+                        self.conn.leave(&sub.join_ref, &sub.topic).await?;
                     }
                 }
                 Cmd::Send(out) => {
