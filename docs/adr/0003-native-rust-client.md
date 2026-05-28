@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # The game client is a native Rust app, not a browser client

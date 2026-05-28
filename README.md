@@ -2,15 +2,14 @@
 
 A cooperative, persistent, isometric, real-time world where players fight, craft, and gather. PvP is an eventual concern, not v1.
 
-A **Rust** backend simulating one shared ECS world, partitioned by *interaction locality* into **clusters** (the interaction-clustered model — see [ADR-0002](./docs/adr/0002-rust-clustered-simulation-runtime.md)); a Vite + Three.js client speaking the Phoenix Channels wire protocol. The backend serves both the built client and the socket from one process.
+A **Rust** backend simulating one shared ECS world, partitioned by *interaction locality* into **clusters** (the interaction-clustered model — see [ADR-0002](./docs/adr/0002-rust-clustered-simulation-runtime.md)), and a **native Rust client** (three-d) that connects over the Phoenix Channels v2 WebSocket protocol (see [ADR-0003](./docs/adr/0003-native-rust-client.md)).
 
 ## Layout
 
-- `sim/` — the Rust backend: ECS + clusters, the serialized Labeler, collision, worldgen, the Postgres-backed Datastore, and a Phoenix-Channels-v2 WebSocket + static-file server (`sim/src/bin/server.rs`). See [`sim/README.md`](./sim/README.md).
-- `frontend/` — Vite + Three.js client
-  - `frontend/test/` — vitest contract specs (no backend needed)
-  - `frontend/e2e/` — Playwright golden-path specs against the running backend
-- `contract/contract.json` — the wire contract (the shared schema both sides conform to)
+- `protocol/` — the shared wire crate: the Phoenix-Channels codec, geometry, ids, and the bidirectional wire payload structs both sides serialize.
+- `sim/` — the Rust backend: ECS + clusters, the serialized Labeler, collision, worldgen, the Postgres-backed Datastore, and the Phoenix-Channels-v2 WebSocket server (`sim/src/bin/server.rs`). See [`sim/README.md`](./sim/README.md).
+- `client/` — the native client: a pure `ClientModel` + `Session` (WS/phx) bridged to a `three-d` + egui view (`client/src/bin/game.rs`).
+- `contract/contract.json` — the wire contract (the shared schema both sides conform to; guarded by `sim/tests/contract.rs`).
 - [`CONTEXT.md`](./CONTEXT.md) — the locked language: glossary + relationships
 - [`DESIGN.md`](./DESIGN.md) — what the running system does today, from outside
 - [`docs/adr/`](./docs/adr/) — architecture decision records
@@ -18,32 +17,27 @@ A **Rust** backend simulating one shared ECS world, partitioned by *interaction 
 
 ## Running locally
 
-Requires Rust, Node, and a running Postgres (reachable as `postgres@127.0.0.1:5432`).
+Requires Rust. Postgres is optional (for persistence).
 
 ```bash
-createdb -h 127.0.0.1 -U postgres sim_rust          # once
-
-# Single binary: the backend serves the built client + the socket on :4000.
-(cd frontend && npm install && npm run build)
-(cd sim && SIM_DATABASE_URL=postgres://postgres@127.0.0.1:5432/sim_rust \
-           SIM_STATIC_DIR="$PWD/../frontend/dist" \
-           cargo run --release --bin server)
-# → open http://localhost:4000/?u=alice
-
-# Or, for frontend hot-reload, run Vite in front and let it proxy /socket:
-(cd sim && SIM_DATABASE_URL=postgres://postgres@127.0.0.1:5432/sim_rust cargo run --release --bin server)
-(cd frontend && npm run dev)   # Vite on :3000, proxies /socket to :4000
-# → open http://localhost:3000/?u=alice
+bin/dev                  # builds + runs the server on :4000 and a client as "alice"
+bin/dev --user bob       # name the player
+bin/dev --dev            # start with the dev overlay (extra flags forward to the client)
 ```
 
-`SIM_DATABASE_URL` is optional — without it the backend uses an in-memory store (no persistence across restart). `?dev=1` shows the dev HUD.
+`bin/dev` blocks until you interrupt it (Ctrl-C) or either process exits, then shuts both down. To persist across restarts, give it a database: `SIM_DATABASE_URL=postgres://postgres@127.0.0.1:5432/sim_rust bin/dev` (without it the backend uses an in-memory store). Change the port with `SIM_PORT`.
+
+To run the pieces separately:
+
+```bash
+cargo run --release --bin server                                   # server on :4000
+cargo run --release -p client --bin game -- --user alice           # client (default --server ws://localhost:4000/socket/websocket?vsn=2.0.0)
+```
 
 ## Tests
 
 ```bash
-(cd sim && cargo test)             # Rust unit + integration (sim core, wire, persistence, contract)
-(cd frontend && npm test)          # vitest contract specs
-(cd frontend && npm run test:e2e)  # Playwright golden-path browser specs
+cargo test --workspace
 ```
 
-The e2e specs under `frontend/e2e/` are the load-bearing description of what the game does end-to-end — read them when you want to know what "works" means. `npm run test:e2e` (→ `bin/e2e`) builds the bundle, spins up a dedicated backend on `:4001` against a fresh `sim_e2e` database, runs the specs, and tears it down.
+`client/tests/integration.rs` is the load-bearing end-to-end description of what the game does: it boots the real server in-process and drives the native client over a real WebSocket, re-pinning every phase (connect, two clients, movement, multi-chunk-boundary walk, harvest→build→damage, dev stats, portal→instance) — read it when you want to know what "works" means.

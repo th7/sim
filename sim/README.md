@@ -29,6 +29,6 @@ cargo run --release --bin server   # serves Phoenix Channels v2 on :4000 (SIM_PO
 cargo test --release --test ceiling -- --nocapture   # single-core ceiling + parallel scaling numbers
 ```
 
-The server is a drop-in for the Elixir `GameWeb` socket: same topics (`player:<u>`, `chunk:x:y`,
-`instance:<id>:chunk:x:y`, `dev:stats`), events, and payloads (`../contract`). In dev,
-Vite on :3000 proxies `/socket` to it; the existing frontend connects unchanged.
+The server speaks Phoenix Channels v2: topics (`player:<u>`, `chunk:x:y`, `instance:<id>:chunk:x:y`,
+`dev:stats`), events, and payloads per `../contract`. The native `client` crate connects over
+`/socket/websocket`; non-upgrade requests get a plain 200 health response for readiness checks.

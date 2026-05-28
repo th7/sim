@@ -23,8 +23,10 @@ that we should sanity-check together later.
   camera offset, backgrounds, interpolation, dev overlay (see below). It compiles, but this environment has
   no display/GL context, so it cannot be *run*. The manual visual pass — the rendering half of ADR-0003's
   parity bar — must be done on a machine with a display.
-- **Cutover NOT done.** Deleting `frontend/` and removing the server's static-serving waits on the visual
-  pass; until then the TS client stays as the working/reference client.
+- **Cutover done.** After the visual pass on macOS, `frontend/` and the server's static-serving were
+  removed; the native client is the only client. The Playwright e2e suite went with it — `client/tests/
+  integration.rs` now re-pins the phases. The wire contract (`contract/contract.json` +
+  `sim/tests/contract.rs`) survives the cutover.
 
 ## What the native view now mirrors from the old frontend
 

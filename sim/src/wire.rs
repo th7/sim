@@ -1,7 +1,7 @@
 //! Wire-facing observation: per-entity state and the per-chunk `snapshot`
 //! payload, shaped to match the committed contract
 //! (`contract/contract.json`) byte-for-byte. Positions are
-//! sub-unit integers; the frontend divides by 1000.
+//! sub-unit integers; the client divides by 1000.
 //!
 //! The cluster authors observation as changed-only deltas (see
 //! [`crate::delta`]); a full [`ChunkSnapshot`] is just the current state of one

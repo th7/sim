@@ -4,14 +4,5 @@
 # Local Postgres data dir managed by .my-agent/scripts/pg-start.sh.
 /.pgdata/
 
-# Vitest / Playwright artefacts when the runner is invoked from /workspace
-# instead of /workspace/frontend (`npx vitest run`, `npx playwright test`).
-/node_modules/
-/test-results/
-/playwright-report/
-
-# Rust build output for the /sim crate.
+# Rust build output (workspace target dir).
 /target/
-
-# Frontend production build (served by the Rust server via SIM_STATIC_DIR).
-/frontend/dist/

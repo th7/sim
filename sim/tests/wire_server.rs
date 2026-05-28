@@ -1,6 +1,6 @@
 //! End-to-end wire compatibility: start the real WebSocket server in-process and
 //! drive it with a Phoenix Channels v2 client, exercising the same frames the
-//! frontend sends. Proves the server is a drop-in for the Elixir socket.
+//! native client sends.
 
 use futures_util::{SinkExt, StreamExt};
 use sim::phx::PhxMessage;

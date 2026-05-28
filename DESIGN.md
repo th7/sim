@@ -12,7 +12,7 @@ What the running system does, from outside. See `CONTEXT.md` for domain language
 
 A connected Player...
 
-- ...connects via browser (Vite + Three.js) at `localhost:3000`. One username = one in-world entity; the same Player on reconnect resumes where they logged off.
+- ...connects through the native client (`client/`, a three-d desktop app) over the WebSocket. One username = one in-world entity; the same Player on reconnect resumes where they logged off.
 - ...moves their entity with WASD. The server is authoritative; clients render server snapshots without prediction.
 - ...sees other Players and world entities in a 3×3 View window of Chunks around their current Chunk.
 - ...crosses Chunk boundaries seamlessly within the Overworld.
