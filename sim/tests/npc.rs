@@ -154,3 +154,33 @@ fn scattered_deer_form_a_herd() {
     let after = spread(&sim);
     assert!(after < before, "deer should cluster: spread {before} -> {after}");
 }
+
+#[test]
+fn wolves_pack_onto_a_single_deer() {
+    // Two wolves that would naturally split onto different deer instead gang up
+    // on the focal one, so they converge rather than diverge.
+    let mut sim = Sim::new();
+    sim.spawn_npc(NpcKind::Wolf, pos(8_000, 8_000), Drives { hunger: 0.9, ..Default::default() });
+    sim.spawn_npc(NpcKind::Wolf, pos(12_000, 8_000), Drives { hunger: 0.9, ..Default::default() });
+    sim.spawn_npc(NpcKind::Deer, pos(8_800, 8_000), Drives::default());
+    sim.spawn_npc(NpcKind::Deer, pos(11_500, 8_000), Drives::default());
+
+    let wolf_gap = |sim: &Sim| -> i64 {
+        let ws: Vec<(i64, i64)> = sim
+            .npcs()
+            .iter()
+            .filter(|(_, k, _, _, _)| *k == NpcKind::Wolf)
+            .map(|(_, _, p, _, _)| (p.x, p.y))
+            .collect();
+        if ws.len() < 2 {
+            return 0;
+        }
+        (ws[0].0 - ws[1].0).pow(2) + (ws[0].1 - ws[1].1).pow(2)
+    };
+    let before = wolf_gap(&sim);
+    for _ in 0..30 {
+        sim.tick();
+    }
+    let after = wolf_gap(&sim);
+    assert!(after < before, "pack should converge on one deer: gap² {before} -> {after}");
+}

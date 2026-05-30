@@ -263,6 +263,19 @@ pub fn decide(
     decision
 }
 
+/// The pack's focal point: the centroid of this wolf and its packmates, or just
+/// itself when alone. Agent extension (EXTENSIONS.md) — pulls a hunt toward a
+/// shared focal prey.
+fn pack_focus(perc: &Perception) -> P2 {
+    if perc.herd.is_empty() {
+        return perc.self_pos;
+    }
+    let n = (perc.herd.len() + 1) as i64;
+    let sx: i64 = perc.self_pos.x + perc.herd.iter().map(|s| s.pos.x).sum::<i64>();
+    let sy: i64 = perc.self_pos.y + perc.herd.iter().map(|s| s.pos.y).sum::<i64>();
+    P2::new(sx / n, sy / n)
+}
+
 /// The integer mean position of an animal's herd peers, if any.
 fn herd_centroid(perc: &Perception) -> Option<P2> {
     if perc.herd.is_empty() {
@@ -299,8 +312,10 @@ fn plan_hunger(kind: NpcKind, perc: &Perception, params: &Params) -> Decision {
                 // Food sensed but out of reach → approach it.
                 return Decision::Approach(f.pos);
             }
-            // No food: hunt prey if any is perceived.
-            if let Some(p) = nearest(perc.self_pos, &perc.prey) {
+            // No food: hunt prey. Pack focus (agent extension) — when packmates
+            // are near, target the prey nearest the pack centroid so the pack
+            // converges on one animal instead of splitting up.
+            if let Some(p) = nearest(pack_focus(perc), &perc.prey) {
                 return Decision::Attack(p.id, p.pos);
             }
             Decision::Wander
@@ -455,6 +470,39 @@ mod tests {
             decide(NpcKind::Wolf, &perc, &mut d, &params, DT);
         }
         assert!(d.hunger_pressure < 0.05, "got {}", d.hunger_pressure);
+    }
+
+    #[test]
+    fn lone_wolf_hunts_the_prey_nearest_itself() {
+        let (params, _) = wolf();
+        let mut d = Drives { hunger: 0.8, ..Default::default() };
+        let mut perc = Perception::at(P2::new(4_000, 0));
+        perc.prey = vec![
+            Sensed { id: 1, pos: P2::new(1_800, 0) },
+            Sensed { id: 2, pos: P2::new(3_000, 0) },
+        ];
+        // No pack → nearest to self (3000 is closer to 4000).
+        assert_eq!(
+            decide(NpcKind::Wolf, &perc, &mut d, &params, DT),
+            Decision::Attack(2, P2::new(3_000, 0))
+        );
+    }
+
+    #[test]
+    fn pack_wolf_targets_prey_nearest_the_pack_centroid() {
+        let (params, _) = wolf();
+        let mut d = Drives { hunger: 0.8, ..Default::default() };
+        let mut perc = Perception::at(P2::new(4_000, 0));
+        perc.prey = vec![
+            Sensed { id: 1, pos: P2::new(1_800, 0) },
+            Sensed { id: 2, pos: P2::new(3_000, 0) },
+        ];
+        // A packmate at the origin pulls the focus to (2000,0): prey 1 is nearer.
+        perc.herd = vec![Sensed { id: 99, pos: P2::new(0, 0) }];
+        assert_eq!(
+            decide(NpcKind::Wolf, &perc, &mut d, &params, DT),
+            Decision::Attack(1, P2::new(1_800, 0))
+        );
     }
 
     #[test]
