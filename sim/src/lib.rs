@@ -24,6 +24,7 @@ pub mod delta;
 pub mod dev;
 pub mod harness;
 pub mod labeler;
+pub mod motivation;
 pub mod parallel;
 pub mod pgstore;
 pub mod repack;

@@ -110,4 +110,14 @@ prove consequential in the Decision log below.
 
 ## Decision log (appended during implementation)
 
-- _(none yet)_
+- **Pressure integrator = exponential low-pass toward `cap·activation`** (time constant τ), not a raw
+  accumulator. Bounded and stable by construction: sustained max activation saturates at `cap`, quiet
+  decays to 0. Chronic-vs-acute is expressed via τ (hunger τ=60s slow, safety τ=10s fast). Satisfies
+  ADR-0004's "leaky integral, decays on satisfaction, hard-capped" without unbounded growth.
+- **Inter-chain score = `immediacy · bias · (1 + pressure)`** (pressure as a *gain*, not additive), so
+  an acute threat (immediacy→1) can still win at low pressure, while chronic pressure tips close calls —
+  matching the grilled "might sacrifice safety" semantics. Bias: wolf safety 1.2 / deer safety 1.5 > hunger 1.0.
+- **`decide()` raises hunger (metabolism); the ECS lowers it via `Drives::feed()` on a successful eat.**
+  Keeps the engine pure (world-effects stay in the ECS) while the need-level dynamics remain unit-testable.
+- **Engine emits no RNG.** Wander direction / tie-breaks are returned as `Decision::Wander` and resolved
+  by the ECS with a seeded PRNG, keeping the engine a deterministic pure function.
