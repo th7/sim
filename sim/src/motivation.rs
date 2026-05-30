@@ -282,8 +282,12 @@ pub fn decide(
 
     // Herd cohesion (agent extension, EXTENSIONS.md): a calm animal beyond its
     // comfort radius drifts toward the centroid of its herd. Never overrides
-    // fleeing — a threat scatters the herd, then it reforms.
-    if params.herd_comfort_sq > 0 && !matches!(decision, Decision::Flee(_)) {
+    // fleeing — a threat scatters the herd — nor grazing when very hungry: a deer
+    // won't socialize itself into starvation.
+    let starving = drives.hunger > 0.7;
+    let cohesion_blocked =
+        matches!(decision, Decision::Flee(_)) || (starving && matches!(decision, Decision::Graze));
+    if params.herd_comfort_sq > 0 && !cohesion_blocked {
         if let Some(c) = herd_centroid(perc) {
             if dist_sq(perc.self_pos, c) > params.herd_comfort_sq {
                 return Decision::Approach(c);
@@ -636,6 +640,16 @@ mod tests {
             Decision::Approach(p) => assert!(p.x > 0, "steers toward the herd, got {p:?}"),
             other => panic!("expected Approach(herd), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_starving_deer_grazes_rather_than_chasing_a_far_herd() {
+        let params = Params::for_kind(NpcKind::Deer);
+        let mut d = Drives { hunger: 0.85, ..Default::default() };
+        let mut perc = Perception::at(P2::new(0, 0));
+        perc.grass = 1.0;
+        perc.herd = vec![Sensed { id: 1, pos: P2::new(5_000, 0) }]; // far, but I'm starving
+        assert_eq!(decide(NpcKind::Deer, &perc, &mut d, &params, DT), Decision::Graze);
     }
 
     #[test]

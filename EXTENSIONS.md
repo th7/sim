@@ -18,7 +18,8 @@ just a steering override on the *idle/graze* branch, blended from data the perce
 The centroid is an integer mean and the steer is a unit vector — fully deterministic. Cost is O(peers).
 
 **Behaviour pinned by tests.** Dispersed, unthreatened deer converge (max pairwise distance shrinks); a
-threatened deer still flees regardless of its herd.
+threatened deer still flees regardless of its herd. Cohesion also yields to a *very hungry* deer (it grazes
+rather than chasing a far herd into starvation) — so social pull never overrides survival.
 
 ## 2. Pack focus (wolves) — *coordinated hunts*
 
