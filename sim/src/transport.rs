@@ -82,7 +82,13 @@ fn spawn_tick_loop(shared: Arc<Shared>) {
         loop {
             interval.tick().await;
             let mut sim = shared.sim.lock().unwrap();
-            sim.tick();
+            if sim.tick_or_flush().is_err() {
+                // A tick panicked: the runtime is presumed corrupt. We've already
+                // flushed durable state (loss bounded to the unflushed window);
+                // now take the whole runtime down for a supervisor to restart.
+                eprintln!("sim: tick panicked — flushed durable state, taking the runtime down");
+                std::process::abort();
+            }
             let broadcast = sim.tick_count() % BROADCAST_EVERY == 0;
             let events = sim.drain_events();
             let conns = shared.conns.lock().unwrap();

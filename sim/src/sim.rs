@@ -135,8 +135,18 @@ impl Sim {
         self.clock_ms = ms;
     }
 
-    /// Force a Datastore flush (test/operator/shutdown hook).
+    /// Bring the durable store fully up to date — the graceful-shutdown and
+    /// panic paths both call this so the runtime loses as little as possible on
+    /// the way down. Refreshes every standing player's current position (the
+    /// heartbeat otherwise only runs every `FLUSH_MS`), drains any buffered
+    /// persist events, then flushes to durable.
     pub fn flush_now(&mut self) {
+        for u in self.players_in(Realm::Overworld) {
+            if let Some(ev) = self.overworld.player_upsert(&u) {
+                self.datastore.apply(ev);
+            }
+        }
+        self.drain_persistence();
         self.datastore.flush();
     }
 
@@ -322,6 +332,28 @@ impl Sim {
         if let Some(&realm) = self.player_realm.get(username) {
             if let Some(rw) = self.realm_world_mut(realm) {
                 rw.set_intent(username, dx, dy);
+            }
+        }
+    }
+
+    /// Advance one tick under a panic guard. A panic means the runtime is
+    /// presumed corrupt — we do **not** swallow it and limp on. Instead we flush
+    /// durable state (bounding loss to the unflushed window) and return the panic
+    /// payload so the caller takes the whole runtime down: a clean, lossless
+    /// crash a supervisor can restart from the durable store.
+    pub fn tick_or_flush(&mut self) -> std::thread::Result<()> {
+        self.guard(|s| s.tick())
+    }
+
+    /// Run `body`; if it panics, flush durable state and return the panic payload.
+    /// Catching here (while the caller still holds the Sim) keeps the panic from
+    /// poisoning the shared lock, and lets us flush before going down.
+    fn guard<R>(&mut self, body: impl FnOnce(&mut Sim) -> R) -> std::thread::Result<R> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self))) {
+            Ok(r) => Ok(r),
+            Err(payload) => {
+                self.flush_now();
+                Err(payload)
             }
         }
     }
@@ -654,5 +686,34 @@ impl Sim {
         self.instances
             .insert(id, RealmWorld::new(Realm::Instance(id), Some(instance_bounds())));
         id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panic inside the guarded body must not be swallowed (the runtime is
+    /// presumed corrupt) — but durable state is flushed before it propagates, so
+    /// the pending write window is emptied on the way down.
+    #[test]
+    fn guard_flushes_durable_state_then_reports_the_panic() {
+        let mut sim = Sim::new();
+        sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
+        sim.harvest("a", 8_000, 8_000).unwrap(); // depletion → a pending durable write
+        assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
+
+        // Silence the default panic print for this expected, caught panic.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let res = sim.guard(|_| panic!("injected tick panic"));
+        std::panic::set_hook(prev);
+
+        assert!(res.is_err(), "the guard reports the panic rather than swallowing it");
+        assert_eq!(
+            sim.datastore().pending_len(),
+            0,
+            "the guard flushed durable state on the way out"
+        );
     }
 }
