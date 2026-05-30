@@ -139,7 +139,7 @@ fn season(_t_ms: u64) -> f64 {
 const DAY_MS: u64 = 600_000;
 
 /// Deterministic day/night "nightness" 0 (midday) .. 1 (midnight), a smooth
-/// cosine of the sim clock. Pure — no wall-clock. Agent extension (AGENT_LOG.md).
+/// cosine of the sim clock. Pure — no wall-clock. Agent extension.
 pub fn day_phase(t_ms: u64) -> f64 {
     let frac = (t_ms % DAY_MS) as f64 / DAY_MS as f64;
     (1.0 - (2.0 * std::f64::consts::PI * frac).cos()) / 2.0

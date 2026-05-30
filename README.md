@@ -10,10 +10,9 @@ A **Rust** backend simulating one shared ECS world, partitioned by *interaction 
 - `sim/` — the Rust backend: ECS + clusters, the serialized Labeler, collision, worldgen, the Postgres-backed Datastore, and the Phoenix-Channels-v2 WebSocket server (`sim/src/bin/server.rs`). See [`sim/README.md`](./sim/README.md).
 - `client/` — the native client: a pure `ClientModel` + `Session` (WS/phx) bridged to a `three-d` + egui view (`client/src/bin/game.rs`).
 - `contract/contract.json` — the wire contract (the shared schema both sides conform to; guarded by `sim/tests/contract.rs`).
-- [`CONTEXT.md`](./CONTEXT.md) — the locked language: glossary + relationships
-- [`DESIGN.md`](./DESIGN.md) — what the running system does today, from outside
-- [`docs/adr/`](./docs/adr/) — architecture decision records
-- [`DESIGN.md`](./DESIGN.md) — the design + build log of the interaction-clustered Rust backend
+- [`design/`](./design/) — the canonical design layer: vision, the domain glossary, and per-area design docs (the *why/what*)
+- [`stories/`](./stories/) — Gherkin user stories: the observable acceptance criteria the implementation answers to
+- [`docs/adr/`](./docs/adr/) — architecture decision records (the *how*: runtime, client, ecosystem)
 
 ## Running locally
 

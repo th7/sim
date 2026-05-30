@@ -68,7 +68,7 @@ pub struct Perception {
     /// Local grass level 0..1 (deer grazing substrate).
     pub grass: f64,
     /// Day/night phase 0 (midday) .. 1 (midnight) — the "nightness" of the world
-    /// right now. Agent extension (AGENT_LOG.md): modulates temperament.
+    /// right now. Agent extension: modulates temperament.
     pub phase: f64,
     /// The animal's own health fraction, 1.0 full .. 0.0 dead. Agent extension:
     /// a wounded animal is warier (amplified safety).
@@ -147,7 +147,7 @@ pub struct Params {
     /// Need scores below this count as "no active need".
     pub idle_eps: f64,
     /// Range² beyond which a calm animal steers toward its herd centroid
-    /// (0 disables cohesion). Agent extension — see AGENT_LOG.md.
+    /// (0 disables cohesion). Agent extension.
     pub herd_comfort_sq: i64,
 }
 
@@ -280,7 +280,7 @@ pub fn decide(
         Decision::Wander
     };
 
-    // Herd cohesion (agent extension, AGENT_LOG.md): a calm animal beyond its
+    // Herd cohesion (agent extension): a calm animal beyond its
     // comfort radius drifts toward the centroid of its herd. Never overrides
     // fleeing — a threat scatters the herd — nor grazing when very hungry: a deer
     // won't socialize itself into starvation.
@@ -298,7 +298,7 @@ pub fn decide(
 }
 
 /// The pack's focal point: the centroid of this wolf and its packmates, or just
-/// itself when alone. Agent extension (AGENT_LOG.md) — pulls a hunt toward a
+/// itself when alone. Agent extension — pulls a hunt toward a
 /// shared focal prey.
 fn pack_focus(perc: &Perception) -> P2 {
     if perc.herd.is_empty() {

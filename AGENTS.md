@@ -1,4 +1,4 @@
-Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per realm, partitioned by interaction locality into **clusters**; a serialized **Labeler** owns the partition; a Postgres-backed Datastore persists; a Phoenix-Channels-v2 WebSocket is the wire. A **native Rust client** (`client/`, three-d) speaks that wire over `/socket/websocket`; the shared codec + wire structs live in `protocol/`. See `DESIGN.md` for the model and `CONTEXT.md` for the domain language.
+Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per realm, partitioned by interaction locality into **clusters**; a serialized **Labeler** owns the partition; a Postgres-backed Datastore persists; a Phoenix-Channels-v2 WebSocket is the wire. A **native Rust client** (`client/`, three-d) speaks that wire over `/socket/websocket`; the shared codec + wire structs live in `protocol/`. Domain language is `design/glossary.md`; observable behaviour is the user stories in `stories/`; architecture rationale is `docs/adr/`.
 
 ## Project guidelines
 
@@ -17,12 +17,11 @@ Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per 
 - The Rust suite is unit + integration (`sim/tests/`); the cross-restart Postgres test self-skips unless `SIM_TEST_DATABASE_URL` is set.
 - `client/tests/integration.rs` is the load-bearing end-to-end description: it boots the real server in-process and drives the native client over a WebSocket, re-pinning every phase.
 
-## Work Loop
+## Roles & flow
 
-Substantive work runs a three-step loop — **stabilize → clarify → implement** — repeating per increment. It runs **human-in-the-loop** (the human answers/ratifies) or **autonomously** (the agent decides-and-logs); the steps are identical, only the check-in differs.
-
-- **Stabilize** — leave the base healthy before taking on the increment: no known bugs, docs current. Per-increment, not per-commit. With a human in the loop, **review and settle `AGENT_LOG.md`** — walk its open items and remove each as the human reviews it (keepers graduate to an ADR / `CONTEXT.md` / `DESIGN.md`). Autonomous mode fixes what it owns and logs anything needing a human (ADRs, glossary, architectural refactors) to `AGENT_LOG.md`.
-- **Clarify** — run `/grill-with-docs` to resolve the design tree. Human mode: the human answers; glossary/ADRs updated with them. Autonomous mode: the agent self-answers and records its answers (and any glossary/ADR recommendations) in `AGENT_LOG.md`. When the grill settles, rewrite `PLAN.md` as the next increment.
-- **Implement** — drive every new behavior **test-first** (red → green), then a **stay-green refactor** to close out. Level by change: pure logic → unit; new game behavior → `sim/tests/` integration; new client↔server interaction → `client/tests/integration.rs` e2e. **Commit at every stable point** — coherent, self-contained, warning-free, `cargo test --workspace` green (the gate in Project guidelines). Log every non-obvious decision and deferred/recommended follow-up to `AGENT_LOG.md`.
-
-**ADRs (`docs/adr/`) and the domain glossary (`CONTEXT.md`)** are written **only with a human in the loop** — and *should* be, then. Autonomously the agent never touches them; it logs a recommendation to `AGENT_LOG.md` instead. **Autonomous mode** edits only `AGENT_LOG.md` and `PLAN.md` among root `.md` files, prefers decide-and-log over asking, and hard-halts only on a true blocker (missing access, unresolvable contradiction, or an unauthorized irreversible/outward-facing action like push/deploy/delete) — logging it first.
+Work runs through a three-role pipeline — **designer** (`design/`) → **product owner**
+(`stories/`) → **engineer** (code + tests, `PLAN.md`) — coordinating through `messages/`. Each
+role's brief is the source of truth for how that role works; this file holds only the
+cross-cutting *engineering* conventions above. The engineer drives every new behaviour
+**test-first** (red → green) then a **stay-green refactor**, commits at every stable point
+(warning-free, `cargo test --workspace` green), and keeps the next increment in `PLAN.md`.

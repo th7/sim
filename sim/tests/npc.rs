@@ -126,7 +126,7 @@ fn attacked_wolf_flees_when_not_hungry() {
     assert!(npc_x(&sim, NpcKind::Wolf) > before, "a provoked, unhungry wolf flees the player");
 }
 
-// --- agent-invented extensions (see AGENT_LOG.md) ---
+// --- agent-invented extensions ---
 
 #[test]
 fn scattered_deer_form_a_herd() {
