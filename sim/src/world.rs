@@ -105,6 +105,9 @@ pub struct RealmWorld {
     /// Sim-clock time each loaded chunk was last owned by a cluster — drives
     /// idle deactivation (a chunk unowned for IDLE_TIMEOUT_MS goes cold).
     chunk_last_owned: BTreeMap<ChunkCoord, u64>,
+    /// NPC deaths this step `(chunk, kind)` — drained by the Sim to deplete the
+    /// Region's wildlife Disturbance. Only *deaths* deplete; dissolve does not.
+    wild_kills: Vec<(ChunkCoord, NpcKind)>,
 }
 
 impl RealmWorld {
@@ -123,7 +126,13 @@ impl RealmWorld {
             persist_events: Vec::new(),
             newly_loaded: Vec::new(),
             chunk_last_owned: BTreeMap::new(),
+            wild_kills: Vec::new(),
         }
+    }
+
+    /// Drain NPC deaths recorded this step (for the Sim's wildlife Disturbance).
+    pub fn take_wild_kills(&mut self) -> Vec<(ChunkCoord, NpcKind)> {
+        std::mem::take(&mut self.wild_kills)
     }
 
     /// Emit a persistence change — Overworld only (Instances don't persist).
@@ -306,21 +315,6 @@ impl RealmWorld {
             }
         }
         s
-    }
-
-    /// Count (deer, wolves) currently standing in chunk `coord`.
-    pub fn npc_counts_in(&self, coord: ChunkCoord) -> (u32, u32) {
-        let mut deer = 0;
-        let mut wolf = 0;
-        for (_, (pos, npc)) in self.world.query::<(&Position, &Npc)>().iter() {
-            if pos.chunk() == coord {
-                match npc.kind {
-                    NpcKind::Deer => deer += 1,
-                    NpcKind::Wolf => wolf += 1,
-                }
-            }
-        }
-        (deer, wolf)
     }
 
     /// Despawn every NPC standing in chunk `coord` (dissolve on cooldown).
@@ -564,12 +558,15 @@ impl RealmWorld {
         }
     }
 
-    /// Turn a dying NPC into a Carcass at its position.
+    /// Turn a dying NPC into a Carcass at its position, and record the death so
+    /// the Region's wildlife Disturbance can be depleted (event-sourced — only
+    /// real deaths deplete; materialize/dissolve/wander are population-neutral).
     fn kill_npc(&mut self, e: Entity, clock_ms: u64) {
         let pos = self.world.get::<&Position>(e).map(|p| *p).ok();
         let kind = self.world.get::<&Npc>(e).map(|n| n.kind).ok();
         self.despawn_npc(e);
         if let (Some(pos), Some(kind)) = (pos, kind) {
+            self.wild_kills.push((pos.chunk(), kind));
             let id = self.next_actor;
             self.next_actor += 1;
             let wid = WireId(format!("carcass:{id}"));

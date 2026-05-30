@@ -17,7 +17,7 @@ use crate::ids::{ClusterId, Realm};
 use crate::verbs::VerbError;
 use crate::world::{instance_bounds, RealmWorld};
 use crate::worldgen;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A per-player server→client event the transport layer (Phase 4) pushes.
 #[derive(Debug, Clone, PartialEq)]
@@ -43,9 +43,8 @@ pub struct Sim {
     /// Sparse, self-healing per-Region wildlife Disturbances (ADR-0006). In
     /// memory for now; cross-restart persistence is a flagged follow-up.
     wild_disturb: BTreeMap<ecosystem::RegionId, ecosystem::Disturbance>,
-    /// Chunks currently materialized into live wildlife, with the counts spawned
-    /// (deer, wolf) — used to fold warm activity back into the Disturbance.
-    wild_pop: BTreeMap<ChunkCoord, (u32, u32)>,
+    /// Chunks currently materialized into live wildlife.
+    wild_pop: BTreeSet<ChunkCoord>,
     /// Whether the warm/cold wildlife boundary runs. Off by default so core
     /// tests/e2e see an empty world; the game server turns it on.
     wildlife: bool,
@@ -54,6 +53,11 @@ pub struct Sim {
 /// Max wildlife per chunk at a level of 1.0 (the spawn-count capacities).
 const DEER_CAP: u32 = 4;
 const WOLF_CAP: u32 = 2;
+
+/// Kills to fully deplete a Region's stratum (a territory spans many chunks, so a
+/// kill moves the Region level far less than a chunk's worth). Tunable.
+const REGION_DEER_CAPACITY: f64 = 24.0;
+const REGION_WOLF_CAPACITY: f64 = 12.0;
 
 /// Deterministic seed for a chunk's spawn rolls, bucketed by ~10 s of sim time so
 /// the same chunk is stable while a Player lingers but varies across long gaps.
@@ -107,7 +111,7 @@ impl Sim {
             pool: None,
             datastore: Datastore::new(Box::new(store)),
             wild_disturb: BTreeMap::new(),
-            wild_pop: BTreeMap::new(),
+            wild_pop: BTreeSet::new(),
             wildlife: false,
         }
     }
@@ -215,21 +219,32 @@ impl Sim {
     /// that went cold back into their Region's Disturbance. Overworld only.
     fn update_wildlife(&mut self, clock_ms: u64) {
         if !self.wildlife {
+            self.overworld.take_wild_kills(); // don't let kill events accumulate
             return;
         }
+
+        // Depletion is **event-sourced from deaths** (player hunting + predation),
+        // not from dissolve accounting: a wandering animal that crosses a chunk
+        // boundary is the same animal, so only an actual kill lowers a Region.
+        for (chunk, kind) in self.overworld.take_wild_kills() {
+            let region = ecosystem::region_of_chunk(chunk);
+            // Per-kill depletion is scaled to the Region's carrying capacity (a
+            // territory spans many chunks), not one chunk — so overhunting takes
+            // sustained killing, and incidental predation only dips-and-heals.
+            let (stratum, per_kill) = match kind {
+                NpcKind::Deer => (Stratum::Deer, -1.0 / REGION_DEER_CAPACITY),
+                NpcKind::Wolf => (Stratum::Wolf, -1.0 / REGION_WOLF_CAPACITY),
+            };
+            self.wild_disturb.entry(region).or_default().disturb(stratum, per_kill, clock_ms);
+        }
+
         let warm = self.overworld.player_warm_chunks();
 
-        // Dissolve: chunks that left the warm set fold their net population
-        // change (survivors − materialized) into the Region's Disturbance, heal-able.
-        let cold: Vec<ChunkCoord> =
-            self.wild_pop.keys().filter(|c| !warm.contains(c)).copied().collect();
+        // Dissolve: chunks that left the warm set simply despawn their wildlife
+        // (population-neutral — the field, not the live entities, is the truth).
+        let cold: Vec<ChunkCoord> = self.wild_pop.iter().filter(|c| !warm.contains(c)).copied().collect();
         for c in cold {
-            let (md, mw) = self.wild_pop.remove(&c).unwrap();
-            let (sd, sw) = self.overworld.npc_counts_in(c);
-            let region = ecosystem::region_of_chunk(c);
-            let d = self.wild_disturb.entry(region).or_default();
-            d.disturb(Stratum::Deer, (sd as f64 - md as f64) / DEER_CAP as f64, clock_ms);
-            d.disturb(Stratum::Wolf, (sw as f64 - mw as f64) / WOLF_CAP as f64, clock_ms);
+            self.wild_pop.remove(&c);
             self.overworld.despawn_npcs_in(c);
         }
         // Drop fully-healed Disturbances to keep the set sparse.
@@ -237,8 +252,7 @@ impl Sim {
 
         // Materialize: chunks newly in the warm set spawn wildlife from their
         // Region level, with spawn-derived temperament (ADR-0006 keystone).
-        let fresh: Vec<ChunkCoord> =
-            warm.iter().filter(|c| !self.wild_pop.contains_key(c)).copied().collect();
+        let fresh: Vec<ChunkCoord> = warm.iter().filter(|c| !self.wild_pop.contains(c)).copied().collect();
         for c in fresh {
             let region = ecosystem::region_of_chunk(c);
             let dist = self.wild_disturb.get(&region).copied().unwrap_or_default();
@@ -253,7 +267,7 @@ impl Sim {
                 let p = seeded_pos(c, i as u64, 0x401F);
                 self.overworld.spawn_npc(NpcKind::Wolf, p, ecosystem::initial_drives(NpcKind::Wolf, &lv));
             }
-            self.wild_pop.insert(c, (dn, wn));
+            self.wild_pop.insert(c);
         }
     }
 
