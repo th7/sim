@@ -16,3 +16,13 @@ Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per 
 
 - The Rust suite is unit + integration (`sim/tests/`); the cross-restart Postgres test self-skips unless `SIM_TEST_DATABASE_URL` is set.
 - `client/tests/integration.rs` is the load-bearing end-to-end description: it boots the real server in-process and drives the native client over a WebSocket, re-pinning every phase.
+
+## Work Loop
+
+Substantive work runs a three-step loop — **stabilize → clarify → implement** — repeating per increment. It runs **human-in-the-loop** (the human answers/ratifies) or **autonomously** (the agent decides-and-logs); the steps are identical, only the check-in differs.
+
+- **Stabilize** — leave the base healthy before taking on the increment: no known bugs, docs current. Per-increment, not per-commit. Autonomous mode fixes what it owns and logs anything human-owned to `AGENT_LOG.md` as a recommendation.
+- **Clarify** — run `/grill-with-docs` to resolve the design tree. Human mode: the human answers; glossary/ADRs updated with them. Autonomous mode: the agent self-answers and records its answers (and any glossary/ADR recommendations) in `AGENT_LOG.md`. When the grill settles, rewrite `PLAN.md` as the next increment.
+- **Implement** — drive every new behavior **test-first** (red → green), then a **stay-green refactor** to close out. Level by change: pure logic → unit; new game behavior → `sim/tests/` integration; new client↔server interaction → `client/tests/integration.rs` e2e. **Commit at every stable point** — coherent, self-contained, warning-free, `cargo test --workspace` green (the gate in Project guidelines). Log every non-obvious decision and deferred/recommended follow-up to `AGENT_LOG.md`.
+
+**Human-owned, never changed solo:** ADRs (`docs/adr/`) and the domain glossary (`CONTEXT.md`). **Autonomous mode** edits only `AGENT_LOG.md` and `PLAN.md` among root `.md` files, prefers decide-and-log over asking, and hard-halts only on a true blocker (missing access, unresolvable contradiction, or an unauthorized irreversible/outward-facing action like push/deploy/delete) — logging it first.

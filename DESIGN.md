@@ -1,6 +1,6 @@
 # Design
 
-What the running system does, from outside. See `CONTEXT.md` for domain language, `docs/adr/` for the runtime decisions, and `PLAN.md` for in-flight feature work.
+What the running system does, from outside. See `CONTEXT.md` for domain language, `docs/adr/` for the runtime decisions, `PLAN.md` for the next increment, and `AGENT_LOG.md` for the agent's decision log and follow-ups.
 
 > **Note:** The running system is the **interaction-clustered** Rust backend
 > ([ADR-0002](./docs/adr/0002-rust-clustered-simulation-runtime.md)): one shared ECS world per realm,
@@ -32,6 +32,16 @@ A connected Player...
 - Resource nodes (trees) and Portals are placed deterministically by Worldgen.
 - Instances are ephemeral, in-memory 3×3 grids spawned on Portal entry. Destroyed when the entering Player leaves or disconnects.
 
+## NPCs & wildlife
+
+Off by default; enable with `SIM_WILDLIFE` (on in the game server). Wildlife is **deterministic** and **simulated only near Players** — it never keeps Chunks hot on its own. See ADRs 0004–0006 for the model.
+
+- Two NPC kinds inhabit the Overworld: **deer** (prey) and **wolves** (predator), each driven by a **Motivation** engine (needs → goal → plan → per-tick movement Intent).
+- The Overworld is partitioned into deterministic **Regions** (habitat territories). A Region's wildlife level is a pure function of its habitat plus a healing **Disturbance**; no background simulation runs.
+- Wildlife **materializes** from a Region's level when a Player approaches and **dissolves** back into the Region's Disturbance when the Player leaves. Overhunting depletes a Region; it heals over time, and a depleted Region spawns hungrier, more aggressive animals (history shapes temperament).
+- **Combat:** Players damage NPCs with the same mouse-click verb (25 HP); NPCs damage prey and rival NPCs; Players are invulnerable in v1. A killed animal leaves a **Carcass** — harvest it for **meat**/**hide** (feeding the craft/gather economy); NPCs eat from it; rival predators contest it.
+- Emergent behaviours: deer **herd** and **stampede**, wolves **pack-hunt**, animals are **bolder at night** and **warier when wounded** (agent extensions — see `AGENT_LOG.md`).
+
 ## Persistence
 
 - The following survive server restart: Player position + Inventory, Structure existence + HP, Resource node depletion timers.
@@ -40,10 +50,11 @@ A connected Player...
 ## Dev mode
 
 - Toggle with backtick or `?dev=1` URL parameter.
-- HUD shows: username, realm, world position, current Chunk, View window, active Chunk count, total Player count.
+- HUD shows: username, realm, world position, current Chunk, View window, active Chunk count, total Player count, and NPC count (in view / in world).
 - Overlay: 7×7 grid around the Player, colored by Chunk lifecycle (hot / idle-armed / cold) and bordered by relationship to the Player's Warm set / View window. Shrinks to fill the bounded 3×3 grid inside an Instance.
 
 ## Operator
 
 - A single Rust binary (`sim` server) runs everything: it serves the built client and the WebSocket on one port (`SIM_PORT`, default 4000).
 - Postgres optional — set `SIM_DATABASE_URL` to persist (players, structures, depletions survive a restart); unset uses an in-memory store. Flushes pending writes on SIGTERM.
+- `SIM_WILDLIFE` toggles the wildlife ecosystem (default on in the server binary; set `0` to disable). Region Disturbances are in-memory only — they do not yet survive a restart.
