@@ -1,9 +1,10 @@
 # Agent Log
 
-The agent's durable notes (see AGENTS.md → **Work Loop**): decisions made, deferred / recommended
-follow-ups, design parameters chosen, and agent-invented features. This is *agent-owned* — the
-human-owned design lives in `docs/adr/` (rationale) and `CONTEXT.md` (glossary); shipped behaviour is in
-`DESIGN.md`; the forward plan is in `PLAN.md`.
+The agent's working **review queue** (see AGENTS.md → **Work Loop**): decisions made autonomously,
+recommendations the agent can't act on alone (ADRs, glossary changes, architectural refactors), deferred
+follow-ups, and agent-invented features. During **Stabilize** with a human in the loop, these are reviewed
+and **removed as they settle** — keepers graduating to `docs/adr/` (rationale), `CONTEXT.md` (glossary), or
+`DESIGN.md` (shipped behaviour); git history holds whatever is removed. The forward plan is in `PLAN.md`.
 
 ## Recommended follow-ups (deferred / need a human)
 
