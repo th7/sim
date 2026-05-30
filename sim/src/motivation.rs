@@ -67,11 +67,14 @@ pub struct Perception {
     /// Day/night phase 0 (midday) .. 1 (midnight) — the "nightness" of the world
     /// right now. Agent extension (EXTENSIONS.md): modulates temperament.
     pub phase: f64,
+    /// The animal's own health fraction, 1.0 full .. 0.0 dead. Agent extension:
+    /// a wounded animal is warier (amplified safety).
+    pub self_hp_frac: f64,
 }
 
 impl Perception {
     pub fn at(self_pos: P2) -> Self {
-        Perception { self_pos, ..Default::default() }
+        Perception { self_pos, self_hp_frac: 1.0, ..Default::default() }
     }
 }
 
@@ -242,10 +245,17 @@ pub fn decide(
     //    (agent extension) tilts the bias by the day/night phase: wolves bolder at
     //    night, deer warier.
     const NIGHT_TILT: f64 = 0.6;
+    const WOUND_FEAR: f64 = 1.5;
     let night = perc.phase.clamp(0.0, 1.0);
+    // A wounded animal's safety is amplified (agent extension): fight → flight.
+    let wound_mul = 1.0 + WOUND_FEAR * (1.0 - perc.self_hp_frac).clamp(0.0, 1.0);
     let (hunger_bias, safety_bias) = match kind {
-        NpcKind::Wolf => (params.hunger_bias * (1.0 + NIGHT_TILT * night), params.safety_bias),
-        NpcKind::Deer => (params.hunger_bias, params.safety_bias * (1.0 + NIGHT_TILT * night)),
+        NpcKind::Wolf => {
+            (params.hunger_bias * (1.0 + NIGHT_TILT * night), params.safety_bias * wound_mul)
+        }
+        NpcKind::Deer => {
+            (params.hunger_bias, params.safety_bias * (1.0 + NIGHT_TILT * night) * wound_mul)
+        }
     };
     let hunger_score = hunger_act * hunger_bias * (1.0 + drives.hunger_pressure);
     let safety_score = threat_act * safety_bias * (1.0 + drives.safety_pressure);
@@ -481,6 +491,32 @@ mod tests {
             decide(NpcKind::Wolf, &perc, &mut d, &params, DT);
         }
         assert!(d.hunger_pressure < 0.05, "got {}", d.hunger_pressure);
+    }
+
+    #[test]
+    fn a_wounded_wolf_disengages_from_a_fight_it_would_take_at_full_health() {
+        let (params, _) = wolf();
+        let make = |hp_frac: f64| {
+            let mut perc = Perception::at(P2::new(0, 0));
+            perc.self_hp_frac = hp_frac;
+            perc.food = vec![Sensed { id: 5, pos: P2::new(150, 0) }];
+            perc.threats = vec![Sensed { id: 9, pos: P2::new(200, 0) }];
+            perc.rivals = vec![Sensed { id: 9, pos: P2::new(200, 0) }];
+            perc.being_attacked = true;
+            perc
+        };
+        // Starving and pressured → at full health it fights to hold the carcass.
+        let mut healthy = Drives { hunger: 0.9, hunger_pressure: 1.0, ..Default::default() };
+        assert_eq!(
+            decide(NpcKind::Wolf, &make(1.0), &mut healthy, &params, DT),
+            Decision::Attack(9, P2::new(200, 0))
+        );
+        // Near death, the same wolf flees instead.
+        let mut wounded = Drives { hunger: 0.9, hunger_pressure: 1.0, ..Default::default() };
+        assert_eq!(
+            decide(NpcKind::Wolf, &make(0.1), &mut wounded, &params, DT),
+            Decision::Flee(P2::new(200, 0))
+        );
     }
 
     #[test]

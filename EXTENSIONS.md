@@ -43,3 +43,15 @@ slots into the one place cross-need weighing already happens (goal arbitration b
 
 **Behaviour pinned by tests.** The same wolf in the same situation chooses to hunt at night where it would
 disengage by day (and the inverse for a deer's flight threshold), driven only by the clock phase.
+
+## 4. Wounded retreat — *self-preservation*
+
+**Idea.** An animal's *own* health feeds its safety drive: as HP falls, its safety bias is amplified, so a
+wounded animal disengages from a fight (or flees a threat) it would have stood through at full health. A
+desperate, near-death wolf abandons even a contested carcass.
+
+**Why it fits.** Health is already on the entity; the engine reads `self_hp_frac` (a perception input) and
+scales the safety bias at goal arbitration — the one place cross-need weighing happens. Pure, deterministic.
+
+**Behaviour pinned by tests.** A starving, pressured wolf that fights-to-hold at full HP *flees* the same
+situation at 10% HP — only the health fraction differs.

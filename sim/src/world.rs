@@ -359,21 +359,28 @@ impl RealmWorld {
             .map(|(_, (p, _))| P2::new(p.x, p.y))
             .collect();
 
-        // The NPCs to drive this tick, with their recent-damage memory.
-        let npcs: Vec<(Entity, NpcKind, u64, Position, Drives, Option<Hurt>)> = self
+        // The NPCs to drive this tick, with health + recent-damage memory.
+        let npcs: Vec<(Entity, NpcKind, u64, Position, Drives, Health, Option<Hurt>)> = self
             .world
-            .query::<(&Npc, &Position, &Drives, Option<&Hurt>)>()
+            .query::<(&Npc, &Position, &Drives, &Health, Option<&Hurt>)>()
             .iter()
-            .map(|(e, (npc, pos, d, h))| (e, npc.kind, npc.actor.0, *pos, *d, h.copied()))
+            .map(|(e, (npc, pos, d, h, hurt))| {
+                (e, npc.kind, npc.actor.0, *pos, *d, *h, hurt.copied())
+            })
             .collect();
 
         let recent = (4 * dt_ms).max(1);
         let phase = ecosystem::day_phase(clock_ms);
-        for (e, kind, self_id, pos, drives, hurt) in npcs {
+        for (e, kind, self_id, pos, drives, health, hurt) in npcs {
             let self_p = P2::new(pos.x, pos.y);
             let params = Params::for_kind(kind);
             let mut perc = Perception::at(self_p);
             perc.phase = phase;
+            perc.self_hp_frac = if health.max > 0 {
+                health.hp as f64 / health.max as f64
+            } else {
+                0.0
+            };
 
             for &(id, bp, what) in &beings {
                 if id == self_id {
