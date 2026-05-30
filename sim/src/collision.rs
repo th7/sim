@@ -9,8 +9,8 @@
 //!
 //! Unlike the Elixir per-chunk world, a cluster owns its actors' full 3×3
 //! footprint, so collision sees obstacles in neighbouring chunks too — this is
-//! the intended resolution of the old chunk-boundary "clip-and-stop" artifact
-//! (CONTEXT.md). For obstacles away from boundaries the result is identical.
+//! the intended resolution of the old chunk-boundary "clip-and-stop" artifact.
+//! For obstacles away from boundaries the result is identical.
 
 use crate::components::Footprint;
 use crate::consts::PLAYER_BODY_RADIUS;

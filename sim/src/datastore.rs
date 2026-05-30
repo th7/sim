@@ -1,4 +1,4 @@
-//! The **Datastore** — the single persistence chokepoint (CONTEXT.md). Clusters
+//! The **Datastore** — the single persistence chokepoint. Clusters
 //! emit state changes here; durable reads go through here. Mirrors the Elixir
 //! `GamePersistence.Datastore` behaviour: an in-memory **pending writes** buffer
 //! (per-key last-write-wins, with delete tombstones) flushed to a durable
@@ -6,8 +6,7 @@
 //! **backpressure** state machine for overload.
 //!
 //! The durable backend is a trait so the POC can use an in-memory store now and
-//! a real database later (DESIGN.md: "Datastore (stub in POC) … real integration
-//! is later"). Only the Overworld persists; Instances are in-memory only, so the
+//! a real database later. Only the Overworld persists; Instances are in-memory only, so the
 //! sim layer simply doesn't emit for Instance realms.
 
 use crate::components::{Item, ResourceKind, StructureKind};

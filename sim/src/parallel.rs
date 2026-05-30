@@ -5,9 +5,9 @@
 //! owning cluster (`chunk_owner` is a map). So the per-cluster movement
 //! computation is embarrassingly parallel — distinct clusters share no state.
 //!
-//! ## On the `unsafe` boundary DESIGN.md anticipated
+//! ## On the `unsafe` boundary
 //!
-//! DESIGN.md framed Phase 2 as "disjoint `&mut` into the shared world behind a
+//! Phase 2 was framed as "disjoint `&mut` into the shared world behind a
 //! documented `unsafe` API". In practice the dominant cost is the collision
 //! *computation* (O(movers × obstacles) per cluster), not the position
 //! write-back. So we **extract** each cluster's inputs into owned data, run the
@@ -117,7 +117,7 @@ pub fn execute(
 }
 
 /// A **persistent** pool of worker threads — the faithful realization of
-/// DESIGN.md's "workers self-tick". Spawned once and reused across ticks, so the
+/// the "workers self-tick" model. Spawned once and reused across ticks, so the
 /// per-tick cost is just dispatch + join, not thread creation. Each tick the
 /// caller hands it a batch of cluster jobs (already disjoint by construction);
 /// each worker computes its assigned jobs on owned data and returns the results.

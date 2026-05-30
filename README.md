@@ -2,7 +2,7 @@
 
 A cooperative, persistent, isometric, real-time world where players fight, craft, and gather. PvP is an eventual concern, not v1.
 
-A **Rust** backend simulating one shared ECS world, partitioned by *interaction locality* into **clusters** (the interaction-clustered model — see [ADR-0002](./docs/adr/0002-rust-clustered-simulation-runtime.md)), and a **native Rust client** (three-d) that connects over the Phoenix Channels v2 WebSocket protocol (see [ADR-0003](./docs/adr/0003-native-rust-client.md)).
+A **Rust** backend simulating one shared ECS world, partitioned by *interaction locality* into **clusters** (the interaction-clustered model), and a **native Rust client** (three-d) that connects over the Phoenix Channels v2 WebSocket protocol.
 
 ## Layout
 
@@ -12,7 +12,7 @@ A **Rust** backend simulating one shared ECS world, partitioned by *interaction 
 - `contract/contract.json` — the wire contract (the shared schema both sides conform to; guarded by `sim/tests/contract.rs`).
 - [`design/`](./design/) — the canonical design layer: vision, the domain glossary, and per-area design docs (the *why/what*)
 - [`stories/`](./stories/) — Gherkin user stories: the observable acceptance criteria the implementation answers to
-- [`docs/adr/`](./docs/adr/) — architecture decision records (the *how*: runtime, client, ecosystem)
+- [`AGENTS.md`](./AGENTS.md) — engineering conventions + the architecture invariants (the *how*: runtime, client, ecosystem)
 
 ## Running locally
 

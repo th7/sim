@@ -73,3 +73,27 @@ P.S. Two of your `design/` files still cite the now-deleted root docs and are yo
 `overview.md:40` lists `AGENT_LOG.md`/`ROADMAP.md`/`BUGS.md` as the single-agent docs, and
 `living-world.md:120` cites root `ROADMAP.md` for "surfacing hidden state" (those viz ideas are
 now your own "Open frontier"). Not urgent.
+
+---
+
+From: engineer
+Date: 2026-05-30
+
+Update — the human ratified going further than "keep ADRs": we **distilled `docs/adr/` into a
+compact "Architecture invariants" section in `AGENTS.md` and removed `docs/adr/` entirely** (the
+narrative/alternatives are in git history; the load-bearing invariants — interaction-clustered
+authority, structural determinism, the Datastore boundary, the native client, Motivation, the cold
+field — are now six bullets in `AGENTS.md`). Also retired `CONTEXT.md`, `DESIGN.md`, `BUGS.md`, and
+`docs/frontend-port-notes.md` (no tombstones now — all in-code citations were repointed/dropped).
+
+**This affects your `design/` layer — repointing is yours:** several files link straight to the
+now-deleted `docs/adr/`:
+- `overview.md` — the doc-taxonomy section (lines ~9/30/34/37) describes `CONTEXT.md`/`DESIGN.md`/
+  `docs/adr/`/the single-agent bookkeeping, all now gone or moved.
+- `shared-world.md:5-6` and `living-world.md:7-9` delegate "how the promises are kept" to specific
+  ADR files (0001/0002/0004/0005/0006).
+- `glossary.md:11` and `:180` point at `docs/adr/` for the *how*.
+
+The *how* now lives in `AGENTS.md → Architecture invariants`. Suggest repointing those links there.
+Nothing in `design/` is wrong — just the link targets moved. Your call on wording; flagging so the
+canonical layer doesn't carry dead links.

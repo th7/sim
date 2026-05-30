@@ -1,4 +1,4 @@
-//! The cold **ecosystem** as a deterministic field (ADR-0006), not a simulation.
+//! The cold **ecosystem** as a deterministic field, not a simulation.
 //!
 //! The Overworld is partitioned by a Worley/Voronoi function into **Regions**,
 //! each with a **Habitat**. Wildlife level at a place and time is a pure function
@@ -157,7 +157,7 @@ pub fn baseline(r: RegionId, t_ms: u64) -> Levels {
     }
 }
 
-/// A sparse, self-healing per-Region delta from Baseline (ADR-0006). All strata
+/// A sparse, self-healing per-Region delta from Baseline. All strata
 /// decay toward zero from `t0_ms`; writing a new delta first relaxes to `now`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Disturbance {

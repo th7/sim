@@ -3,7 +3,7 @@
 Forward-looking working notes for the engineer's next increment (see the engineer brief). Not
 a log of decisions already embodied in the system — those live in the code and its tests. The
 canonical *why/what* is upstream in `design/`; the observable acceptance criteria are the user
-stories in `stories/`; architecture rationale is in `docs/adr/`.
+stories in `stories/`; the architecture invariants are in `AGENTS.md`.
 
 ## Landed: the story acceptance layer
 
@@ -27,7 +27,28 @@ pending test. Blocked on v1-scope confirmation — do **not** implement until th
 - Held story scenarios will arrive once the designer answers the PO's gaps (multi-member Party
   Instance entry; the one-authority / never-under-merge observable). Add their proving tests then.
 
-## Deferred follow-ups (migrated from the retired AGENT_LOG)
+## Deferred follow-ups
+
+Fault tolerance (was the ADR-0002 acceptance checklist; the runtime trades OTP's per-process
+isolation for by-construction determinism, so these are owed):
+
+- **Catch per-cluster / per-worker panics and re-home** the affected cluster from the Datastore
+  (the durability boundary already bounds loss to the unflushed window).
+- **Supervise the tick loop** so a panic restarts the runtime rather than exiting the process.
+- **Fast, lossless restart-from-Datastore** to compensate for the loss of hot code reload (deploys
+  are process restarts).
+
+Client / wire (migrated from the retired `docs/frontend-port-notes.md`):
+
+- **Generate `contract/contract.json` from the `protocol` structs** (+ a freshness check) instead of
+  hand-maintaining it; today it is committed and only conformance-guarded (`sim/tests/contract.rs`).
+- **`WALL_COST = 5` is hardcoded in the client model** and could drift from the server catalogue —
+  consider exposing the cost via `protocol`.
+- **Cosmetic rendering gaps to confirm on a real display** (no GL in-container): portal ring, grid
+  lines, dev chunk borders + coordinate labels, shadows; dev toggle is on `Tab` (no backtick in
+  three-d's `Key`).
+
+Ecosystem / NPC depth (migrated from the retired AGENT_LOG):
 
 - **Cross-restart persistence of Region Disturbances.** They live in memory (`Sim.wild_disturb`),
   so the overhunt→deplete→heal field resets on restart. Needs a `PersistEvent` variant +

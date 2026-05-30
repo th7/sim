@@ -99,7 +99,7 @@ pub struct Renderable;
 /// An NPC entity, tagged with its [`NpcKind`] and the Labeler actor id so the
 /// cluster topology can track it (the same role `PlayerControlled.actor` plays
 /// for Players). Its per-tick Intent is produced by [`crate::motivation`], not a
-/// session. NPCs are actors but do not anchor the Warm set (ADR-0005).
+/// session. NPCs are actors but do not anchor the Warm set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Npc {
     pub kind: crate::motivation::NpcKind,
@@ -113,7 +113,7 @@ pub struct Health {
     pub max: i64,
 }
 
-/// The perishable remains of a killed animal — a Carcass (CONTEXT.md). Holds the
+/// The perishable remains of a killed animal — a Carcass. Holds the
 /// remaining meat to eat/harvest and the sim-clock time it rots away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Carcass {

@@ -40,7 +40,7 @@ pub struct Sim {
     next_instance: u64,
     pool: Option<crate::parallel::WorkerPool>,
     datastore: Datastore<BoxedStore>,
-    /// Sparse, self-healing per-Region wildlife Disturbances (ADR-0006). In
+    /// Sparse, self-healing per-Region wildlife Disturbances. In
     /// memory for now; cross-restart persistence is a flagged follow-up.
     wild_disturb: BTreeMap<ecosystem::RegionId, ecosystem::Disturbance>,
     /// Chunks currently materialized into live wildlife.
@@ -214,7 +214,7 @@ impl Sim {
         self.overworld.spawn_npc(kind, pos, drives)
     }
 
-    /// The warm/cold boundary (ADR-0005/0006): materialize wildlife from each
+    /// The warm/cold boundary: materialize wildlife from each
     /// Region's level into chunks that became Player-warm, and dissolve chunks
     /// that went cold back into their Region's Disturbance. Overworld only.
     fn update_wildlife(&mut self, clock_ms: u64) {
@@ -251,7 +251,7 @@ impl Sim {
         self.wild_disturb.retain(|_, d| !d.is_settled(clock_ms, 0.01));
 
         // Materialize: chunks newly in the warm set spawn wildlife from their
-        // Region level, with spawn-derived temperament (ADR-0006 keystone).
+        // Region level, with spawn-derived temperament.
         let fresh: Vec<ChunkCoord> = warm.iter().filter(|c| !self.wild_pop.contains(c)).copied().collect();
         for c in fresh {
             let region = ecosystem::region_of_chunk(c);

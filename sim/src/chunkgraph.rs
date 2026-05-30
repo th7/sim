@@ -9,7 +9,7 @@
 //! - **split** — a cluster may split iff its chunk-set has ≥2 connected
 //!   components under 8-adjacency; see [`connected_components`].
 //!
-//! Soundness rests on `interaction_range ≤ chunk_size` (DESIGN.md): two actors
+//! Soundness rests on `interaction_range ≤ chunk_size`: two actors
 //! can only interact when their chunks are within Chebyshev distance 1, at
 //! which point their 3×3 footprints share chunks — so any interacting pair is
 //! already merged, by construction. The Chebyshev-distance-3 band (footprints

@@ -1,4 +1,4 @@
-//! Native game client for the sim server (ADR-0003).
+//! Native game client for the sim server.
 //!
 //! Split into a pure, fully-tested [`model`] (the observable client state and
 //! the protocol decisions — the native analog of the old `window.__game`) and a

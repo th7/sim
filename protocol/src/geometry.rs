@@ -44,7 +44,7 @@ impl ChunkCoord {
     }
 
     /// This chunk plus its 8-neighbour ring — the 3×3 interaction footprint
-    /// of an actor standing in this chunk (see DESIGN.md).
+    /// of an actor standing in this chunk.
     pub fn footprint_3x3(self) -> [ChunkCoord; 9] {
         let mut out = [self; 9];
         let mut i = 1;

@@ -1,4 +1,4 @@
-//! Regression tests for "wildlife disappears after chunk reload" (was in BUGS.md).
+//! Regression tests for "wildlife disappears after chunk reload".
 //!
 //! Root cause: the warm/cold boundary depleted a Region's wildlife Disturbance
 //! from per-chunk dissolve accounting `(survivors − materialized)`, which counts a

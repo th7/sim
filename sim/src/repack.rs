@@ -11,7 +11,7 @@
 //!   nothing about correctness.
 //! - **The one-core floor.** A single cluster whose tick-time exceeds the budget
 //!   gets a worker to itself and stays there — it cannot be subdivided. This is
-//!   the accepted single-core dense-fight ceiling (DESIGN.md).
+//!   the accepted single-core dense-fight ceiling.
 
 use crate::ids::{ClusterId, WorkerId};
 use std::collections::BTreeMap;

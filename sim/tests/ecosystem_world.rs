@@ -1,4 +1,4 @@
-//! Integration tests for the warm/cold boundary (ADR-0005/0006): wildlife
+//! Integration tests for the warm/cold boundary: wildlife
 //! materializes from the deterministic ecosystem field near a Player and
 //! dissolves back into a healing Region Disturbance when the Player leaves.
 

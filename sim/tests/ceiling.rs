@@ -27,7 +27,7 @@ fn dense_job(cid: u64, movers: usize, obstacles: usize) -> ClusterJob {
 #[test]
 fn single_core_dense_cluster_ceiling() {
     // One indivisible cluster: this per-tick cost is the floor — it cannot be
-    // parallelised away (DESIGN.md's accepted single-core ceiling).
+    // parallelised away (the accepted single-core ceiling).
     let movers = 500;
     let obstacles = 1_500;
     let job = dense_job(0, movers, obstacles);
@@ -51,7 +51,7 @@ fn single_core_dense_cluster_ceiling() {
 fn parallel_scaling_across_independent_clusters_matches_serial() {
     // Substantial per-cluster work so the compute dominates the per-tick thread
     // spawn cost. (A production system uses a persistent worker pool that
-    // self-ticks — DESIGN.md — rather than spawning per tick; this executor
+    // self-ticks rather than spawning per tick; this executor
     // spawns per call, so it only wins once the work is well above that fixed
     // overhead.)
     let cluster_count = 96;

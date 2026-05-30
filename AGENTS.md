@@ -1,4 +1,4 @@
-Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per realm, partitioned by interaction locality into **clusters**; a serialized **Labeler** owns the partition; a Postgres-backed Datastore persists; a Phoenix-Channels-v2 WebSocket is the wire. A **native Rust client** (`client/`, three-d) speaks that wire over `/socket/websocket`; the shared codec + wire structs live in `protocol/`. Domain language is `design/glossary.md`; observable behaviour is the user stories in `stories/`; architecture rationale is `docs/adr/`.
+Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per realm, partitioned by interaction locality into **clusters**; a serialized **Labeler** owns the partition; a Postgres-backed Datastore persists; a Phoenix-Channels-v2 WebSocket is the wire. A **native Rust client** (`client/`, three-d) speaks that wire over `/socket/websocket`; the shared codec + wire structs live in `protocol/`. Domain language is `design/glossary.md`; observable behaviour is the user stories in `stories/`; the architecture invariants are below.
 
 ## Project guidelines
 
@@ -6,11 +6,32 @@ Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per 
 - The wire contract (`contract/contract.json`) is the shared schema; the backend conforms to it (`sim/tests/contract.rs`) and the client (de)serializes the `protocol/` wire structs. Don't change one side's wire shape without the other.
 - Before considering work done: `cargo test --workspace` (and `cargo build --workspace --all-targets` warning-free).
 
-## Rust guidelines
+## Architecture invariants
 
-- Determinism matters: order with `BTreeMap`/`BTreeSet`, tick clusters in id order, keep the sim clock explicit. The never-under-merge invariant must hold *by construction* (the Labeler reconciles to the canonical partition), not "usually".
-- Match the Elixir numeric constants and the wire contract exactly — positions are sub-units (1 unit = 1000); the client divides by 1000.
-- Keep `unsafe` out (Phase 2 found it unnecessary). The blocking Postgres client must not run on a Tokio worker — it lives on its own thread (see `sim/src/pgstore.rs`).
+Distilled from the former `docs/adr/` — load-bearing; change them only deliberately.
+
+- **Interaction-clustered authority.** A *cluster* is the single authority over a connected set of
+  interacting entities + the Chunks they span; a Chunk is data, never a process. Never-under-merge holds
+  *by construction* — the serialized Labeler reconciles to the canonical footprint-overlap partition, and
+  `interaction_range ≤ chunk_size` forces a Chunk two clusters need into one.
+- **Structural determinism.** `BTreeMap`/`BTreeSet` ordering, id-ordered ticks, explicit sim clock,
+  seeded RNG — no wall-clock. Clusters are entity-disjoint, so the tick parallelises with no `unsafe`
+  and stays identical to the serial run; one dense cluster on a single core is the accepted ceiling.
+- **The Datastore is the durability boundary.** Clusters own runtime only; persistence flushes on
+  SIGTERM and anchors the clock so timers survive restart; recovery is re-home + re-hydrate; the blocking
+  Postgres client stays off the Tokio workers. Act through your cluster, observe geography (changed-only
+  deltas → a Session's View window).
+- **Native, server-authoritative client.** A `three-d`/egui Rust app renders snapshots with no
+  prediction; logic is a pure tested `ClientModel`. The shared `protocol` crate holds the wire structs
+  both sides serialize — the client carries none of the server's tokio/postgres/hecs. Positions are
+  sub-units (1 unit = 1000); see the wire-contract guideline above.
+- **Motivation is pure and RNG-free.** Pick the most-immediate actionable option at each level
+  (chain → Goal → Plan → Intent); cross-need weighing happens only at goal arbitration — a static
+  per-Need bias × a leaky, capped, sim-clock Pressure integral.
+- **The cold world is a field, not a sim.** NPCs don't anchor the Warm set (only Players keep Chunks hot)
+  and have no persistent identity — they materialize from a Region's level and dissolve into its
+  Disturbance. Level is `clamp(Baseline(habitat, season, noise) + Δ·e^(−(t−t₀)/τ))`: no cold tick or
+  population integrator; cost scales with Player activity, not map size.
 
 ## Test guidelines
 

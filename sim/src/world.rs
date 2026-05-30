@@ -261,7 +261,7 @@ impl RealmWorld {
     /// Spawn an NPC at `pos` with initial [`Drives`], registering it as a Labeler
     /// actor (so it joins clusters and is simulated like a Player). Unlike a
     /// Player it does not extend the Warm set: we do not hydrate on its behalf —
-    /// NPCs live inside Player-hot chunks (ADR-0005).
+    /// NPCs live inside Player-hot chunks.
     pub fn spawn_npc(&mut self, kind: NpcKind, pos: Position, drives: Drives) -> Entity {
         let actor = ActorId(self.next_actor);
         self.next_actor += 1;
@@ -306,7 +306,7 @@ impl RealmWorld {
     }
 
     /// The Player Warm set: every chunk within a 3×3 footprint of some Player.
-    /// NPCs do not contribute (ADR-0005) — this is what keeps wildlife alive.
+    /// NPCs do not contribute — this is what keeps wildlife alive.
     pub fn player_warm_chunks(&self) -> BTreeSet<ChunkCoord> {
         let mut s = BTreeSet::new();
         for (_, (pos, _)) in self.world.query::<(&Position, &PlayerControlled)>().iter() {
@@ -331,7 +331,7 @@ impl RealmWorld {
         }
     }
 
-    /// The **Motivation** pre-movement phase (ADR-0004/0005): for each NPC, build
+    /// The **Motivation** pre-movement phase: for each NPC, build
     /// its cluster-local [`Perception`], run [`decide`], and write the resulting
     /// movement Intent into its `Velocity`. Runs serially before the movement
     /// integrator, exactly where a Player's session writes intent. Deterministic.
@@ -468,7 +468,7 @@ impl RealmWorld {
         }
     }
 
-    /// Post-movement resolution of NPC verbs (ADR-0004 Actions): apply `attack`
+    /// Post-movement resolution of NPC verbs: apply `attack`
     /// damage to in-range targets and `eat` drain from in-range carcasses, each
     /// gated by the actor's cooldown. Players take no damage (no `Health`) —
     /// structural invulnerability. Deaths become Carcasses.
@@ -678,7 +678,7 @@ impl RealmWorld {
     /// Advance the realm by one tick of `dt_ms` milliseconds at `clock_ms`.
     /// Returns the topology events produced by reconcile (for observers/tests).
     pub fn tick(&mut self, dt_ms: u64, clock_ms: u64) -> Vec<TopologyEvent> {
-        // Motivation writes NPC Intent before the movement integrator (ADR-0005).
+        // Motivation writes NPC Intent before the movement integrator.
         self.drive_npcs(dt_ms, clock_ms);
         let dt = dt_ms as f64 / 1000.0;
 

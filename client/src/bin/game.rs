@@ -1,10 +1,10 @@
-//! Native game client (ADR-0003). Runs the WebSocket session on a background
+//! Native game client. Runs the WebSocket session on a background
 //! tokio thread and the three-d render loop on the main thread; they communicate
 //! through a shared [`RenderState`] and an input channel.
 //!
 //! NOTE: requires a display/GL context to run. In a headless environment it
 //! builds but cannot open a window — the manual visual pass (the rendering half
-//! of ADR-0003's parity bar) must be done on a machine with a display.
+//! of the parity bar) must be done on a machine with a display.
 
 use client::session::{Input, RenderState, Session};
 use protocol::consts::IDLE_TIMEOUT_MS;

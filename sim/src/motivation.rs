@@ -1,4 +1,4 @@
-//! The NPC **Motivation** engine (ADR-0004): one selection rule — *most-immediate
+//! The NPC **Motivation** engine: one selection rule — *most-immediate
 //! actionable option* — applied at three levels (node→**Bid**, Bid→**Goal**,
 //! Action→**Plan**), with **Pressure** modulating only goal arbitration.
 //!
@@ -45,7 +45,7 @@ pub struct Sensed {
 }
 
 /// What an NPC senses this tick. Everything here is within the NPC's perception
-/// range, which by ADR-0005 is ≤ chunk_size — so it is all inside the NPC's own
+/// range, which is ≤ chunk_size — so it is all inside the NPC's own
 /// cluster, and reading it never crosses a cluster boundary.
 #[derive(Clone, Debug, Default)]
 pub struct Perception {
@@ -83,7 +83,7 @@ impl Perception {
 
 /// The NPC's persistent motivational state, carried between ticks (an ECS
 /// component). `hunger` is the need *level*; the `_pressure` fields are the
-/// leaky, capped integrals of each Need's activation (ADR-0004).
+/// leaky, capped integrals of each Need's activation.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Drives {
     /// Hunger need level, 0 (sated) .. 1 (starving).
@@ -198,7 +198,7 @@ fn nearest(from: P2, xs: &[Sensed]) -> Option<Sensed> {
     xs.iter().copied().min_by_key(|s| dist_sq(from, s.pos))
 }
 
-/// Leaky, capped integrator (ADR-0004): tracks `cap·activation` with time
+/// Leaky, capped integrator: tracks `cap·activation` with time
 /// constant `tau`, so sustained activation saturates and quiet decays to zero.
 fn integrate(p: f64, activation: f64, dt_s: f64, tau_s: f64, cap: f64) -> f64 {
     let target = cap * activation.clamp(0.0, 1.0);
@@ -229,7 +229,7 @@ fn threat_activation(perc: &Perception, params: &Params) -> f64 {
 }
 
 /// Advance `drives` and choose this tick's [`Decision`]. `dt_s` is the tick
-/// length in seconds. See ADR-0004 for the arbitration.
+/// length in seconds.
 pub fn decide(
     kind: NpcKind,
     perc: &Perception,
