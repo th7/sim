@@ -184,3 +184,29 @@ fn wolves_pack_onto_a_single_deer() {
     let after = wolf_gap(&sim);
     assert!(after < before, "pack should converge on one deer: gap² {before} -> {after}");
 }
+
+#[test]
+fn a_herd_flees_a_predator_together() {
+    // A wolf attacks one edge of a tight herd; the panic spreads so the whole
+    // herd's centroid moves away from the wolf (stampede / fear contagion).
+    let mut sim = Sim::new();
+    sim.spawn_npc(NpcKind::Wolf, pos(7_400, 8_000), Drives { hunger: 1.0, ..Default::default() });
+    for dx in [0_i64, 700, 1_400, 2_100] {
+        sim.spawn_npc(NpcKind::Deer, pos(8_000 + dx, 8_000), Drives::default());
+    }
+    let herd_cx = |sim: &Sim| -> i64 {
+        let xs: Vec<i64> = sim
+            .npcs()
+            .iter()
+            .filter(|(_, k, _, _, _)| *k == NpcKind::Deer)
+            .map(|(_, _, p, _, _)| p.x)
+            .collect();
+        if xs.is_empty() { 0 } else { xs.iter().sum::<i64>() / xs.len() as i64 }
+    };
+    let before = herd_cx(&sim);
+    for _ in 0..25 {
+        sim.tick();
+    }
+    let after = herd_cx(&sim);
+    assert!(after > before, "the herd should flee east, away from the wolf ({before} -> {after})");
+}

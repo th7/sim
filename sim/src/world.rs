@@ -41,6 +41,8 @@ const NPC_ACT_COOLDOWN_MS: u64 = 500;
 const CARCASS_PERISH_MS: u64 = 60_000;
 /// Hunger removed per unit of meat eaten.
 const EAT_FEED: f64 = 0.4;
+/// How long a fleeing deer stays alarmed (panic contagion window).
+const ALARM_MS: u64 = 1_200;
 
 /// What an NPC's perception classifies a nearby being as.
 #[derive(Clone, Copy)]
@@ -359,6 +361,15 @@ impl RealmWorld {
             .map(|(_, (p, _))| P2::new(p.x, p.y))
             .collect();
 
+        // Currently-alarmed deer, whose panic is contagious (agent extension).
+        let alarmed: Vec<(u64, P2)> = self
+            .world
+            .query::<(&Position, &Npc, &Alarmed)>()
+            .iter()
+            .filter(|(_, (_, n, a))| n.kind == NpcKind::Deer && a.until_ms > clock_ms)
+            .map(|(_, (p, n, _))| (n.actor.0, P2::new(p.x, p.y)))
+            .collect();
+
         // The NPCs to drive this tick, with health + recent-damage memory.
         let npcs: Vec<(Entity, NpcKind, u64, Position, Drives, Health, Option<Hurt>)> = self
             .world
@@ -437,6 +448,11 @@ impl RealmWorld {
                 let region = ecosystem::region(self_p.x, self_p.y);
                 perc.grass =
                     ecosystem::levels(region, clock_ms, &ecosystem::Disturbance::default()).grass;
+                for &(id, ap) in &alarmed {
+                    if id != self_id && dist_sq(self_p, ap) <= params.social_range_sq {
+                        perc.alarmed.push(Sensed { id, pos: ap });
+                    }
+                }
             }
 
             let mut next = drives;
@@ -449,6 +465,10 @@ impl RealmWorld {
             if let Ok(mut v) = self.world.get::<&mut Velocity>(e) {
                 v.vx = vx;
                 v.vy = vy;
+            }
+            // A fleeing deer becomes alarmed, propagating the panic next tick.
+            if kind == NpcKind::Deer && matches!(decision, Decision::Flee(_)) {
+                let _ = self.world.insert_one(e, Alarmed { until_ms: clock_ms + ALARM_MS });
             }
             let _ = self.world.insert_one(e, NpcDecision(decision));
         }

@@ -55,3 +55,22 @@ scales the safety bias at goal arbitration — the one place cross-need weighing
 
 **Behaviour pinned by tests.** A starving, pressured wolf that fights-to-hold at full HP *flees* the same
 situation at 10% HP — only the health fraction differs.
+
+## 5. Stampede (fear contagion) — *panic spreads*
+
+**Idea.** A fleeing deer becomes *alarmed* for a short window. Herd peers that sense an alarmed neighbour
+catch the panic and flee too — even with no visible predator — so the whole herd scatters from a threat
+only its edge can see. Each tick the alarm ripples one social-radius further, a propagating wave.
+
+**Why it fits.** Alarm is a tiny per-entity flag with a sim-clock expiry; contagion reads alarmed peers
+within the (cluster-local) social range and feeds the existing safety drive. The 1-tick propagation falls
+out of computing all decisions from the previous tick's alarm set — deterministic, no global coordination.
+
+**Behaviour pinned by tests.** A deer with grass and no visible threat but one alarmed neighbour flees
+(unit); a wolf striking one edge of a tight herd drives the whole herd's centroid away from it (integration).
+
+---
+
+*Test-suite note:* the e2e `T` timeout was raised 5s→10s so the integration suite stays reliable when every
+crate's in-process server runs concurrently under `cargo test --workspace` (the new tests add load). No
+assertion was weakened — only the patience for a snapshot to arrive under contention.

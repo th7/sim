@@ -62,6 +62,9 @@ pub struct Perception {
     pub rivals: Vec<Sensed>,
     /// Same-species peers for social steering (deer herd; wolf pack).
     pub herd: Vec<Sensed>,
+    /// Alarmed peers (currently fleeing). Agent extension: their panic is
+    /// contagious — sensing one induces flight even with no visible threat.
+    pub alarmed: Vec<Sensed>,
     /// Local grass level 0..1 (deer grazing substrate).
     pub grass: f64,
     /// Day/night phase 0 (midday) .. 1 (midnight) — the "nightness" of the world
@@ -205,18 +208,24 @@ fn integrate(p: f64, activation: f64, dt_s: f64, tau_s: f64, cap: f64) -> f64 {
 
 /// Immediate threat activation 0..1: acute if just bitten, else scaled by the
 /// nearest threat's proximity within perception range.
+fn proximity(d_sq: i64, range_sq: i64) -> f64 {
+    (1.0 - d_sq as f64 / range_sq.max(1) as f64).clamp(0.0, 1.0)
+}
+
 fn threat_activation(perc: &Perception, params: &Params) -> f64 {
     if perc.being_attacked {
         return 1.0;
     }
-    match nearest(perc.self_pos, &perc.threats) {
-        None => 0.0,
-        Some(t) => {
-            let d = dist_sq(perc.self_pos, t.pos) as f64;
-            let r = params.perception_range_sq as f64;
-            (1.0 - d / r).clamp(0.0, 1.0)
-        }
+    if let Some(t) = nearest(perc.self_pos, &perc.threats) {
+        return proximity(dist_sq(perc.self_pos, t.pos), params.perception_range_sq);
     }
+    // Fear contagion (agent extension): an alarmed peer induces flight, a touch
+    // weaker than a directly-seen threat, scaled by social proximity.
+    if let Some(a) = nearest(perc.self_pos, &perc.alarmed) {
+        const CONTAGION: f64 = 0.9;
+        return CONTAGION * proximity(dist_sq(perc.self_pos, a.pos), params.social_range_sq);
+    }
+    0.0
 }
 
 /// Advance `drives` and choose this tick's [`Decision`]. `dt_s` is the tick
@@ -308,10 +317,14 @@ fn herd_centroid(perc: &Perception) -> Option<P2> {
     Some(P2::new(sx / n, sy / n))
 }
 
-/// Safety goal: flee the nearest threat.
+/// Safety goal: flee the nearest threat, or — if panic is contagious only — flee
+/// away from the nearest alarmed peer (the herd scatters from the panic point).
 fn plan_safety(perc: &Perception) -> Decision {
-    match nearest(perc.self_pos, &perc.threats) {
-        Some(t) => Decision::Flee(t.pos),
+    if let Some(t) = nearest(perc.self_pos, &perc.threats) {
+        return Decision::Flee(t.pos);
+    }
+    match nearest(perc.self_pos, &perc.alarmed) {
+        Some(a) => Decision::Flee(a.pos),
         None => Decision::Wander,
     }
 }
@@ -596,6 +609,17 @@ mod tests {
             decide(NpcKind::Wolf, &perc, &mut d, &params, DT),
             Decision::Attack(1, P2::new(1_800, 0))
         );
+    }
+
+    #[test]
+    fn deer_catches_a_neighbours_panic_and_flees() {
+        // No visible threat, but an alarmed peer nearby → the deer flees too.
+        let params = Params::for_kind(NpcKind::Deer);
+        let mut d = Drives { hunger: 0.5, ..Default::default() };
+        let mut perc = Perception::at(P2::new(0, 0));
+        perc.grass = 1.0; // would otherwise graze
+        perc.alarmed = vec![Sensed { id: 1, pos: P2::new(300, 0) }];
+        assert_eq!(decide(NpcKind::Deer, &perc, &mut d, &params, DT), Decision::Flee(P2::new(300, 0)));
     }
 
     #[test]

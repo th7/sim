@@ -136,6 +136,14 @@ pub struct ActReady {
     pub at_ms: u64,
 }
 
+/// Alarm state (agent extension): set while an animal is fleeing, so nearby herd
+/// peers catch the panic and flee too (a stampede ripples outward). Cleared once
+/// `until_ms` passes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Alarmed {
+    pub until_ms: u64,
+}
+
 /// The Decision the Motivation phase committed to this tick, stored so the
 /// post-movement resolution phase can apply its verb (attack/eat) in range.
 #[derive(Debug, Clone, Copy, PartialEq)]

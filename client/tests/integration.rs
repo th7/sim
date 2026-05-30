@@ -41,7 +41,9 @@ fn url(port: u16) -> String {
     format!("ws://127.0.0.1:{port}/socket/websocket?vsn=2.0.0")
 }
 
-const T: Duration = Duration::from_secs(5);
+// Generous so the suite stays reliable when every crate's in-process server runs
+// concurrently under `cargo test --workspace` (snapshots can lag under load).
+const T: Duration = Duration::from_secs(10);
 
 /// Is the instance's `out_of_instance` return portal currently in view?
 fn return_portal_visible(m: &ClientModel) -> bool {
