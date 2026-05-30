@@ -37,3 +37,12 @@ pub fn resource_yield(kind: ResourceKind) -> Item {
         ResourceKind::Tree => Item::Wood,
     }
 }
+
+/// Starting / maximum HP of an NPC.
+pub fn npc_max_hp(kind: crate::motivation::NpcKind) -> i64 {
+    use crate::motivation::NpcKind;
+    match kind {
+        NpcKind::Wolf => 80,
+        NpcKind::Deer => 50,
+    }
+}

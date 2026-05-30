@@ -95,3 +95,20 @@ pub struct WireId(pub String);
 /// Marker: include this entity in client-visible snapshots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Renderable;
+
+/// An NPC entity, tagged with its [`NpcKind`] and the Labeler actor id so the
+/// cluster topology can track it (the same role `PlayerControlled.actor` plays
+/// for Players). Its per-tick Intent is produced by [`crate::motivation`], not a
+/// session. NPCs are actors but do not anchor the Warm set (ADR-0005).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Npc {
+    pub kind: crate::motivation::NpcKind,
+    pub actor: ActorId,
+}
+
+/// Hit points for a damageable actor (NPCs; Structures keep their own `hp`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Health {
+    pub hp: i64,
+    pub max: i64,
+}

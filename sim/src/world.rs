@@ -8,14 +8,16 @@
 //! the partition (merge/split); then respawn due resource nodes. Chunk static
 //! content is hydrated lazily when a chunk first becomes owned by a cluster.
 
-use crate::catalogue::{resource_footprint, resource_yield, structure_footprint};
+use crate::catalogue::{npc_max_hp, resource_footprint, resource_yield, structure_footprint};
 use crate::collision::{clamp_step, Obstacle};
 use crate::components::*;
 use crate::consts::{DAMAGE_PER_CLICK, DEFAULT_SPEED, IDLE_TIMEOUT_MS, RESPAWN_MS};
 use crate::datastore::{DepletionRecord, PersistEvent, PlayerRecord, StructureRecord};
+use crate::ecosystem;
 use crate::geometry::{coord_for, ChunkCoord};
 use crate::ids::{ActorId, ClusterId, Realm};
 use crate::labeler::{Labeler, TopologyEvent};
+use crate::motivation::{decide, Decision, Drives, NpcKind, Params, Perception, Sensed, P2};
 use crate::verbs::VerbError;
 use crate::worldgen;
 use protocol::wire::ChunkLifecycle;
@@ -25,6 +27,47 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Optional bounding rectangle (sub-units) the movement integrator clamps to.
 /// Instances are bounded to their 3×3 grid; the Overworld is unbounded.
 pub type Bounds = (i64, i64, i64, i64);
+
+/// What an NPC's perception classifies a nearby being as.
+#[derive(Clone, Copy)]
+enum Sensable {
+    Npc(NpcKind),
+    Player,
+}
+
+fn dist_sq(a: P2, b: P2) -> i64 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    dx * dx + dy * dy
+}
+
+/// Convert a [`Decision`] into a movement-Intent velocity (sub-units/sec).
+fn velocity_for(d: Decision, from: P2, speed: f64, seed_id: u64, clock_ms: u64) -> (f64, f64) {
+    match d {
+        Decision::Idle | Decision::Eat(..) | Decision::Graze => (0.0, 0.0),
+        Decision::Wander => {
+            // Seeded, sim-clock-bucketed so the drift direction is deterministic
+            // and changes ~once a second rather than jittering every tick.
+            let bucket = clock_ms / 1_000;
+            let seed = seed_id.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(bucket);
+            let (dx, dy) = crate::harness::Rng::new(seed).intent();
+            (dx * speed, dy * speed)
+        }
+        Decision::Approach(p) | Decision::Attack(_, p) => unit_toward(from, p, speed),
+        Decision::Flee(p) => unit_toward(p, from, speed), // away from the threat
+    }
+}
+
+fn unit_toward(from: P2, to: P2, speed: f64) -> (f64, f64) {
+    let dx = (to.x - from.x) as f64;
+    let dy = (to.y - from.y) as f64;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1.0 {
+        (0.0, 0.0)
+    } else {
+        (dx / len * speed, dy / len * speed)
+    }
+}
 
 pub struct RealmWorld {
     pub realm: Realm,
@@ -190,6 +233,117 @@ impl RealmWorld {
         e
     }
 
+    /// Spawn an NPC at `pos` with initial [`Drives`], registering it as a Labeler
+    /// actor (so it joins clusters and is simulated like a Player). Unlike a
+    /// Player it does not extend the Warm set: we do not hydrate on its behalf —
+    /// NPCs live inside Player-hot chunks (ADR-0005).
+    pub fn spawn_npc(&mut self, kind: NpcKind, pos: Position, drives: Drives) -> Entity {
+        let actor = ActorId(self.next_actor);
+        self.next_actor += 1;
+        let max = npc_max_hp(kind);
+        let wid = WireId(format!("npc:{}:{}", kind.as_str(), actor.0));
+        let e = self.world.spawn((
+            pos,
+            Velocity { vx: 0.0, vy: 0.0 },
+            Renderable,
+            Npc { kind, actor },
+            Health { hp: max, max },
+            drives,
+            Inventory::default(),
+            wid.clone(),
+        ));
+        self.actor_index.insert(actor, e);
+        self.wire_index.insert(wid, e);
+        let _ = self.labeler.insert_actor(actor, pos.chunk());
+        e
+    }
+
+    /// Despawn an NPC entity, deregistering its actor from the Labeler and the
+    /// indices (used by the warm/cold boundary and chunk unload).
+    pub fn despawn_npc(&mut self, e: Entity) {
+        if let Ok(npc) = self.world.get::<&Npc>(e).map(|n| *n) {
+            self.actor_index.remove(&npc.actor);
+            self.labeler.remove_actor(npc.actor);
+        }
+        if let Ok(wid) = self.world.get::<&WireId>(e).map(|w| w.clone()) {
+            self.wire_index.remove(&wid);
+        }
+        let _ = self.world.despawn(e);
+    }
+
+    /// Snapshot of every NPC in this realm: kind, position, drives, health.
+    pub fn npcs(&self) -> Vec<(Entity, NpcKind, Position, Drives, Health)> {
+        self.world
+            .query::<(&Npc, &Position, &Drives, &Health)>()
+            .iter()
+            .map(|(e, (n, p, d, h))| (e, n.kind, *p, *d, *h))
+            .collect()
+    }
+
+    /// The **Motivation** pre-movement phase (ADR-0004/0005): for each NPC, build
+    /// its cluster-local [`Perception`], run [`decide`], and write the resulting
+    /// movement Intent into its `Velocity`. Runs serially before the movement
+    /// integrator, exactly where a Player's session writes intent. Deterministic.
+    pub fn drive_npcs(&mut self, dt_ms: u64, clock_ms: u64) {
+        let dt_s = dt_ms as f64 / 1000.0;
+
+        // Snapshot every sensable being (NPCs + Players) once, by id/pos/kind.
+        let mut beings: Vec<(u64, P2, Sensable)> = Vec::new();
+        for (_, (pos, npc)) in self.world.query::<(&Position, &Npc)>().iter() {
+            beings.push((npc.actor.0, P2::new(pos.x, pos.y), Sensable::Npc(npc.kind)));
+        }
+        for (_, (pos, pc)) in self.world.query::<(&Position, &PlayerControlled)>().iter() {
+            beings.push((pc.actor.0, P2::new(pos.x, pos.y), Sensable::Player));
+        }
+
+        // The NPCs to drive this tick.
+        let npcs: Vec<(Entity, NpcKind, u64, Position, Drives)> = self
+            .world
+            .query::<(&Npc, &Position, &Drives)>()
+            .iter()
+            .map(|(e, (npc, pos, d))| (e, npc.kind, npc.actor.0, *pos, *d))
+            .collect();
+
+        for (e, kind, self_id, pos, drives) in npcs {
+            let self_p = P2::new(pos.x, pos.y);
+            let params = Params::for_kind(kind);
+            let mut perc = Perception::at(self_p);
+            for &(id, bp, what) in &beings {
+                if id == self_id {
+                    continue;
+                }
+                if dist_sq(self_p, bp) > params.perception_range_sq {
+                    continue;
+                }
+                match (kind, what) {
+                    (NpcKind::Wolf, Sensable::Npc(NpcKind::Deer)) => {
+                        perc.prey.push(Sensed { id, pos: bp })
+                    }
+                    (NpcKind::Deer, Sensable::Npc(NpcKind::Wolf))
+                    | (NpcKind::Deer, Sensable::Player) => perc.threats.push(Sensed { id, pos: bp }),
+                    _ => {}
+                }
+            }
+            if kind == NpcKind::Deer {
+                let region = ecosystem::region(self_p.x, self_p.y);
+                perc.grass =
+                    ecosystem::levels(region, clock_ms, &ecosystem::Disturbance::default()).grass;
+            }
+
+            let mut next = drives;
+            let decision = decide(kind, &perc, &mut next, &params, dt_s);
+            let (vx, vy) = velocity_for(decision, self_p, params.speed, self_id, clock_ms);
+
+            if let Ok(mut d) = self.world.get::<&mut Drives>(e) {
+                *d = next;
+            }
+            if let Ok(mut v) = self.world.get::<&mut Velocity>(e) {
+                v.vx = vx;
+                v.vy = vy;
+            }
+        }
+    }
+
     /// Remove a player from this realm. Returns its inventory + position (for a
     /// realm transition or persistence flush).
     pub fn remove_player(&mut self, username: &str) -> Option<(Position, Inventory)> {
@@ -265,6 +419,8 @@ impl RealmWorld {
     /// Advance the realm by one tick of `dt_ms` milliseconds at `clock_ms`.
     /// Returns the topology events produced by reconcile (for observers/tests).
     pub fn tick(&mut self, dt_ms: u64, clock_ms: u64) -> Vec<TopologyEvent> {
+        // Motivation writes NPC Intent before the movement integrator (ADR-0005).
+        self.drive_npcs(dt_ms, clock_ms);
         let dt = dt_ms as f64 / 1000.0;
 
         // 1. Movement, per cluster, in id order (determinism). Gather each
@@ -435,15 +591,19 @@ impl RealmWorld {
     }
 
     fn unload_chunk(&mut self, coord: ChunkCoord) {
-        let to_despawn: Vec<(Entity, WireId)> = self
+        let to_despawn: Vec<(Entity, WireId, Option<ActorId>)> = self
             .world
-            .query::<(&Position, &WireId, Option<&PlayerControlled>)>()
+            .query::<(&Position, &WireId, Option<&PlayerControlled>, Option<&Npc>)>()
             .iter()
-            .filter(|(_, (p, _, player))| p.chunk() == coord && player.is_none())
-            .map(|(e, (_, wid, _))| (e, wid.clone()))
+            .filter(|(_, (p, _, player, _))| p.chunk() == coord && player.is_none())
+            .map(|(e, (_, wid, _, npc))| (e, wid.clone(), npc.map(|n| n.actor)))
             .collect();
-        for (e, wid) in to_despawn {
+        for (e, wid, actor) in to_despawn {
             self.wire_index.remove(&wid);
+            if let Some(a) = actor {
+                self.actor_index.remove(&a);
+                self.labeler.remove_actor(a);
+            }
             let _ = self.world.despawn(e);
         }
         self.loaded.remove(&coord);

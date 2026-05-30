@@ -9,6 +9,7 @@
 
 use crate::components::{Inventory, Position, PortalDirection, StructureKind};
 use crate::consts::{FLUSH_MS, TICK_MS};
+use crate::motivation::{Drives, NpcKind};
 use crate::datastore::{Datastore, DurableStore, MemStore, PersistEvent, PlayerRecord};
 use crate::geometry::{chunk_center, coord_for, ChunkCoord};
 use crate::ids::{ClusterId, Realm};
@@ -160,6 +161,16 @@ impl Sim {
         }
     }
 
+    /// Spawn an NPC into the Overworld with initial drives. Returns its entity.
+    pub fn spawn_npc(&mut self, kind: NpcKind, pos: Position, drives: Drives) -> hecs::Entity {
+        self.overworld.spawn_npc(kind, pos, drives)
+    }
+
+    /// Snapshot of every Overworld NPC (kind, position, drives, health).
+    pub fn npcs(&self) -> Vec<(hecs::Entity, NpcKind, Position, Drives, crate::components::Health)> {
+        self.overworld.npcs()
+    }
+
     fn spawn_overworld(&mut self, username: &str, pos: Position, inv: Inventory) {
         self.disconnect_if_present(username);
         self.overworld.spawn_player(username, pos, inv);
@@ -222,6 +233,7 @@ impl Sim {
         let clock = self.clock_ms;
 
         let tick_realm = |rw: &mut RealmWorld| {
+            rw.drive_npcs(TICK_MS, clock);
             let jobs = rw.movement_jobs();
             let assignment = rw.repack_assignment(budget);
             let results = match &self.pool {

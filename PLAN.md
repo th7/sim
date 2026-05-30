@@ -121,3 +121,13 @@ prove consequential in the Decision log below.
   Keeps the engine pure (world-effects stay in the ECS) while the need-level dynamics remain unit-testable.
 - **Engine emits no RNG.** Wander direction / tie-breaks are returned as `Decision::Wander` and resolved
   by the ECS with a seeded PRNG, keeping the engine a deterministic pure function.
+- **Wolf speed 4200 > deer 3800 sub-units/s**, so a pursuing wolf closes on fleeing prey (hunts terminate).
+- **Deer treat Players as threats and flee them; Wolves flee only once attacked** (`being_attacked`, slice 4).
+  Gives "deer run from you" for free while keeping wolves bold until provoked.
+- **Motivation runs at the top of `RealmWorld::tick` and inside the parallel `tick_realm` closure** — the
+  serial pre-movement Intent write, identical in both tick paths.
+- **FLAGGED (for slice 5):** an NPC is a Labeler actor, so its cluster currently still marks its chunks
+  owned → it *does* keep them warm. Proper warm-set gating (only Players anchor) belongs with the
+  materialize/dissolve boundary; until then NPCs only exist where tests/players put them.
+- **Wander direction is sim-clock-bucketed (≈1 Hz) and seeded by actor id**, so drift is deterministic
+  and doesn't jitter every tick.

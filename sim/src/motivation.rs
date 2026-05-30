@@ -28,6 +28,15 @@ pub enum NpcKind {
     Deer,
 }
 
+impl NpcKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NpcKind::Wolf => "wolf",
+            NpcKind::Deer => "deer",
+        }
+    }
+}
+
 /// One entity the NPC senses, with the wire/actor id used to target it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sensed {
@@ -110,6 +119,8 @@ pub struct Params {
     pub hunger_tau_s: f64,
     pub safety_tau_s: f64,
     pub pressure_cap: f64,
+    /// Movement speed in sub-units/sec when pursuing a Decision.
+    pub speed: f64,
     /// Static inter-chain priority bias (safety > hunger).
     pub hunger_bias: f64,
     pub safety_bias: f64,
@@ -131,6 +142,7 @@ impl Params {
                 hunger_tau_s: 60.0,
                 safety_tau_s: 10.0,
                 pressure_cap: 1.0,
+                speed: 4_200.0,
                 hunger_bias: 1.0,
                 safety_bias: 1.2,
                 perception_range_sq: 1_000 * 1_000,
@@ -143,6 +155,7 @@ impl Params {
                 hunger_tau_s: 90.0,
                 safety_tau_s: 8.0,
                 pressure_cap: 1.0,
+                speed: 3_800.0,
                 hunger_bias: 1.0,
                 safety_bias: 1.5,
                 perception_range_sq: 1_000 * 1_000,
