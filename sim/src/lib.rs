@@ -1,6 +1,6 @@
 //! Interaction-clustered simulation — Rust shared-memory prototype.
 //!
-//! See `IDEA.md` at the repo root for the model. In brief: one shared ECS
+//! See `DESIGN.md` at the repo root for the model. In brief: one shared ECS
 //! world, partitioned by *interaction locality* into **clusters**; clusters
 //! are packed onto **workers** for execution; a single **Labeler** owns the
 //! partition and serializes topology changes. Actions run inside a cluster

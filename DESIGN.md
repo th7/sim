@@ -1,6 +1,6 @@
 # Design
 
-What the running system does, from outside. See `CONTEXT.md` for domain language and `IDEA.md` for the design + build log.
+What the running system does, from outside. See `CONTEXT.md` for domain language, `docs/adr/` for the runtime decisions, and `PLAN.md` for in-flight feature work.
 
 > **Note:** The running system is the **interaction-clustered** Rust backend
 > ([ADR-0002](./docs/adr/0002-rust-clustered-simulation-runtime.md)): one shared ECS world per realm,

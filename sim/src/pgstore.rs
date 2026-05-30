@@ -12,7 +12,7 @@
 //! a ~1s cadence, so blocking the tick briefly is acceptable for the POC.
 //!
 //! The store ensures its own schema on connect, so it needs only an empty
-//! database (its own, not the Elixir Ecto schema — see `IDEA.md`). Positions are
+//! database (its own, not the Elixir Ecto schema — see `DESIGN.md`). Positions are
 //! sub-unit `BIGINT`s; depletion respawn is stored as an absolute epoch-ms
 //! `BIGINT` (the server anchors its clock to wall-clock so it survives restart).
 

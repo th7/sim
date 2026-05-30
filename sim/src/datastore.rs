@@ -6,7 +6,7 @@
 //! **backpressure** state machine for overload.
 //!
 //! The durable backend is a trait so the POC can use an in-memory store now and
-//! a real database later (IDEA.md: "Datastore (stub in POC) … real integration
+//! a real database later (DESIGN.md: "Datastore (stub in POC) … real integration
 //! is later"). Only the Overworld persists; Instances are in-memory only, so the
 //! sim layer simply doesn't emit for Instance realms.
 

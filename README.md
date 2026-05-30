@@ -13,7 +13,7 @@ A **Rust** backend simulating one shared ECS world, partitioned by *interaction 
 - [`CONTEXT.md`](./CONTEXT.md) — the locked language: glossary + relationships
 - [`DESIGN.md`](./DESIGN.md) — what the running system does today, from outside
 - [`docs/adr/`](./docs/adr/) — architecture decision records
-- [`IDEA.md`](./IDEA.md) — the design + build log of the interaction-clustered Rust backend
+- [`DESIGN.md`](./DESIGN.md) — the design + build log of the interaction-clustered Rust backend
 
 ## Running locally
 

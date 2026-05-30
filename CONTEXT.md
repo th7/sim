@@ -97,6 +97,70 @@ _Avoid_: WAL (the buffer is not a log — it's a keyed map of effective state), 
 **Backpressure**:
 The **Datastore**'s overload-protection mode. When **pending writes** exceed a size threshold or any entry has aged past a time threshold, the Datastore stops replying to incoming write calls — caller `GenServer.call`s block. Upstream **Islands** freeze whole-mailbox — every **Player** in a frozen **Island**, not only the one whose verb triggered the park, freezes with it. The mode clears when the Datastore drains — usually because the DB recovered, or an operator deployed a fix via hot code reload for a stuck flush. Parked callers then receive their replies in FIFO order and upstream resumes naturally.
 
+### NPCs and Motivation
+
+**NPC**:
+A non-human dynamic entity simulated as an actor inside an **Island**, exactly like a **Player** — it moves, collides, and (later) fights under the same single authority. The one difference from a Player is the source of its **Intent**: a Player's comes from a remote session, an NPC's is produced each tick by its **Motivation**.
+_Avoid_: Mob, monster (not all NPCs are hostile), creature, bot (implies external automation), agent (an AI/implementation term).
+
+**Intent**:
+The per-tick movement/action input one actor hands its **Island** at tick start, read to integrate movement and resolve interactions. A **Player**'s Intent comes from their session; an **NPC**'s comes from its **Motivation**. This is the single seam both kinds of actor share.
+_Avoid_: Input, command, keypress.
+
+**Motivation**:
+The system that produces an **NPC**'s **Intent** each tick: a fixed set of root **Needs**, each driving a **Behavioral chain**, arbitrated into one **Goal** that expands into a **Plan**. The NPC's analogue of a Player's session.
+_Avoid_: AI, brain, behaviour tree (the model is explicitly not a behaviour tree).
+
+**Need**:
+A root motivator of an **NPC** — hunger, safety, shelter. A fixed set per kind of NPC. Each Need roots exactly one **Behavioral chain** and carries a **Pressure**. Needs have a static priority **bias** relative to one another (e.g. safety outranks hunger) before Pressure is applied.
+_Avoid_: Drive, motive, urge, desire.
+
+**Behavioral chain**:
+The ordered sequence of progressively more strategic sub-goals that serve one root **Need** — e.g. hunger → eat → carry food → stockpile → secure a food source. Each tick the chain offers exactly one **Bid**.
+_Avoid_: Behaviour tree, goal stack, plan tree.
+
+**Bid**:
+The single candidate a **Behavioral chain** offers each tick: its most-immediate *actionable* node (a node is actionable only when its preconditions hold, so the chain naturally climbs toward the strategic end as nearer needs are satisfied). Bids are what compete in **Goal** arbitration.
+_Avoid_: Proposal, vote, candidate.
+
+**Pressure**:
+A per-**Need** measure of how chronically that Need has gone unmet. Pressure plays **no part within a chain**; its sole role is to modulate **inter-chain** arbitration — it can lift a chronically-unmet Need's **Bid** past the static need-priority bias, so a long-hungry NPC will trade away safety. It never selects *what* to do within a goal, only *which* Need owns the goal.
+_Avoid_: Urgency (that is a node's immediate activation, not the accumulated term), stress, mood.
+
+**Goal**:
+The one **Need** an **NPC** is currently acting on — the **Bid** that wins arbitration (static need bias, modulated by **Pressure**). Expanded into a **Plan**.
+_Avoid_: Objective, target, Intent (Intent is the per-tick output, not the objective).
+
+**Plan**:
+The most-immediate *actionable* sequence of **Actions** pursuing the current **Goal**, chosen by the *same* precondition-gated immediacy rule as a chain **Bid**. A Plan adapts to circumstance — a `feed` Goal yields `fight-to-hold` rather than `feed-calmly` when a threat blocks calm feeding — and bottoms out in per-tick **Intent**.
+_Avoid_: Script, routine, behaviour.
+
+**Action**:
+A primitive in a **shared** library that **Plans** compose — move-to, eat, pick-up, attack, flee. Actions are owned by no **Need** or chain: the same Action (e.g. attack) can serve different **Goals** (a wolf fighting *for* food, not *for* safety).
+_Avoid_: Verb (a Verb is a Player-initiated server command — harvest/build/damage; an Action is an NPC-Plan primitive, even where the two resolve to the same effect), skill, ability.
+
+### The wild ecosystem
+
+**Region**:
+A deterministic territory of the **Overworld** — a Worley/Voronoi cell given by a pure function of position, independent of the **Chunk** grid. Each Region has a **Habitat**. Regions, not Chunks, are the unit the ecosystem **Baseline** and player **Disturbances** are keyed on.
+_Avoid_: Zone, area, biome (biome names the **Habitat** type, not the territory).
+
+**Habitat**:
+The ecological type of a **Region** (meadow, forest, …) that fixes its baseline grass and wildlife levels.
+_Avoid_: Biome (we say Habitat), terrain (terrain is the rendered ground; Habitat is the ecological role).
+
+**Baseline**:
+The simulation-free wildlife level at a place and time — a pure function of the **Region**'s **Habitat**, a slow seasonal cycle, and local noise. What wildlife "should" be there absent players. The cold world is *computed*, never ticked.
+_Avoid_: Default, equilibrium (equilibrium implies a simulation settling; the Baseline is evaluated, not settled).
+
+**Disturbance**:
+A sparse, persisted, per-**Region** delta recording how players have pushed wildlife away from **Baseline** (overhunting, …). It decays back toward zero over time — the Region heals — so the live wildlife level is always Baseline plus a shrinking Disturbance.
+_Avoid_: Depletion (that is the Resource-node respawn mechanic), scar, damage.
+
+**Carcass**:
+The perishable remains of a killed animal — a **Gatherable** (like a **Resource node**) that yields meat/hide **Items**. Contestable: both **NPCs** and **Players** harvest it, and rival predators fight to hold it. Perishes on a timer if left unconsumed.
+_Avoid_: Corpse (implies a **Player** death — Players don't die in v1), loot, drop, kill.
+
 ## Relationships
 
 - A **World** is composed of one **Overworld** and zero-or-more live **Instances**
@@ -117,6 +181,17 @@ The **Datastore**'s overload-protection mode. When **pending writes** exceed a s
 - A **Chunk** stays hot while some **Island** holds it; **Chunk deactivation** fires when no Island does
 - All durable reads and writes flow through the **Datastore**; **Islands** do not talk to durable storage directly
 - **Instance** **Chunks** do not emit to the **Datastore** — Instance state is in-memory only
+- An **NPC** is an actor simulated by exactly one **Island**, the same as a **Player**; both feed their Island one **Intent** per tick. A Player's Intent comes from a session, an NPC's from its **Motivation**
+- An **NPC** has one **Motivation**; a **Motivation** has a fixed set of root **Needs**; each **Need** roots exactly one **Behavioral chain** and carries one **Pressure**
+- Each tick, every **Behavioral chain** offers one **Bid**; arbitration (static need bias modulated by **Pressure**) picks one winning Bid as the **Goal**; the Goal expands to a **Plan**; the Plan's head **Action** resolves to the tick's **Intent**
+- **Actions** are a shared library, owned by no **Need**; a **Plan** for any **Goal** may compose any Action
+- An **NPC** does **not** anchor the **Warm set** — only **Players** keep **Chunks** hot; NPCs are simulated only within Player-hot Chunks
+- The **Overworld** is also partitioned, independently of **Chunks**, into deterministic **Regions**; each Region has a **Habitat** fixing its ecosystem **Baseline**
+- A place's live wildlife level = its **Region**'s **Baseline** at the current time plus the Region's decaying **Disturbance**; a **Chunk** warming turns that level into seeded spawn chances, and warm hunting/grazing writes the Region's **Disturbance**
+- An **NPC** has no persistent individual identity across a cold/warm cycle: it materializes from a **Region**'s wildlife level when a Chunk warms and dissolves back into that Region's **Disturbance** when the Chunk cools
+- A killed animal leaves a **Carcass** (a **Gatherable**); **Players** harvest it for meat/hide **Items** (feeding the crafting economy), **NPCs** eat from it to satisfy hunger, and rival predators contest it
+- An **NPC** may carry food **Items** in an **Inventory** (as **Players** do) and stockpile them while pursuing the strategic end of its hunger chain; such stockpiles are in-session and dissolve into the **Region**'s **Disturbance** on cooldown
+- An **NPC** materializing into a warming **Chunk** spawns with initial **Needs**/**Pressure** derived deterministically from its **Region**'s current wildlife level: a depleted, high-**Disturbance** Region spawns hungry, high-pressure (aggressive) animals; a healthy Region spawns placid ones. The Region's history shapes both population *and* temperament
 
 ## Example dialogue
 

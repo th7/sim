@@ -8,7 +8,7 @@
 //! chunk boundary is a `remove` from the old chunk and a baseline `upsert` in
 //! the new one.
 //!
-//! This is the read-model feed (IDEA.md: `ArcSwap<Snapshot>` per region). The
+//! This is the read-model feed (DESIGN.md: `ArcSwap<Snapshot>` per region). The
 //! `snapshot` wire event still carries a full [`ChunkSnapshot`](crate::wire),
 //! reconstructable by applying deltas onto a baseline — both are derived from
 //! the same entity states, so they cannot disagree.

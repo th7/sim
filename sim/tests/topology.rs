@@ -1,4 +1,4 @@
-//! Phase 1 topology cases (IDEA.md): placement, crossing, merge, split,
+//! Phase 1 topology cases (DESIGN.md): placement, crossing, merge, split,
 //! hysteresis — driven through the Labeler and checked against the canonical
 //! partition oracle.
 
