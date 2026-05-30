@@ -309,6 +309,56 @@
             },
             "type": "object"
           },
+          "npcs": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "x": {
+                  "type": "integer"
+                },
+                "y": {
+                  "type": "integer"
+                },
+                "hp": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "type",
+                "x",
+                "y",
+                "hp"
+              ],
+              "type": "object"
+            },
+            "type": "object"
+          },
+          "carcasses": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+                "x": {
+                  "type": "integer"
+                },
+                "y": {
+                  "type": "integer"
+                },
+                "meat": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "x",
+                "y",
+                "meat"
+              ],
+              "type": "object"
+            },
+            "type": "object"
+          },
           "portals": {
             "additionalProperties": {
               "additionalProperties": false,
@@ -399,7 +449,9 @@
           "players",
           "portals",
           "resource_nodes",
-          "structures"
+          "structures",
+          "npcs",
+          "carcasses"
         ],
         "type": "object"
       },
@@ -455,12 +507,16 @@
           },
           "total_players": {
             "type": "integer"
+          },
+          "total_npcs": {
+            "type": "integer"
           }
         },
         "required": [
           "active_chunks",
           "around",
-          "total_players"
+          "total_players",
+          "total_npcs"
         ],
         "type": "object"
       },

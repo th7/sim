@@ -57,7 +57,13 @@ mod tests {
         // Idempotent.
         assert!(dev.set(true).is_empty());
         // Stats can flow in.
-        dev.on_stats(StatsPayload { active_chunks: 1, total_players: 1, around: Vec::new() });
+        dev.on_stats(StatsPayload {
+            active_chunks: 1,
+            total_players: 1,
+            total_npcs: 2,
+            around: Vec::new(),
+        });
+        assert_eq!(dev.stats().unwrap().total_npcs, 2);
         assert!(dev.stats().is_some());
         // Turning off unsubscribes and drops cached stats.
         assert_eq!(dev.set(false), vec![Cmd::UnsubscribeDevStats]);

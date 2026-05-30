@@ -270,6 +270,11 @@ impl Sim {
         self.overworld.npcs()
     }
 
+    /// Count of live NPCs in the Overworld (dev telemetry).
+    pub fn npc_count(&self) -> usize {
+        self.overworld.npcs().len()
+    }
+
     fn spawn_overworld(&mut self, username: &str, pos: Position, inv: Inventory) {
         self.disconnect_if_present(username);
         self.overworld.spawn_player(username, pos, inv);

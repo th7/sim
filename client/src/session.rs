@@ -8,8 +8,8 @@ use crate::conn::PhxConn;
 use crate::model::{ClientModel, Cmd, Outbound};
 use protocol::geometry::ChunkCoord;
 use protocol::wire::{
-    ChunkSnapshot, NodeWire, PlayerWire, PortalWire, RealmWire, RelocatedPayload, SelfPayload,
-    StatsPayload, StructureWire,
+    CarcassWire, ChunkSnapshot, NodeWire, NpcWire, PlayerWire, PortalWire, RealmWire,
+    RelocatedPayload, SelfPayload, StatsPayload, StructureWire,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -27,6 +27,8 @@ pub struct RenderState {
     pub nodes: BTreeMap<String, NodeWire>,
     pub structures: BTreeMap<String, StructureWire>,
     pub portals: BTreeMap<String, PortalWire>,
+    pub npcs: BTreeMap<String, NpcWire>,
+    pub carcasses: BTreeMap<String, CarcassWire>,
     pub inventory: BTreeMap<String, u32>,
     pub stats: Option<StatsPayload>,
     pub last_error: Option<String>,
@@ -106,6 +108,8 @@ impl Session {
             nodes: self.model.nodes(),
             structures: self.model.structures(),
             portals: self.model.portals(),
+            npcs: self.model.npcs(),
+            carcasses: self.model.carcasses(),
             inventory: self.model.inventory().clone(),
             stats: self.model.stats().cloned(),
             last_error: self.model.last_error().map(str::to_string),

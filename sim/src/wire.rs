@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 
 // The serializable per-chunk snapshot payloads now live in the shared `protocol`
 // crate (so the client deserializes the exact structs the server serializes).
-pub use protocol::wire::{ChunkSnapshot, NodeWire, PlayerWire, PortalWire, StructureWire};
+pub use protocol::wire::{
+    CarcassWire, ChunkSnapshot, NodeWire, NpcWire, PlayerWire, PortalWire, StructureWire,
+};
 
 /// The `self` event payload: `{"inventory": {"wood": 3, ...}}` (string-keyed).
 pub fn inventory_payload(inv: &Inventory) -> Value {
@@ -46,6 +48,8 @@ pub enum EntityWire {
     Node { kind: ResourceKind, x: i64, y: i64, depleted: bool },
     Structure { kind: StructureKind, owner: String, hp: i64, x: i64, y: i64 },
     Portal { kind: PortalKind, direction: PortalDirection, x: i64, y: i64 },
+    Npc { kind: crate::motivation::NpcKind, hp: i64, x: i64, y: i64 },
+    Carcass { meat: i64, x: i64, y: i64 },
 }
 
 impl EntityWire {
@@ -54,7 +58,9 @@ impl EntityWire {
             EntityWire::Player { x, y }
             | EntityWire::Node { x, y, .. }
             | EntityWire::Structure { x, y, .. }
-            | EntityWire::Portal { x, y, .. } => (x, y),
+            | EntityWire::Portal { x, y, .. }
+            | EntityWire::Npc { x, y, .. }
+            | EntityWire::Carcass { x, y, .. } => (x, y),
         }
     }
     pub fn chunk(&self) -> ChunkCoord {
@@ -103,6 +109,15 @@ pub fn entity_states(rw: &RealmWorld) -> BTreeMap<WireId, EntityWire> {
             EntityWire::Portal { kind: p.kind, direction: p.direction, x: pos.x, y: pos.y },
         );
     }
+    for (_e, (pos, npc, h, wid)) in world.query::<(&Position, &Npc, &Health, &WireId)>().iter() {
+        out.insert(
+            wid.clone(),
+            EntityWire::Npc { kind: npc.kind, hp: h.hp, x: pos.x, y: pos.y },
+        );
+    }
+    for (_e, (pos, c, wid)) in world.query::<(&Position, &Carcass, &WireId)>().iter() {
+        out.insert(wid.clone(), EntityWire::Carcass { meat: c.meat, x: pos.x, y: pos.y });
+    }
     out
 }
 
@@ -146,6 +161,15 @@ pub fn chunk_snapshot(states: &BTreeMap<WireId, EntityWire>, coord: ChunkCoord) 
                         y: *y,
                     },
                 );
+            }
+            EntityWire::Npc { kind, hp, x, y } => {
+                snap.npcs.insert(
+                    wid.0.clone(),
+                    NpcWire { kind: kind.as_str().to_string(), x: *x, y: *y, hp: *hp },
+                );
+            }
+            EntityWire::Carcass { meat, x, y } => {
+                snap.carcasses.insert(wid.0.clone(), CarcassWire { x: *x, y: *y, meat: *meat });
             }
         }
     }

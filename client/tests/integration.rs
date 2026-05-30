@@ -15,6 +15,28 @@ async fn start_server() -> u16 {
     port
 }
 
+/// Boot a server with the wildlife ecosystem enabled (NPCs materialize near players).
+async fn start_server_wild() -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut sim = sim::sim::Sim::new();
+    sim.set_wildlife(true);
+    tokio::spawn(sim::transport::serve(listener, sim::transport::Shared::with_sim(sim)));
+    port
+}
+
+/// A deer-rich Overworld chunk on the x-axis, so wildlife reliably materializes.
+fn deer_rich_chunk() -> ChunkCoord {
+    let sim = sim::sim::Sim::new();
+    for k in 0..80 {
+        let (cx, cy) = protocol::geometry::chunk_center(ChunkCoord::new(k, 0));
+        if sim.region_levels_at(cx, cy).deer > 0.55 {
+            return ChunkCoord::new(k, 0);
+        }
+    }
+    panic!("no deer-rich region found");
+}
+
 fn url(port: u16) -> String {
     format!("ws://127.0.0.1:{port}/socket/websocket?vsn=2.0.0")
 }
@@ -490,4 +512,25 @@ async fn a_rejected_build_surfaces_footprint_blocked_in_last_error() {
     // The view reads from RenderState, not directly from the model: the reason
     // has to be wired through for the HUD to show it.
     assert_eq!(alice.render_state().last_error.as_deref(), Some("footprint_blocked"));
+}
+
+/// With wildlife enabled, a connected client sees NPCs materialize in its view —
+/// the full server→wire→client path for the new entity kind.
+#[tokio::test]
+async fn client_sees_wildlife_materialize() {
+    let chunk = deer_rich_chunk();
+    let port = start_server_wild().await;
+    let mut alice = Session::connect(&url(port), "alice", chunk).await.unwrap();
+    assert!(
+        alice.pump_until(T, |m| !m.npcs().is_empty()).await,
+        "wildlife should materialize near the player and reach the client",
+    );
+    // The dev stats also report a non-zero world NPC count.
+    alice.set_dev(true).await.unwrap();
+    assert!(
+        alice
+            .pump_until(T, |m| m.stats().map(|s| s.total_npcs > 0).unwrap_or(false))
+            .await,
+        "dev stats should report live NPCs",
+    );
 }

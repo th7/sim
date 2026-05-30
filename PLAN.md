@@ -157,3 +157,19 @@ prove consequential in the Decision log below.
   is complete and tested; cross-restart is a follow-up (needs a PersistEvent + schema).
 - **FLAGGED:** grass grazing does not yet write a grass Disturbance (deer graze abstractly against the
   Region's grass level); only deer/wolf population changes feed back. Follow-up.
+- **Wire: `ChunkSnapshot` gains `npcs` + `carcasses` maps** (`#[serde(default)]` for back-compat), added to
+  `contract.json` (snapshot `required`). New `NpcWire{type,x,y,hp}` / `CarcassWire{x,y,meat}`. The server
+  serializes them from the same `entity_states` path as every other entity, so deltas/snapshots can't
+  disagree. Meat/Hide are open inventory keys (no contract change needed there).
+- **Dev mode shows NPCs:** `StatsPayload.total_npcs` (server-authoritative, in `contract.json`) plus a HUD
+  line `npcs: <in view> / <in world>`. Server `dev::stats_payload` counts Overworld NPCs; client `stats()`
+  surfaces it. NPC/carcass meshes added to the GL scene (grey wolf / tan deer / dark-red carcass mound) —
+  rendering is not unit-testable in-container, but the model accessors and dev count are.
+
+## Status
+
+All six slices implemented and tested: **162 workspace tests green, no warnings.** The full
+server→wire→client path is e2e-pinned (`client_sees_wildlife_materialize`). Wildlife is a server toggle
+(`SIM_WILDLIFE`, on by default in the bin). Remaining flagged follow-ups: cross-restart Disturbance
+persistence; grass-grazing disturbance; the strategic chain tail (carry/stockpile/secure-source) + the
+in-session cache object.

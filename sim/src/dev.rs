@@ -36,6 +36,7 @@ pub fn stats_payload(sim: &Sim, dev_username: Option<&str>) -> Value {
     let payload = StatsPayload {
         active_chunks: sim.active_chunk_count() as u64,
         total_players: sim.player_count() as u64,
+        total_npcs: sim.npc_count() as u64,
         around,
     };
     serde_json::to_value(payload).unwrap_or(Value::Null)
@@ -69,6 +70,17 @@ mod tests {
         let (life, idle) = around(&v, 0, 0);
         assert_eq!(life, "hot");
         assert!(idle.is_null());
+    }
+
+    #[test]
+    fn stats_report_live_npc_count() {
+        use crate::motivation::{Drives, NpcKind};
+        let mut sim = Sim::new();
+        sim.connect_at("dev", Position { x: 8_000, y: 8_000 }, Default::default());
+        sim.spawn_npc(NpcKind::Wolf, Position { x: 8_200, y: 8_000 }, Drives::default());
+        sim.spawn_npc(NpcKind::Deer, Position { x: 8_400, y: 8_000 }, Drives::default());
+        let v = stats_payload(&sim, Some("dev"));
+        assert_eq!(v["total_npcs"], 2);
     }
 
     #[test]

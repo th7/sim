@@ -42,13 +42,34 @@ pub struct PortalWire {
     pub y: i64,
 }
 
-/// The full `snapshot` payload for a single chunk.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NpcWire {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub x: i64,
+    pub y: i64,
+    pub hp: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CarcassWire {
+    pub x: i64,
+    pub y: i64,
+    pub meat: i64,
+}
+
+/// The full `snapshot` payload for a single chunk. `npcs`/`carcasses` default to
+/// empty so older payloads still parse.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ChunkSnapshot {
     pub players: BTreeMap<String, PlayerWire>,
     pub resource_nodes: BTreeMap<String, NodeWire>,
     pub structures: BTreeMap<String, StructureWire>,
     pub portals: BTreeMap<String, PortalWire>,
+    #[serde(default)]
+    pub npcs: BTreeMap<String, NpcWire>,
+    #[serde(default)]
+    pub carcasses: BTreeMap<String, CarcassWire>,
 }
 
 // --- Outbound: server → client (per-player events) ---
@@ -102,6 +123,9 @@ pub struct ChunkStatWire {
 pub struct StatsPayload {
     pub active_chunks: u64,
     pub total_players: u64,
+    /// Live NPCs (wolves + deer) currently simulated in the Overworld.
+    #[serde(default)]
+    pub total_npcs: u64,
     pub around: Vec<ChunkStatWire>,
 }
 

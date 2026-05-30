@@ -41,6 +41,8 @@ fn main() {
         nodes: BTreeMap::new(),
         structures: BTreeMap::new(),
         portals: BTreeMap::new(),
+        npcs: BTreeMap::new(),
+        carcasses: BTreeMap::new(),
         inventory: BTreeMap::new(),
         stats: None,
         last_error: None,
@@ -273,6 +275,17 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
             let color = if p.direction == "into_instance" { rgb(0x7e57c2) } else { rgb(0xff7043) };
             objects.push(cylinder_at(&context, w(p.x), 0.0, w(p.y), 0.65, 0.04, color));
         }
+        // NPCs: a body box coloured by kind (wolf grey, deer tan) + a small head.
+        for n in rs.npcs.values() {
+            let (x, z) = (w(n.x), w(n.y));
+            let color = if n.kind == "wolf" { rgb(0x607d8b) } else { rgb(0xbcaaa4) };
+            objects.push(box_at(&context, x, 0.4, z, 0.7, 0.5, 0.35, color));
+            objects.push(box_at(&context, x, 0.75, z, 0.3, 0.3, 0.3, color));
+        }
+        // Carcasses: a low dark-red mound.
+        for c in rs.carcasses.values() {
+            objects.push(box_at(&context, w(c.x), 0.12, w(c.y), 0.6, 0.24, 0.5, rgb(0x8e3b2e)));
+        }
 
         // Dev chunk-lifecycle overlay (transparent, drawn after opaque geometry).
         if let Some(stats) = &rs.stats {
@@ -445,6 +458,8 @@ fn dev_panel(ui: &mut three_d::egui::Ui, rs: &RenderState) {
     let (active, total) =
         rs.stats.as_ref().map(|s| (s.active_chunks, s.total_players)).unwrap_or((0, 0));
     ui.label(format!("view: {}  active: {}  total: {}", rs.players.len(), active, total));
+    let world_npcs = rs.stats.as_ref().map(|s| s.total_npcs).unwrap_or(0);
+    ui.label(format!("npcs: {} in view / {world_npcs} in world", rs.npcs.len()));
 }
 
 /// Tracked WASD state; `set` returns true if the state changed.

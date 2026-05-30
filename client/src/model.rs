@@ -8,8 +8,9 @@ use crate::dev::DevState;
 use protocol::consts::INTERACT_RANGE_SQ;
 use protocol::geometry::{coord_for, neighborhood, ChunkCoord, SUB_UNITS_PER_UNIT};
 use protocol::wire::{
-    BuildPayload, ChunkSnapshot, DamagePayload, HarvestPayload, MovePayload, NodeWire, PlayerWire,
-    PortalWire, RealmWire, RelocatedPayload, SelfPayload, StatsPayload, StructureWire,
+    BuildPayload, CarcassWire, ChunkSnapshot, DamagePayload, HarvestPayload, MovePayload, NodeWire,
+    NpcWire, PlayerWire, PortalWire, RealmWire, RelocatedPayload, SelfPayload, StatsPayload,
+    StructureWire,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -233,10 +234,23 @@ impl ClientModel {
     pub fn portals(&self) -> BTreeMap<String, PortalWire> {
         merge(&self.snaps, |s| &s.portals)
     }
+    /// All NPCs (wolves/deer) currently visible, merged across snapshots.
+    pub fn npcs(&self) -> BTreeMap<String, NpcWire> {
+        merge(&self.snaps, |s| &s.npcs)
+    }
+    /// All Carcasses currently visible, merged across snapshots.
+    pub fn carcasses(&self) -> BTreeMap<String, CarcassWire> {
+        merge(&self.snaps, |s| &s.carcasses)
+    }
 
     /// The dev-HUD "view" count: number of players currently rendered.
     pub fn view_count(&self) -> usize {
         self.players().len()
+    }
+
+    /// Dev-HUD: number of NPCs currently in view.
+    pub fn npc_count(&self) -> usize {
+        self.npcs().len()
     }
 
     // --- internals ---
@@ -384,6 +398,21 @@ mod tests {
         let (mut m, _) = ClientModel::new("alice", cc(0, 0));
         m.on_snapshot(cc(0, 0), snap_with_player("alice", x, y));
         m
+    }
+
+    #[test]
+    fn snapshot_npcs_and_carcasses_are_visible() {
+        let mut m = model_with_player_at(8_000, 8_000);
+        let mut snap = snap_with_player("alice", 8_000, 8_000);
+        snap.npcs.insert(
+            "npc:wolf:3".into(),
+            NpcWire { kind: "wolf".into(), x: 8_200, y: 8_100, hp: 80 },
+        );
+        snap.carcasses.insert("carcass:9".into(), CarcassWire { x: 8_300, y: 8_300, meat: 3 });
+        m.on_snapshot(cc(0, 0), snap);
+        assert_eq!(m.npc_count(), 1);
+        assert_eq!(m.npcs().get("npc:wolf:3").unwrap().kind, "wolf");
+        assert_eq!(m.carcasses().get("carcass:9").unwrap().meat, 3);
     }
 
     #[test]
