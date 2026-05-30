@@ -135,6 +135,16 @@ fn season(_t_ms: u64) -> f64 {
     1.0
 }
 
+/// Length of one full day/night cycle in sim-ms (agent extension).
+const DAY_MS: u64 = 600_000;
+
+/// Deterministic day/night "nightness" 0 (midday) .. 1 (midnight), a smooth
+/// cosine of the sim clock. Pure — no wall-clock. Agent extension (EXTENSIONS.md).
+pub fn day_phase(t_ms: u64) -> f64 {
+    let frac = (t_ms % DAY_MS) as f64 / DAY_MS as f64;
+    (1.0 - (2.0 * std::f64::consts::PI * frac).cos()) / 2.0
+}
+
 /// The deterministic Baseline levels of a Region at time `t_ms`.
 pub fn baseline(r: RegionId, t_ms: u64) -> Levels {
     let b = habitat_base(habitat(r));
@@ -322,6 +332,17 @@ mod tests {
         let desperate = initial_drives(NpcKind::Wolf, &depleted);
         assert!(desperate.hunger > calm.hunger);
         assert!(desperate.hunger_pressure > calm.hunger_pressure);
+    }
+
+    #[test]
+    fn day_phase_cycles_midday_to_midnight() {
+        assert!(day_phase(0) < 0.01, "t=0 is midday (nightness ~0)");
+        assert!(day_phase(DAY_MS / 2) > 0.99, "half a day later is midnight");
+        assert!(day_phase(DAY_MS) < 0.01, "a full cycle returns to midday");
+        for t in [0, 123_456, 600_001, 9_999_999] {
+            let p = day_phase(t);
+            assert!((0.0..=1.0).contains(&p));
+        }
     }
 
     #[test]

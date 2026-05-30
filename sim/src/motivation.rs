@@ -64,6 +64,9 @@ pub struct Perception {
     pub herd: Vec<Sensed>,
     /// Local grass level 0..1 (deer grazing substrate).
     pub grass: f64,
+    /// Day/night phase 0 (midday) .. 1 (midnight) — the "nightness" of the world
+    /// right now. Agent extension (EXTENSIONS.md): modulates temperament.
+    pub phase: f64,
 }
 
 impl Perception {
@@ -235,9 +238,17 @@ pub fn decide(
     drives.safety_pressure =
         integrate(drives.safety_pressure, threat_act, dt_s, params.safety_tau_s, params.pressure_cap);
 
-    // 4. Goal arbitration: bias × immediacy × (1 + pressure).
-    let hunger_score = hunger_act * params.hunger_bias * (1.0 + drives.hunger_pressure);
-    let safety_score = threat_act * params.safety_bias * (1.0 + drives.safety_pressure);
+    // 4. Goal arbitration: bias × immediacy × (1 + pressure). Diurnal temperament
+    //    (agent extension) tilts the bias by the day/night phase: wolves bolder at
+    //    night, deer warier.
+    const NIGHT_TILT: f64 = 0.6;
+    let night = perc.phase.clamp(0.0, 1.0);
+    let (hunger_bias, safety_bias) = match kind {
+        NpcKind::Wolf => (params.hunger_bias * (1.0 + NIGHT_TILT * night), params.safety_bias),
+        NpcKind::Deer => (params.hunger_bias, params.safety_bias * (1.0 + NIGHT_TILT * night)),
+    };
+    let hunger_score = hunger_act * hunger_bias * (1.0 + drives.hunger_pressure);
+    let safety_score = threat_act * safety_bias * (1.0 + drives.safety_pressure);
 
     let safety_active = safety_score > params.idle_eps && threat_act > 0.0;
     let hunger_active = hunger_score > params.idle_eps;
@@ -470,6 +481,52 @@ mod tests {
             decide(NpcKind::Wolf, &perc, &mut d, &params, DT);
         }
         assert!(d.hunger_pressure < 0.05, "got {}", d.hunger_pressure);
+    }
+
+    #[test]
+    fn wolf_is_bolder_at_night() {
+        // A wolf at the carcass under threat: by day safety wins (flee); by night
+        // its boldness lifts hunger over safety (fight-to-hold). Only `phase` differs.
+        let (params, _) = wolf();
+        let make = |phase: f64| {
+            let mut perc = Perception::at(P2::new(0, 0));
+            perc.phase = phase;
+            perc.food = vec![Sensed { id: 5, pos: P2::new(150, 0) }];
+            perc.threats = vec![Sensed { id: 9, pos: P2::new(200, 0) }];
+            perc.rivals = vec![Sensed { id: 9, pos: P2::new(200, 0) }];
+            perc.being_attacked = true;
+            perc
+        };
+        let mut day_d = Drives { hunger: 0.8, ..Default::default() };
+        let mut night_d = Drives { hunger: 0.8, ..Default::default() };
+        assert_eq!(
+            decide(NpcKind::Wolf, &make(0.0), &mut day_d, &params, DT),
+            Decision::Flee(P2::new(200, 0))
+        );
+        assert_eq!(
+            decide(NpcKind::Wolf, &make(1.0), &mut night_d, &params, DT),
+            Decision::Attack(9, P2::new(200, 0))
+        );
+    }
+
+    #[test]
+    fn deer_is_warier_at_night() {
+        // A deer with a mild, distant threat grazes by day but flees at night.
+        let params = Params::for_kind(NpcKind::Deer);
+        let make = |phase: f64| {
+            let mut perc = Perception::at(P2::new(0, 0));
+            perc.phase = phase;
+            perc.grass = 1.0;
+            perc.threats = vec![Sensed { id: 9, pos: P2::new(840, 0) }]; // mild proximity
+            perc
+        };
+        let mut day_d = Drives { hunger: 0.5, ..Default::default() };
+        let mut night_d = Drives { hunger: 0.5, ..Default::default() };
+        assert_eq!(decide(NpcKind::Deer, &make(0.0), &mut day_d, &params, DT), Decision::Graze);
+        assert_eq!(
+            decide(NpcKind::Deer, &make(1.0), &mut night_d, &params, DT),
+            Decision::Flee(P2::new(840, 0))
+        );
     }
 
     #[test]

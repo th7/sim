@@ -368,10 +368,12 @@ impl RealmWorld {
             .collect();
 
         let recent = (4 * dt_ms).max(1);
+        let phase = ecosystem::day_phase(clock_ms);
         for (e, kind, self_id, pos, drives, hurt) in npcs {
             let self_p = P2::new(pos.x, pos.y);
             let params = Params::for_kind(kind);
             let mut perc = Perception::at(self_p);
+            perc.phase = phase;
 
             for &(id, bp, what) in &beings {
                 if id == self_id {
