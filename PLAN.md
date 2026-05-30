@@ -144,3 +144,16 @@ prove consequential in the Decision log below.
   yield 3 meat, wolf 2; player harvest also yields 1 Hide; carcasses rot after 60 s.
 - **Combat constants** (`world.rs`): attack 10 dmg, melee range² 700², cooldown 500 ms, eat feeds 0.4
   hunger/meat. Tunable; chosen so hunts and feeds terminate within a short observation.
+- **Warm/cold boundary keyed on the Player Warm set** (`player_warm_chunks` = union of Players' 3×3),
+  *not* `labeler.owned_chunks()`. This is what realizes ADR-0005: NPCs ride the Player-driven warm set and
+  dissolve when it recedes, so they never keep a region hot on their own. Resolves the slice-3 flag.
+- **Dissolve folds `survivors − materialized` per stratum into the Region Disturbance** (÷ capacity), so
+  intra-region wandering nets to ~0 while *kills* leave a real, healing depletion. Caps: deer 4, wolf 2/chunk.
+- **Wildlife is a Sim toggle, default OFF** (`set_wildlife`). Core unit/integration/e2e tests run in the
+  empty world they were written for; the game server enables it (`SIM_WILDLIFE`, default on in the bin).
+  Auto-wildlife load was making the position-tuned build e2e flaky — the toggle cleanly separates concerns.
+- **FLAGGED:** Region **Disturbances** live in memory (`Sim.wild_disturb`), so cross-restart persistence of
+  the healing field is not yet wired through the Datastore. Within a session the overhunt→deplete→heal loop
+  is complete and tested; cross-restart is a follow-up (needs a PersistEvent + schema).
+- **FLAGGED:** grass grazing does not yet write a grass Disturbance (deer graze abstractly against the
+  Region's grass level); only deer/wolf population changes feed back. Follow-up.

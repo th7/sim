@@ -37,6 +37,11 @@ async fn main() {
             Sim::new()
         }
     };
+    // The deployed game runs the wildlife ecosystem (NPCs + Motivation). Off by
+    // default in the library so core tests see an empty world; on here unless
+    // SIM_WILDLIFE=0.
+    sim.set_wildlife(std::env::var("SIM_WILDLIFE").map(|v| v != "0").unwrap_or(true));
+
     // Anchor the clock to wall-clock so depletion respawn times are absolute and
     // survive a restart (matching the Elixir wall-clock `depleted_until`).
     let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);

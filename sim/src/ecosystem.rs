@@ -9,7 +9,7 @@
 //! Pure and deterministic: hashing replaces stored state, time is an explicit
 //! sim-clock `t_ms`, and there is no wall-clock or global RNG.
 
-use crate::geometry::{floor_div, CHUNK_SIZE};
+use crate::geometry::{chunk_center, floor_div, ChunkCoord, CHUNK_SIZE};
 use crate::motivation::{Drives, NpcKind};
 
 /// Worley cell edge, in sub-units. ~8 chunks, so a Region is a few-chunk
@@ -105,6 +105,12 @@ pub fn region(x: i64, y: i64) -> RegionId {
         }
     }
     RegionId { gx: best.0 as i32, gy: best.1 as i32 }
+}
+
+/// The Region a whole chunk belongs to (taken at its center).
+pub fn region_of_chunk(c: ChunkCoord) -> RegionId {
+    let (x, y) = chunk_center(c);
+    region(x, y)
 }
 
 /// A Region's Habitat (deterministic).

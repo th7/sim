@@ -294,6 +294,47 @@ impl RealmWorld {
             .collect()
     }
 
+    /// The Player Warm set: every chunk within a 3×3 footprint of some Player.
+    /// NPCs do not contribute (ADR-0005) — this is what keeps wildlife alive.
+    pub fn player_warm_chunks(&self) -> BTreeSet<ChunkCoord> {
+        let mut s = BTreeSet::new();
+        for (_, (pos, _)) in self.world.query::<(&Position, &PlayerControlled)>().iter() {
+            for c in pos.chunk().footprint_3x3() {
+                s.insert(c);
+            }
+        }
+        s
+    }
+
+    /// Count (deer, wolves) currently standing in chunk `coord`.
+    pub fn npc_counts_in(&self, coord: ChunkCoord) -> (u32, u32) {
+        let mut deer = 0;
+        let mut wolf = 0;
+        for (_, (pos, npc)) in self.world.query::<(&Position, &Npc)>().iter() {
+            if pos.chunk() == coord {
+                match npc.kind {
+                    NpcKind::Deer => deer += 1,
+                    NpcKind::Wolf => wolf += 1,
+                }
+            }
+        }
+        (deer, wolf)
+    }
+
+    /// Despawn every NPC standing in chunk `coord` (dissolve on cooldown).
+    pub fn despawn_npcs_in(&mut self, coord: ChunkCoord) {
+        let es: Vec<Entity> = self
+            .world
+            .query::<(&Position, &Npc)>()
+            .iter()
+            .filter(|(_, (p, _))| p.chunk() == coord)
+            .map(|(e, _)| e)
+            .collect();
+        for e in es {
+            self.despawn_npc(e);
+        }
+    }
+
     /// The **Motivation** pre-movement phase (ADR-0004/0005): for each NPC, build
     /// its cluster-local [`Perception`], run [`decide`], and write the resulting
     /// movement Intent into its `Velocity`. Runs serially before the movement

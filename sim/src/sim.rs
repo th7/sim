@@ -11,6 +11,7 @@ use crate::components::{Inventory, Position, PortalDirection, StructureKind};
 use crate::consts::{FLUSH_MS, TICK_MS};
 use crate::motivation::{Drives, NpcKind};
 use crate::datastore::{Datastore, DurableStore, MemStore, PersistEvent, PlayerRecord};
+use crate::ecosystem::{self, Stratum};
 use crate::geometry::{chunk_center, coord_for, ChunkCoord};
 use crate::ids::{ClusterId, Realm};
 use crate::verbs::VerbError;
@@ -39,6 +40,40 @@ pub struct Sim {
     next_instance: u64,
     pool: Option<crate::parallel::WorkerPool>,
     datastore: Datastore<BoxedStore>,
+    /// Sparse, self-healing per-Region wildlife Disturbances (ADR-0006). In
+    /// memory for now; cross-restart persistence is a flagged follow-up.
+    wild_disturb: BTreeMap<ecosystem::RegionId, ecosystem::Disturbance>,
+    /// Chunks currently materialized into live wildlife, with the counts spawned
+    /// (deer, wolf) — used to fold warm activity back into the Disturbance.
+    wild_pop: BTreeMap<ChunkCoord, (u32, u32)>,
+    /// Whether the warm/cold wildlife boundary runs. Off by default so core
+    /// tests/e2e see an empty world; the game server turns it on.
+    wildlife: bool,
+}
+
+/// Max wildlife per chunk at a level of 1.0 (the spawn-count capacities).
+const DEER_CAP: u32 = 4;
+const WOLF_CAP: u32 = 2;
+
+/// Deterministic seed for a chunk's spawn rolls, bucketed by ~10 s of sim time so
+/// the same chunk is stable while a Player lingers but varies across long gaps.
+fn wild_seed(c: ChunkCoord, salt: u64, clock_ms: u64) -> u64 {
+    (c.cx as u64).wrapping_mul(0x9E3779B97F4A7C15)
+        ^ (c.cy as u64).rotate_left(21)
+        ^ salt.wrapping_mul(0x632BE5AB1A55F0F1)
+        ^ (clock_ms / 10_000)
+}
+
+/// A seeded spawn position inside chunk `c` (margin off the edges).
+fn seeded_pos(c: ChunkCoord, i: u64, salt: u64) -> Position {
+    use crate::geometry::CHUNK_SIZE;
+    let mut rng = crate::harness::Rng::new(wild_seed(c, salt ^ i.wrapping_mul(0x9E3779B1), 0));
+    let margin = 1_000;
+    let span = (CHUNK_SIZE - 2 * margin).max(1) as u64;
+    Position {
+        x: c.cx as i64 * CHUNK_SIZE + margin + rng.below(span) as i64,
+        y: c.cy as i64 * CHUNK_SIZE + margin + rng.below(span) as i64,
+    }
 }
 
 /// The durable backend `Sim` persists through — boxed so it can be either an
@@ -71,7 +106,16 @@ impl Sim {
             next_instance: 1,
             pool: None,
             datastore: Datastore::new(Box::new(store)),
+            wild_disturb: BTreeMap::new(),
+            wild_pop: BTreeMap::new(),
+            wildlife: false,
         }
+    }
+
+    /// Enable or disable the wildlife ecosystem (NPCs materializing near players).
+    /// Off by default; the game server enables it.
+    pub fn set_wildlife(&mut self, on: bool) {
+        self.wildlife = on;
     }
 
     /// Resume from an existing store (kept for tests that round-trip
@@ -166,6 +210,61 @@ impl Sim {
         self.overworld.spawn_npc(kind, pos, drives)
     }
 
+    /// The warm/cold boundary (ADR-0005/0006): materialize wildlife from each
+    /// Region's level into chunks that became Player-warm, and dissolve chunks
+    /// that went cold back into their Region's Disturbance. Overworld only.
+    fn update_wildlife(&mut self, clock_ms: u64) {
+        if !self.wildlife {
+            return;
+        }
+        let warm = self.overworld.player_warm_chunks();
+
+        // Dissolve: chunks that left the warm set fold their net population
+        // change (survivors − materialized) into the Region's Disturbance, heal-able.
+        let cold: Vec<ChunkCoord> =
+            self.wild_pop.keys().filter(|c| !warm.contains(c)).copied().collect();
+        for c in cold {
+            let (md, mw) = self.wild_pop.remove(&c).unwrap();
+            let (sd, sw) = self.overworld.npc_counts_in(c);
+            let region = ecosystem::region_of_chunk(c);
+            let d = self.wild_disturb.entry(region).or_default();
+            d.disturb(Stratum::Deer, (sd as f64 - md as f64) / DEER_CAP as f64, clock_ms);
+            d.disturb(Stratum::Wolf, (sw as f64 - mw as f64) / WOLF_CAP as f64, clock_ms);
+            self.overworld.despawn_npcs_in(c);
+        }
+        // Drop fully-healed Disturbances to keep the set sparse.
+        self.wild_disturb.retain(|_, d| !d.is_settled(clock_ms, 0.01));
+
+        // Materialize: chunks newly in the warm set spawn wildlife from their
+        // Region level, with spawn-derived temperament (ADR-0006 keystone).
+        let fresh: Vec<ChunkCoord> =
+            warm.iter().filter(|c| !self.wild_pop.contains_key(c)).copied().collect();
+        for c in fresh {
+            let region = ecosystem::region_of_chunk(c);
+            let dist = self.wild_disturb.get(&region).copied().unwrap_or_default();
+            let lv = ecosystem::levels(region, clock_ms, &dist);
+            let dn = ecosystem::spawn_count(lv.deer, DEER_CAP, wild_seed(c, 0xD, clock_ms));
+            let wn = ecosystem::spawn_count(lv.wolf, WOLF_CAP, wild_seed(c, 0x7, clock_ms));
+            for i in 0..dn {
+                let p = seeded_pos(c, i as u64, 0xDEE2);
+                self.overworld.spawn_npc(NpcKind::Deer, p, ecosystem::initial_drives(NpcKind::Deer, &lv));
+            }
+            for i in 0..wn {
+                let p = seeded_pos(c, i as u64, 0x401F);
+                self.overworld.spawn_npc(NpcKind::Wolf, p, ecosystem::initial_drives(NpcKind::Wolf, &lv));
+            }
+            self.wild_pop.insert(c, (dn, wn));
+        }
+    }
+
+    /// Region wildlife levels at a world point, given current Disturbances (test
+    /// observability of the healing field).
+    pub fn region_levels_at(&self, x: i64, y: i64) -> ecosystem::Levels {
+        let region = ecosystem::region(x, y);
+        let dist = self.wild_disturb.get(&region).copied().unwrap_or_default();
+        ecosystem::levels(region, self.clock_ms, &dist)
+    }
+
     /// Snapshot of every Overworld NPC (kind, position, drives, health).
     pub fn npcs(&self) -> Vec<(hecs::Entity, NpcKind, Position, Drives, crate::components::Health)> {
         self.overworld.npcs()
@@ -218,6 +317,7 @@ impl Sim {
             inst.tick(TICK_MS, self.clock_ms);
         }
         self.process_portals();
+        self.update_wildlife(self.clock_ms);
         self.overlay_persisted_overworld();
         self.drain_persistence();
         self.maybe_flush();
@@ -248,6 +348,7 @@ impl Sim {
             tick_realm(inst);
         }
         self.process_portals();
+        self.update_wildlife(self.clock_ms);
         self.overlay_persisted_overworld();
         self.drain_persistence();
         self.maybe_flush();
