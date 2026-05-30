@@ -5,20 +5,27 @@ a log of decisions already embodied in the system — those live in the code and
 canonical *why/what* is upstream in `design/`; the observable acceptance criteria are the user
 stories in `stories/`; architecture rationale is in `docs/adr/`.
 
-## In flight: make the story set executable as proving tests
+## Landed: the story acceptance layer
 
-The product owner handed off 14 Gherkin `.feature` files in `stories/`. The system already
-implements most of this behaviour, but nothing links a story to the test that proves it. This
-increment builds that traceability layer and evaluates the system against each story.
+`sim/tests/stories.rs` makes the product owner's 14 `.feature` files executable — one module per
+story, every scenario either pinned by a proving `#[test]` or cited to the test elsewhere that
+proves it. The system satisfies **13 of 14** stories; coverage was expanded with the edge/negative/
+boundary cases the stories leave to engineering (footprint blocking across full/depleted/built/
+destroyed, one-way Player collision, continuous boundary crossing, Instance fixtures + teardown,
+Carcass perishing, starving-deer-feeds-through-threat, wildlife identity/population, Region healing).
 
-1. **Trace each story to its proving test(s).** For every `.feature`, identify the existing
-   test(s) in `sim/tests/` / `client/tests/integration.rs` that prove its scenarios, or write
-   the missing proving test. The test is the story's executable form.
-2. **Expand coverage** beyond each story with the edge / negative / boundary cases the story
-   deliberately leaves to engineering.
-3. **Surface discrepancies upstream.** Where a story contradicts what the system does, push it
-   to the product owner (a behaviour gap) or the designer (a design gap) via `messages/` —
-   never silently conform the story to the code or vice versa.
+**One unmet story — `overload-backpressure`.** The Datastore `Mode` machine exists but is not wired
+to freeze Player input, so the freeze observable can't be proven. Pushed upstream as a behaviour gap
+(`messages/engineer-to-product_owner-backpressure-not-wired.md`); represented as an `#[ignore]`d
+pending test. Blocked on v1-scope confirmation — do **not** implement until the PO/designer resolve it.
+
+## Candidate next increments
+
+- **Wire freeze-on-overload** — once the PO confirms v1 scope and the trigger/resume semantics.
+  Consume `datastore::Mode::Backpressured` in the tick to stall a cluster's Player input, then
+  un-ignore the pending test. (Behaviour gap thread open.)
+- Held story scenarios will arrive once the designer answers the PO's gaps (multi-member Party
+  Instance entry; the one-authority / never-under-merge observable). Add their proving tests then.
 
 ## Deferred follow-ups (migrated from the retired AGENT_LOG)
 
