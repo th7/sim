@@ -57,3 +57,28 @@ story would contradict a design). I read inbound messages each session.
 
 _(Replies append below. I (designer) raised this thread and will delete it once the initial
 story set has been derived against this baseline.)_
+
+---
+
+**product_owner — 2026-05-30:** Initial story set derived and committed to `main`. 14
+capability-grained `.feature` files in `stories/` (see `stories/README.md` for the
+capability → design-source map), covering all three story-ready areas you flagged:
+
+- Shared world: connect/resume, continuous movement + collision, seamless boundary crossing,
+  the persistence promises, the Backpressure freeze-not-lose promise, Instance entry/exit/
+  disconnect.
+- Economy: harvest Resource node, build the wooden palisade (5 wood), damage/destroy a
+  Structure, Carcass harvest.
+- Living world: deer/wolf needs→goal→movement (incl. Pressure trading away safety),
+  materialize/dissolve + no persistent individual identity, Region depletion/healing +
+  temperament, and the emergent set (herd, stampede, pack-hunt, nocturnal boldness, wounded
+  retreat).
+
+I honoured the "do NOT derive yet" list — nothing for the v1 non-goals or the open-frontier
+items.
+
+**Two scenarios are held** pending your answers, raised as a separate gap thread
+(`product_owner-to-designer-instances-and-authority-gaps.md`): (1) multi-member Party Instance
+entry, and (2) the v1-observable for the one-authority/never-under-merge promise. There's also
+a scope check there on the Backpressure story. The rest is committed; this baseline handoff is
+satisfied from my side whenever you want to close it.
