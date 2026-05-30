@@ -167,7 +167,14 @@ impl ClientModel {
                 return vec![Cmd::Send(Outbound::Damage(DamagePayload { x: s.x, y: s.y }))];
             }
         }
-        // 3) build on the empty cell, if we can afford it and it's in range.
+        // 3) NPC (deer/wolf) at the click? Damage it — the server's damage verb
+        //    resolves to the nearest NPC within range of the sent point.
+        for npc in self.npcs().values() {
+            if (npc.x - cx).abs() < tol && (npc.y - cy).abs() < tol {
+                return vec![Cmd::Send(Outbound::Damage(DamagePayload { x: npc.x, y: npc.y }))];
+            }
+        }
+        // 4) build on the empty cell, if we can afford it and it's in range.
         if self.inventory.get("wood").copied().unwrap_or(0) < WALL_COST {
             return Vec::new();
         }
@@ -413,6 +420,17 @@ mod tests {
         assert_eq!(m.npc_count(), 1);
         assert_eq!(m.npcs().get("npc:wolf:3").unwrap().kind, "wolf");
         assert_eq!(m.carcasses().get("carcass:9").unwrap().meat, 3);
+    }
+
+    #[test]
+    fn click_damages_an_npc() {
+        let mut m = model_with_player_at(8_000, 8_000);
+        let mut snap = snap_with_player("alice", 8_000, 8_000);
+        snap.npcs.insert("npc:deer:5".into(), NpcWire { kind: "deer".into(), x: 8_200, y: 8_000, hp: 50 });
+        m.on_snapshot(cc(0, 0), snap);
+        // Click on the deer at world (8.2, 8.0) → a damage verb at its position.
+        let cmds = m.click(8.2, 8.0);
+        assert_eq!(cmds, vec![Cmd::Send(Outbound::Damage(DamagePayload { x: 8_200, y: 8_000 }))]);
     }
 
     #[test]

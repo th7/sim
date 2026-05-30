@@ -10,10 +10,10 @@ game; the test suite is green, so these are gaps between the tests and real beha
   scaled to Region size, so incidental predation dips-and-heals instead of zeroing a territory in ~4 kills.)
   Regression: `sim/tests/chunk_reload.rs`.
 
-- [ ] **Player clicking a deer seems to have no effect.**
-  _Suspected: the client click router (`client/src/model.rs::decide_click`) has no NPC case — it harvests a
-  tree, damages a structure, else builds. A click on a deer matches none, so no `damage` verb is ever sent.
-  The server-side NPC damage path exists but is never invoked from the client._
+- [x] **Player clicking a deer seems to have no effect.** _Fixed._ The client click router
+  (`client/src/model.rs::decide_click`) had no NPC case — it harvested a tree, damaged a structure, else
+  built — so a deer click matched none and sent no `damage` verb. Added an NPC branch (tree → structure →
+  NPC → build). Regression: `client/src/model.rs::click_damages_an_npc`.
 
 - [ ] **Wildlife does not seem to interact (no pursuing or killing).**
   _Suspected: perception range is ~1 world unit, but materialized wildlife spawns roughly one animal per
