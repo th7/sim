@@ -27,16 +27,23 @@ pending test. Blocked on v1-scope confirmation — do **not** implement until th
 - Held story scenarios will arrive once the designer answers the PO's gaps (multi-member Party
   Instance entry; the one-authority / never-under-merge observable). Add their proving tests then.
 
+## Landed: lossless crash on a tick panic
+
+A tick panic no longer poisons the shared mutex and silently freezes the world. Per the chosen
+model, a panic takes the whole runtime **down** (no in-process recovery / per-cluster re-home — the
+runtime is presumed corrupt), but `flush_now()` first makes the durable store as current as possible
+(fresh player positions + drained persist events), so loss is bounded to the unflushed window. The
+transport aborts after the flush for a supervisor to restart from the durable store.
+
 ## Deferred follow-ups
 
-Fault tolerance (was the ADR-0002 acceptance checklist; the runtime trades OTP's per-process
-isolation for by-construction determinism, so these are owed):
+Fault tolerance — residual:
 
-- **Catch per-cluster / per-worker panics and re-home** the affected cluster from the Datastore
-  (the durability boundary already bounds loss to the unflushed window).
-- **Supervise the tick loop** so a panic restarts the runtime rather than exiting the process.
-- **Fast, lossless restart-from-Datastore** to compensate for the loss of hot code reload (deploys
-  are process restarts).
+- **`tick_parallel` / `WorkerPool` panic path is unguarded.** Production uses serial `tick()`
+  (now `tick_or_flush`); the pool's worker-thread panic still propagates via `join().expect(...)`.
+  If the server ever drives the parallel tick, give it the same flush-then-down treatment.
+- **External supervisor + restart-from-Datastore** is deployment config (systemd/orchestrator), not
+  code; the rehydrate-on-connect path already restores durable state.
 
 Client / wire (migrated from the retired `docs/frontend-port-notes.md`):
 
