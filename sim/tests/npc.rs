@@ -2,7 +2,7 @@
 //! actors through the Sim's tick (movement Intent). Combat/eating land in a
 //! later slice; here we pin that NPCs *move* the way their Drives dictate.
 
-use sim::components::Position;
+use sim::components::{Inventory, Item, Position};
 use sim::motivation::{Drives, NpcKind};
 use sim::sim::Sim;
 
@@ -16,6 +16,18 @@ fn npc_x(sim: &Sim, kind: NpcKind) -> i64 {
         .into_iter()
         .find(|(_, k, _, _, _)| *k == kind)
         .map(|(_, _, p, _, _)| p.x)
+        .expect("npc present")
+}
+
+fn has_npc(sim: &Sim, kind: NpcKind) -> bool {
+    sim.npcs().iter().any(|(_, k, _, _, _)| *k == kind)
+}
+
+fn hunger(sim: &Sim, kind: NpcKind) -> f64 {
+    sim.npcs()
+        .into_iter()
+        .find(|(_, k, _, _, _)| *k == kind)
+        .map(|(_, _, _, d, _)| d.hunger)
         .expect("npc present")
 }
 
@@ -63,4 +75,53 @@ fn npc_motion_is_deterministic() {
         (npc_x(&sim, NpcKind::Wolf), npc_x(&sim, NpcKind::Deer))
     };
     assert_eq!(run(), run(), "identical setups must produce identical motion");
+}
+
+#[test]
+fn player_kills_deer_into_carcass_then_harvests_meat_and_hide() {
+    let mut sim = Sim::new();
+    sim.connect_at("alice", pos(8_000, 8_000), Inventory::default());
+    sim.spawn_npc(NpcKind::Deer, pos(8_300, 8_000), Drives::default());
+
+    // Two 25-damage clicks kill the 50-HP deer (no tick between, so it can't flee).
+    sim.damage("alice", 8_300, 8_000).unwrap();
+    sim.damage("alice", 8_300, 8_000).unwrap();
+    assert!(!has_npc(&sim, NpcKind::Deer), "deer should be dead");
+
+    // The Carcass it left is harvestable into meat + hide.
+    sim.harvest("alice", 8_300, 8_000).unwrap();
+    let inv = sim.inventory_of("alice").unwrap();
+    assert_eq!(inv.items.get(&Item::Meat).copied(), Some(3));
+    assert_eq!(inv.items.get(&Item::Hide).copied(), Some(1));
+}
+
+#[test]
+fn wolf_kills_and_eats_a_deer() {
+    let mut sim = Sim::new();
+    sim.spawn_npc(NpcKind::Wolf, pos(8_000, 8_000), Drives { hunger: 0.9, ..Default::default() });
+    sim.spawn_npc(NpcKind::Deer, pos(8_400, 8_000), Drives::default());
+
+    for _ in 0..400 {
+        sim.tick();
+        if !has_npc(&sim, NpcKind::Deer) && hunger(&sim, NpcKind::Wolf) < 0.4 {
+            break;
+        }
+    }
+    assert!(!has_npc(&sim, NpcKind::Deer), "wolf should have killed the deer");
+    assert!(hunger(&sim, NpcKind::Wolf) < 0.6, "wolf should have eaten and be less hungry");
+    assert!(has_npc(&sim, NpcKind::Wolf), "wolf survives (deer cannot fight back)");
+}
+
+#[test]
+fn attacked_wolf_flees_when_not_hungry() {
+    let mut sim = Sim::new();
+    sim.connect_at("alice", pos(8_000, 8_000), Inventory::default());
+    sim.spawn_npc(NpcKind::Wolf, pos(8_500, 8_000), Drives { hunger: 0.2, ..Default::default() });
+
+    sim.damage("alice", 8_500, 8_000).unwrap(); // provoke it
+    let before = npc_x(&sim, NpcKind::Wolf);
+    for _ in 0..5 {
+        sim.tick();
+    }
+    assert!(npc_x(&sim, NpcKind::Wolf) > before, "a provoked, unhungry wolf flees the player");
 }

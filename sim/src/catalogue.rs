@@ -46,3 +46,12 @@ pub fn npc_max_hp(kind: crate::motivation::NpcKind) -> i64 {
         NpcKind::Deer => 50,
     }
 }
+
+/// Units of meat a kind's Carcass holds (one per eat/harvest unit).
+pub fn carcass_meat(kind: crate::motivation::NpcKind) -> i64 {
+    use crate::motivation::NpcKind;
+    match kind {
+        NpcKind::Deer => 3,
+        NpcKind::Wolf => 2,
+    }
+}

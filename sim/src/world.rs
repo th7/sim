@@ -8,7 +8,10 @@
 //! the partition (merge/split); then respawn due resource nodes. Chunk static
 //! content is hydrated lazily when a chunk first becomes owned by a cluster.
 
-use crate::catalogue::{npc_max_hp, resource_footprint, resource_yield, structure_footprint};
+use crate::catalogue::{
+    carcass_meat as npc_carcass_meat, npc_max_hp, resource_footprint, resource_yield,
+    structure_footprint,
+};
 use crate::collision::{clamp_step, Obstacle};
 use crate::components::*;
 use crate::consts::{DAMAGE_PER_CLICK, DEFAULT_SPEED, IDLE_TIMEOUT_MS, RESPAWN_MS};
@@ -27,6 +30,17 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Optional bounding rectangle (sub-units) the movement integrator clamps to.
 /// Instances are bounded to their 3×3 grid; the Overworld is unbounded.
 pub type Bounds = (i64, i64, i64, i64);
+
+/// Damage one NPC `attack` deals.
+const NPC_ATTACK_DAMAGE: i64 = 10;
+/// Melee range² for an NPC attack / eat (≈0.7 unit).
+const NPC_ATTACK_RANGE_SQ: i64 = 700 * 700;
+/// NPC action (attack/eat) cooldown.
+const NPC_ACT_COOLDOWN_MS: u64 = 500;
+/// How long a Carcass lasts before rotting away.
+const CARCASS_PERISH_MS: u64 = 60_000;
+/// Hunger removed per unit of meat eaten.
+const EAT_FEED: f64 = 0.4;
 
 /// What an NPC's perception classifies a nearby being as.
 #[derive(Clone, Copy)]
@@ -296,32 +310,61 @@ impl RealmWorld {
             beings.push((pc.actor.0, P2::new(pos.x, pos.y), Sensable::Player));
         }
 
-        // The NPCs to drive this tick.
-        let npcs: Vec<(Entity, NpcKind, u64, Position, Drives)> = self
+        // Carcasses are edible food the wolves can sense.
+        let carcasses: Vec<P2> = self
             .world
-            .query::<(&Npc, &Position, &Drives)>()
+            .query::<(&Position, &Carcass)>()
             .iter()
-            .map(|(e, (npc, pos, d))| (e, npc.kind, npc.actor.0, *pos, *d))
+            .map(|(_, (p, _))| P2::new(p.x, p.y))
             .collect();
 
-        for (e, kind, self_id, pos, drives) in npcs {
+        // The NPCs to drive this tick, with their recent-damage memory.
+        let npcs: Vec<(Entity, NpcKind, u64, Position, Drives, Option<Hurt>)> = self
+            .world
+            .query::<(&Npc, &Position, &Drives, Option<&Hurt>)>()
+            .iter()
+            .map(|(e, (npc, pos, d, h))| (e, npc.kind, npc.actor.0, *pos, *d, h.copied()))
+            .collect();
+
+        let recent = (4 * dt_ms).max(1);
+        for (e, kind, self_id, pos, drives, hurt) in npcs {
             let self_p = P2::new(pos.x, pos.y);
             let params = Params::for_kind(kind);
             let mut perc = Perception::at(self_p);
+
             for &(id, bp, what) in &beings {
-                if id == self_id {
-                    continue;
-                }
-                if dist_sq(self_p, bp) > params.perception_range_sq {
+                if id == self_id || dist_sq(self_p, bp) > params.perception_range_sq {
                     continue;
                 }
                 match (kind, what) {
                     (NpcKind::Wolf, Sensable::Npc(NpcKind::Deer)) => {
                         perc.prey.push(Sensed { id, pos: bp })
                     }
+                    // Rival wolves contest a carcass (fight-to-hold).
+                    (NpcKind::Wolf, Sensable::Npc(NpcKind::Wolf)) => {
+                        perc.rivals.push(Sensed { id, pos: bp })
+                    }
                     (NpcKind::Deer, Sensable::Npc(NpcKind::Wolf))
                     | (NpcKind::Deer, Sensable::Player) => perc.threats.push(Sensed { id, pos: bp }),
                     _ => {}
+                }
+            }
+
+            // Recent damage: spike safety and treat the attacker as a threat.
+            if let Some(h) = hurt {
+                if clock_ms.saturating_sub(h.last_ms) <= recent {
+                    perc.being_attacked = true;
+                    if let Some(&(_, bp, _)) = beings.iter().find(|(id, _, _)| *id == h.by) {
+                        perc.threats.push(Sensed { id: h.by, pos: bp });
+                    }
+                }
+            }
+
+            if kind == NpcKind::Wolf {
+                for &cp in &carcasses {
+                    if dist_sq(self_p, cp) <= params.perception_range_sq {
+                        perc.food.push(Sensed { id: 0, pos: cp });
+                    }
                 }
             }
             if kind == NpcKind::Deer {
@@ -341,7 +384,140 @@ impl RealmWorld {
                 v.vx = vx;
                 v.vy = vy;
             }
+            let _ = self.world.insert_one(e, NpcDecision(decision));
         }
+    }
+
+    /// Post-movement resolution of NPC verbs (ADR-0004 Actions): apply `attack`
+    /// damage to in-range targets and `eat` drain from in-range carcasses, each
+    /// gated by the actor's cooldown. Players take no damage (no `Health`) —
+    /// structural invulnerability. Deaths become Carcasses.
+    pub fn resolve_npc_actions(&mut self, clock_ms: u64) {
+        let acts: Vec<(Entity, u64, Position, Decision, u64)> = self
+            .world
+            .query::<(&Npc, &Position, &NpcDecision, Option<&ActReady>)>()
+            .iter()
+            .map(|(e, (npc, pos, dec, ready))| {
+                (e, npc.actor.0, *pos, dec.0, ready.map(|r| r.at_ms).unwrap_or(0))
+            })
+            .collect();
+
+        let carcasses: Vec<(Entity, P2, i64)> = self
+            .world
+            .query::<(&Position, &Carcass)>()
+            .iter()
+            .map(|(e, (p, c))| (e, P2::new(p.x, p.y), c.meat))
+            .collect();
+
+        let mut damage: Vec<(Entity, i64, u64)> = Vec::new(); // (target, dmg, attacker id)
+        let mut eats: Vec<(Entity, Entity)> = Vec::new(); // (npc, carcass)
+        let mut cooldowns: Vec<(Entity, u64)> = Vec::new();
+
+        for (e, self_id, pos, decision, ready) in acts {
+            if clock_ms < ready {
+                continue;
+            }
+            let self_p = P2::new(pos.x, pos.y);
+            match decision {
+                Decision::Attack(target_id, _) => {
+                    let Some(&te) = self.actor_index.get(&ActorId(target_id)) else { continue };
+                    let Ok(tp) = self.world.get::<&Position>(te).map(|p| *p) else { continue };
+                    if dist_sq(self_p, P2::new(tp.x, tp.y)) <= NPC_ATTACK_RANGE_SQ {
+                        damage.push((te, NPC_ATTACK_DAMAGE, self_id));
+                        cooldowns.push((e, clock_ms + NPC_ACT_COOLDOWN_MS));
+                    }
+                }
+                Decision::Eat(..) => {
+                    if let Some(&(ce, _, _)) = carcasses
+                        .iter()
+                        .filter(|(_, cp, _)| dist_sq(self_p, *cp) <= NPC_ATTACK_RANGE_SQ)
+                        .min_by_key(|(_, cp, _)| dist_sq(self_p, *cp))
+                    {
+                        eats.push((e, ce));
+                        cooldowns.push((e, clock_ms + NPC_ACT_COOLDOWN_MS));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Apply damage; record deaths.
+        let mut deaths: Vec<Entity> = Vec::new();
+        for (te, dmg, by) in damage {
+            let mut killed = false;
+            if let Ok(mut h) = self.world.get::<&mut Health>(te) {
+                h.hp -= dmg;
+                killed = h.hp <= 0;
+            }
+            let _ = self.world.insert_one(te, Hurt { last_ms: clock_ms, by });
+            if killed {
+                deaths.push(te);
+            }
+        }
+
+        // Apply eats: drain a carcass, feed the eater.
+        for (npc, carc) in eats {
+            let mut exhausted = false;
+            if let Ok(mut c) = self.world.get::<&mut Carcass>(carc) {
+                c.meat -= 1;
+                exhausted = c.meat <= 0;
+            }
+            if let Ok(mut d) = self.world.get::<&mut Drives>(npc) {
+                d.feed(EAT_FEED);
+            }
+            if exhausted {
+                self.despawn_wire_entity(carc);
+            }
+        }
+
+        for (e, at) in cooldowns {
+            let _ = self.world.insert_one(e, ActReady { at_ms: at });
+        }
+        for e in deaths {
+            self.kill_npc(e, clock_ms);
+        }
+    }
+
+    /// Turn a dying NPC into a Carcass at its position.
+    fn kill_npc(&mut self, e: Entity, clock_ms: u64) {
+        let pos = self.world.get::<&Position>(e).map(|p| *p).ok();
+        let kind = self.world.get::<&Npc>(e).map(|n| n.kind).ok();
+        self.despawn_npc(e);
+        if let (Some(pos), Some(kind)) = (pos, kind) {
+            let id = self.next_actor;
+            self.next_actor += 1;
+            let wid = WireId(format!("carcass:{id}"));
+            let ce = self.world.spawn((
+                pos,
+                Renderable,
+                Carcass { meat: npc_carcass_meat(kind), perish_at_ms: clock_ms + CARCASS_PERISH_MS },
+                wid.clone(),
+            ));
+            self.wire_index.insert(wid, ce);
+        }
+    }
+
+    /// Remove carcasses that have rotted away (past their perish time).
+    fn expire_carcasses(&mut self, clock_ms: u64) {
+        let gone: Vec<Entity> = self
+            .world
+            .query::<&Carcass>()
+            .iter()
+            .filter(|(_, c)| clock_ms >= c.perish_at_ms)
+            .map(|(e, _)| e)
+            .collect();
+        for e in gone {
+            self.despawn_wire_entity(e);
+        }
+    }
+
+    /// Despawn an entity that carries a WireId (carcass / static content),
+    /// keeping the wire index consistent.
+    fn despawn_wire_entity(&mut self, e: Entity) {
+        if let Ok(wid) = self.world.get::<&WireId>(e).map(|w| w.clone()) {
+            self.wire_index.remove(&wid);
+        }
+        let _ = self.world.despawn(e);
     }
 
     /// Remove a player from this realm. Returns its inventory + position (for a
@@ -539,6 +715,9 @@ impl RealmWorld {
     /// any newly-owned chunks, and respawn due resource nodes. Shared by the
     /// serial and parallel ticks; this is the serialized Labeler domain.
     fn reconcile_after_movement(&mut self, clock_ms: u64) -> Vec<TopologyEvent> {
+        // NPC verbs (attack/eat) resolve here so it covers both tick paths.
+        self.resolve_npc_actions(clock_ms);
+        self.expire_carcasses(clock_ms);
         let mut events = Vec::new();
         let crossings: Vec<(ActorId, ChunkCoord)> = self
             .actor_index
@@ -744,7 +923,11 @@ impl RealmWorld {
             return Err(VerbError::TooFar);
         }
         let node_wid = WireId(format!("tree:{tx}:{ty}"));
-        let node = self.wire_index.get(&node_wid).copied().ok_or(VerbError::NoTarget)?;
+        let node = match self.wire_index.get(&node_wid).copied() {
+            Some(n) => n,
+            // No tree there → try a Carcass at the click (player hunting economy).
+            None => return self.harvest_carcass(username, tx, ty),
+        };
 
         let (kind, item) = {
             match self.world.get::<&Gatherable>(node) {
@@ -783,6 +966,28 @@ impl RealmWorld {
             respawn_at_ms: respawn_at,
         }));
 
+        Ok(self.inventory_of(username).unwrap_or_default())
+    }
+
+    /// Harvest the Carcass at the click into meat + hide Items. Reuses the
+    /// harvest verb's range gate (already applied by the caller).
+    fn harvest_carcass(&mut self, username: &str, tx: i64, ty: i64) -> Result<Inventory, VerbError> {
+        let ce = self
+            .nearest_carcass_within(tx, ty, crate::consts::INTERACT_RANGE_SQ)
+            .ok_or(VerbError::NoTarget)?;
+        let meat = self.world.get::<&Carcass>(ce).map(|c| c.meat).unwrap_or(0);
+        let player_e = *self.username_index.get(username).ok_or(VerbError::NoPlayer)?;
+        {
+            let mut inv = self.world.get::<&mut Inventory>(player_e).map_err(|_| VerbError::NoPlayer)?;
+            if meat > 0 {
+                *inv.items.entry(Item::Meat).or_insert(0) += meat as u32;
+            }
+            *inv.items.entry(Item::Hide).or_insert(0) += 1;
+        }
+        self.despawn_wire_entity(ce);
+        if let Some(ev) = self.player_upsert(username) {
+            self.emit(ev);
+        }
         Ok(self.inventory_of(username).unwrap_or_default())
     }
 
@@ -853,38 +1058,88 @@ impl RealmWorld {
     /// Damage the structure at `(x, y)` by [`DAMAGE_PER_CLICK`]. Destroys it at
     /// ≤0 HP. Check order: no_player → too_far → no_target. Returns the
     /// structure's remaining HP (`None` if destroyed).
-    pub fn damage(&mut self, username: &str, x: i64, y: i64) -> Result<Option<i64>, VerbError> {
+    pub fn damage(
+        &mut self,
+        username: &str,
+        x: i64,
+        y: i64,
+        clock_ms: u64,
+    ) -> Result<Option<i64>, VerbError> {
         let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(VerbError::NoPlayer)?;
         if !in_range(px, py, x, y) {
             return Err(VerbError::TooFar);
         }
         let wid = WireId(format!("structure:{x}:{y}"));
-        let e = self.wire_index.get(&wid).copied().ok_or(VerbError::NoTarget)?;
-        // Confirm it is a structure at exactly (x, y).
-        let new_hp = {
-            let s = self.world.get::<&Structure>(e).map_err(|_| VerbError::NoTarget)?;
-            s.hp - DAMAGE_PER_CLICK
-        };
-        if new_hp > 0 {
-            let owner = self.world.get::<&Structure>(e).map(|s| s.owner.clone()).unwrap_or_default();
-            let kind = self.world.get::<&Structure>(e).map(|s| s.kind).unwrap_or(StructureKind::Wall);
-            if let Ok(mut s) = self.world.get::<&mut Structure>(e) {
-                s.hp = new_hp;
+        if let Some(e) = self.wire_index.get(&wid).copied() {
+            // Structure at exactly (x, y).
+            let new_hp = self.world.get::<&Structure>(e).map(|s| s.hp).unwrap_or(0) - DAMAGE_PER_CLICK;
+            if new_hp > 0 {
+                let owner = self.world.get::<&Structure>(e).map(|s| s.owner.clone()).unwrap_or_default();
+                let kind = self.world.get::<&Structure>(e).map(|s| s.kind).unwrap_or(StructureKind::Wall);
+                if let Ok(mut s) = self.world.get::<&mut Structure>(e) {
+                    s.hp = new_hp;
+                }
+                self.emit(PersistEvent::UpsertStructure(StructureRecord {
+                    coord: coord_for(x, y),
+                    owner,
+                    kind,
+                    x,
+                    y,
+                    hp: new_hp,
+                }));
+                return Ok(Some(new_hp));
             }
-            self.emit(PersistEvent::UpsertStructure(StructureRecord {
-                coord: coord_for(x, y),
-                owner,
-                kind,
-                x,
-                y,
-                hp: new_hp,
-            }));
-            Ok(Some(new_hp))
-        } else {
             self.despawn_wire(&wid);
             self.emit(PersistEvent::DeleteStructure { x, y });
-            Ok(None)
+            return Ok(None);
         }
+
+        // No structure: the nearest NPC within interact range of the click (the
+        // player extends the same damage verb to wildlife). Players are invulnerable.
+        let ne = self
+            .nearest_npc_within(x, y, crate::consts::INTERACT_RANGE_SQ)
+            .ok_or(VerbError::NoTarget)?;
+        let by = self
+            .username_index
+            .get(username)
+            .and_then(|&pe| self.world.get::<&PlayerControlled>(pe).ok().map(|p| p.actor.0))
+            .unwrap_or(0);
+        let dead = {
+            let mut h = self.world.get::<&mut Health>(ne).map_err(|_| VerbError::NoTarget)?;
+            h.hp -= DAMAGE_PER_CLICK;
+            h.hp <= 0
+        };
+        let _ = self.world.insert_one(ne, Hurt { last_ms: clock_ms, by });
+        if dead {
+            self.kill_npc(ne, clock_ms);
+            return Ok(None);
+        }
+        let hp = self.world.get::<&Health>(ne).map(|h| h.hp).unwrap_or(0);
+        Ok(Some(hp))
+    }
+
+    /// Nearest NPC entity within `range_sq` of `(x, y)`.
+    fn nearest_npc_within(&self, x: i64, y: i64, range_sq: i64) -> Option<Entity> {
+        let target = P2::new(x, y);
+        self.world
+            .query::<(&Position, &Npc)>()
+            .iter()
+            .map(|(e, (p, _))| (e, dist_sq(P2::new(p.x, p.y), target)))
+            .filter(|(_, d)| *d <= range_sq)
+            .min_by_key(|(_, d)| *d)
+            .map(|(e, _)| e)
+    }
+
+    /// Nearest Carcass entity within `range_sq` of `(x, y)`.
+    fn nearest_carcass_within(&self, x: i64, y: i64, range_sq: i64) -> Option<Entity> {
+        let target = P2::new(x, y);
+        self.world
+            .query::<(&Position, &Carcass)>()
+            .iter()
+            .map(|(e, (p, _))| (e, dist_sq(P2::new(p.x, p.y), target)))
+            .filter(|(_, d)| *d <= range_sq)
+            .min_by_key(|(_, d)| *d)
+            .map(|(e, _)| e)
     }
 
     /// Portals in this realm a player at `(px, py)` currently overlaps, with the

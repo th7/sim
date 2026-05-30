@@ -25,17 +25,25 @@ impl ResourceKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Item {
     Wood,
+    /// Harvested from a Carcass; the food economy.
+    Meat,
+    /// Harvested from a Carcass; a crafting material.
+    Hide,
 }
 
 impl Item {
     pub fn as_str(self) -> &'static str {
         match self {
             Item::Wood => "wood",
+            Item::Meat => "meat",
+            Item::Hide => "hide",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "wood" => Some(Item::Wood),
+            "meat" => Some(Item::Meat),
+            "hide" => Some(Item::Hide),
             _ => None,
         }
     }

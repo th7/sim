@@ -112,3 +112,31 @@ pub struct Health {
     pub hp: i64,
     pub max: i64,
 }
+
+/// The perishable remains of a killed animal — a Carcass (CONTEXT.md). Holds the
+/// remaining meat to eat/harvest and the sim-clock time it rots away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Carcass {
+    pub meat: i64,
+    pub perish_at_ms: u64,
+}
+
+/// Recent-damage memory on an actor: the sim-clock of the last hit and the actor
+/// id that dealt it. Read by Motivation to spike the safety Need and target the
+/// attacker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hurt {
+    pub last_ms: u64,
+    pub by: u64,
+}
+
+/// The sim-clock time an NPC may next act (attack or eat) — its action cooldown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActReady {
+    pub at_ms: u64,
+}
+
+/// The Decision the Motivation phase committed to this tick, stored so the
+/// post-movement resolution phase can apply its verb (attack/eat) in range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NpcDecision(pub crate::motivation::Decision);

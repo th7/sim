@@ -344,8 +344,9 @@ impl Sim {
 
     pub fn damage(&mut self, username: &str, x: i64, y: i64) -> Result<(), VerbError> {
         let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
+        let clock = self.clock_ms;
         let rw = self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?;
-        rw.damage(username, x, y)?;
+        rw.damage(username, x, y, clock)?;
         self.drain_persistence();
         Ok(())
     }

@@ -131,3 +131,16 @@ prove consequential in the Decision log below.
   materialize/dissolve boundary; until then NPCs only exist where tests/players put them.
 - **Wander direction is sim-clock-bucketed (≈1 Hz) and seeded by actor id**, so drift is deterministic
   and doesn't jitter every tick.
+- **NPC verbs resolve in a post-movement phase inside `reconcile_after_movement`** — one insertion point
+  shared by the serial and parallel ticks. The Motivation phase stores `NpcDecision`; resolution applies
+  `attack`/`eat` when in range, gated by an `ActReady` cooldown (500 ms).
+- **Player invulnerability is structural:** Players carry no `Health`, so an NPC `attack` resolving on a
+  Player is a no-op by construction — no special-case check. NPC↔NPC and Player→NPC damage flow normally.
+- **Player damage/harvest extend to wildlife by proximity, not exact key:** a click with no Structure/tree
+  at the cell targets the nearest NPC / Carcass within interact range. NPCs move, so position-keyed wire
+  ids (used for trees/structures) don't fit them.
+- **Carcass = its own component** (`meat`, `perish_at_ms`), not an overloaded `Gatherable`, to keep the
+  tree respawn path clean. It is still harvested via the harvest verb (CONTEXT's "a Gatherable"). Deer
+  yield 3 meat, wolf 2; player harvest also yields 1 Hide; carcasses rot after 60 s.
+- **Combat constants** (`world.rs`): attack 10 dmg, melee range² 700², cooldown 500 ms, eat feeds 0.4
+  hunger/meat. Tunable; chosen so hunts and feeds terminate within a short observation.
