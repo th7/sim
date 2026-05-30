@@ -374,19 +374,35 @@ impl RealmWorld {
             let mut perc = Perception::at(self_p);
 
             for &(id, bp, what) in &beings {
-                if id == self_id || dist_sq(self_p, bp) > params.perception_range_sq {
+                if id == self_id {
                     continue;
                 }
+                let d = dist_sq(self_p, bp);
+                let near = d <= params.perception_range_sq;
+                let social = d <= params.social_range_sq;
                 match (kind, what) {
-                    (NpcKind::Wolf, Sensable::Npc(NpcKind::Deer)) => {
+                    (NpcKind::Wolf, Sensable::Npc(NpcKind::Deer)) if near => {
                         perc.prey.push(Sensed { id, pos: bp })
                     }
-                    // Rival wolves contest a carcass (fight-to-hold).
+                    // Rival/pack wolves: contest carcasses (near) and pack-hunt (social).
                     (NpcKind::Wolf, Sensable::Npc(NpcKind::Wolf)) => {
-                        perc.rivals.push(Sensed { id, pos: bp })
+                        if near {
+                            perc.rivals.push(Sensed { id, pos: bp });
+                        }
+                        if social {
+                            perc.herd.push(Sensed { id, pos: bp });
+                        }
                     }
-                    (NpcKind::Deer, Sensable::Npc(NpcKind::Wolf))
-                    | (NpcKind::Deer, Sensable::Player) => perc.threats.push(Sensed { id, pos: bp }),
+                    (NpcKind::Deer, Sensable::Npc(NpcKind::Wolf)) if near => {
+                        perc.threats.push(Sensed { id, pos: bp })
+                    }
+                    (NpcKind::Deer, Sensable::Player) if near => {
+                        perc.threats.push(Sensed { id, pos: bp })
+                    }
+                    // Same-species peers form the herd (agent extension, wider sense).
+                    (NpcKind::Deer, Sensable::Npc(NpcKind::Deer)) if social => {
+                        perc.herd.push(Sensed { id, pos: bp })
+                    }
                     _ => {}
                 }
             }

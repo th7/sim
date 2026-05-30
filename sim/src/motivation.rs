@@ -60,6 +60,8 @@ pub struct Perception {
     pub food: Vec<Sensed>,
     /// Same-species competitors contesting nearby food (rival wolves).
     pub rivals: Vec<Sensed>,
+    /// Same-species peers for social steering (deer herd; wolf pack).
+    pub herd: Vec<Sensed>,
     /// Local grass level 0..1 (deer grazing substrate).
     pub grass: f64,
 }
@@ -126,12 +128,18 @@ pub struct Params {
     pub safety_bias: f64,
     /// Perception range squared (sub-units²) — bounds threat proximity scaling.
     pub perception_range_sq: i64,
+    /// Social-sense range² for herd/pack peers (agent extension). Wider than
+    /// perception but ≤ chunk_size², so peers are still co-clustered.
+    pub social_range_sq: i64,
     /// Range² within which food can be eaten / a contester triggers fight-to-hold.
     pub eat_range_sq: i64,
     /// Grass level below which a deer cannot graze and must seek.
     pub graze_floor: f64,
     /// Need scores below this count as "no active need".
     pub idle_eps: f64,
+    /// Range² beyond which a calm animal steers toward its herd centroid
+    /// (0 disables cohesion). Agent extension — see EXTENSIONS.md.
+    pub herd_comfort_sq: i64,
 }
 
 impl Params {
@@ -146,9 +154,11 @@ impl Params {
                 hunger_bias: 1.0,
                 safety_bias: 1.2,
                 perception_range_sq: 1_000 * 1_000,
+                social_range_sq: 5_000 * 5_000,
                 eat_range_sq: 600 * 600,
                 graze_floor: 0.0,
                 idle_eps: 0.05,
+                herd_comfort_sq: 0, // wolves don't herd (they pack-hunt instead)
             },
             NpcKind::Deer => Params {
                 metabolism_per_s: 1.0 / 90.0,
@@ -159,9 +169,11 @@ impl Params {
                 hunger_bias: 1.0,
                 safety_bias: 1.5,
                 perception_range_sq: 1_000 * 1_000,
+                social_range_sq: 5_000 * 5_000,
                 eat_range_sq: 600 * 600,
                 graze_floor: 0.05,
                 idle_eps: 0.05,
+                herd_comfort_sq: 2_000 * 2_000,
             },
         }
     }
@@ -230,13 +242,36 @@ pub fn decide(
     let safety_active = safety_score > params.idle_eps && threat_act > 0.0;
     let hunger_active = hunger_score > params.idle_eps;
 
-    if safety_active && safety_score >= hunger_score {
-        return plan_safety(perc);
+    let decision = if safety_active && safety_score >= hunger_score {
+        plan_safety(perc)
+    } else if hunger_active {
+        plan_hunger(kind, perc, params)
+    } else {
+        Decision::Wander
+    };
+
+    // Herd cohesion (agent extension, EXTENSIONS.md): a calm animal beyond its
+    // comfort radius drifts toward the centroid of its herd. Never overrides
+    // fleeing — a threat scatters the herd, then it reforms.
+    if params.herd_comfort_sq > 0 && !matches!(decision, Decision::Flee(_)) {
+        if let Some(c) = herd_centroid(perc) {
+            if dist_sq(perc.self_pos, c) > params.herd_comfort_sq {
+                return Decision::Approach(c);
+            }
+        }
     }
-    if hunger_active {
-        return plan_hunger(kind, perc, params);
+    decision
+}
+
+/// The integer mean position of an animal's herd peers, if any.
+fn herd_centroid(perc: &Perception) -> Option<P2> {
+    if perc.herd.is_empty() {
+        return None;
     }
-    Decision::Wander
+    let n = perc.herd.len() as i64;
+    let sx: i64 = perc.herd.iter().map(|s| s.pos.x).sum();
+    let sy: i64 = perc.herd.iter().map(|s| s.pos.y).sum();
+    Some(P2::new(sx / n, sy / n))
 }
 
 /// Safety goal: flee the nearest threat.
@@ -420,6 +455,42 @@ mod tests {
             decide(NpcKind::Wolf, &perc, &mut d, &params, DT);
         }
         assert!(d.hunger_pressure < 0.05, "got {}", d.hunger_pressure);
+    }
+
+    #[test]
+    fn calm_deer_steers_toward_its_herd() {
+        let params = Params::for_kind(NpcKind::Deer);
+        let mut d = Drives::default();
+        let mut perc = Perception::at(P2::new(0, 0));
+        perc.grass = 1.0; // could graze, but the herd is far → go join it
+        perc.herd = vec![
+            Sensed { id: 1, pos: P2::new(5_000, 0) },
+            Sensed { id: 2, pos: P2::new(5_000, 200) },
+        ];
+        match decide(NpcKind::Deer, &perc, &mut d, &params, DT) {
+            Decision::Approach(p) => assert!(p.x > 0, "steers toward the herd, got {p:?}"),
+            other => panic!("expected Approach(herd), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deer_within_comfort_radius_grazes_not_chases() {
+        let params = Params::for_kind(NpcKind::Deer);
+        let mut d = Drives { hunger: 0.5, ..Default::default() };
+        let mut perc = Perception::at(P2::new(0, 0));
+        perc.grass = 1.0;
+        perc.herd = vec![Sensed { id: 1, pos: P2::new(800, 0) }]; // already close
+        assert_eq!(decide(NpcKind::Deer, &perc, &mut d, &params, DT), Decision::Graze);
+    }
+
+    #[test]
+    fn threatened_deer_ignores_herd_and_flees() {
+        let params = Params::for_kind(NpcKind::Deer);
+        let mut d = Drives { hunger: 0.3, ..Default::default() };
+        let mut perc = Perception::at(P2::new(0, 0));
+        perc.herd = vec![Sensed { id: 1, pos: P2::new(5_000, 0) }];
+        perc.threats = vec![Sensed { id: 9, pos: P2::new(300, 0) }];
+        assert_eq!(decide(NpcKind::Deer, &perc, &mut d, &params, DT), Decision::Flee(P2::new(300, 0)));
     }
 
     #[test]

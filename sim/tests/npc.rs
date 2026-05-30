@@ -125,3 +125,32 @@ fn attacked_wolf_flees_when_not_hungry() {
     }
     assert!(npc_x(&sim, NpcKind::Wolf) > before, "a provoked, unhungry wolf flees the player");
 }
+
+// --- agent-invented extensions (see EXTENSIONS.md) ---
+
+#[test]
+fn scattered_deer_form_a_herd() {
+    // Three unthreatened deer spread out should drift together (cohesion).
+    let mut sim = Sim::new();
+    sim.spawn_npc(NpcKind::Deer, pos(8_000, 8_000), Drives::default());
+    sim.spawn_npc(NpcKind::Deer, pos(11_000, 8_000), Drives::default());
+    sim.spawn_npc(NpcKind::Deer, pos(9_500, 10_500), Drives::default());
+
+    let spread = |sim: &Sim| -> i64 {
+        let xs: Vec<(i64, i64)> = sim.npcs().iter().map(|(_, _, p, _, _)| (p.x, p.y)).collect();
+        let mut max = 0;
+        for i in 0..xs.len() {
+            for j in (i + 1)..xs.len() {
+                let d = (xs[i].0 - xs[j].0).pow(2) + (xs[i].1 - xs[j].1).pow(2);
+                max = max.max(d);
+            }
+        }
+        max
+    };
+    let before = spread(&sim);
+    for _ in 0..60 {
+        sim.tick();
+    }
+    let after = spread(&sim);
+    assert!(after < before, "deer should cluster: spread {before} -> {after}");
+}
