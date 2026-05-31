@@ -6,7 +6,7 @@ use crate::components::{Footprint, Item, ResourceKind, StructureKind};
 /// Build cost of a structure, as `(item, count)` stacks deducted on placement.
 pub fn cost(kind: StructureKind) -> &'static [(Item, u32)] {
     match kind {
-        StructureKind::Wall => &[(Item::Wood, 5)],
+        StructureKind::Wall => &[(Item::Wood, crate::consts::WALL_COST)],
     }
 }
 
@@ -35,6 +35,23 @@ pub fn resource_footprint(kind: ResourceKind) -> Footprint {
 pub fn resource_yield(kind: ResourceKind) -> Item {
     match kind {
         ResourceKind::Tree => Item::Wood,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The wall's wood cost is the shared `consts::WALL_COST`, so the server
+    /// catalogue and the client's build gate cannot drift apart.
+    #[test]
+    fn wall_wood_cost_is_the_shared_constant() {
+        let wood: u32 = cost(StructureKind::Wall)
+            .iter()
+            .filter(|(item, _)| *item == Item::Wood)
+            .map(|(_, qty)| *qty)
+            .sum();
+        assert_eq!(wood, crate::consts::WALL_COST);
     }
 }
 

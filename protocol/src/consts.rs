@@ -23,3 +23,6 @@ pub const PLAYER_BODY_RADIUS: i64 = 300;
 pub const DAMAGE_PER_CLICK: i64 = 25;
 /// Chunk idle-deactivation timeout.
 pub const IDLE_TIMEOUT_MS: u64 = 5_000;
+/// Wood cost to build a wall — the single source for the server catalogue and
+/// the client's build-affordability gate.
+pub const WALL_COST: u32 = 5;

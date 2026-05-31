@@ -5,7 +5,7 @@
 //! old `window.__game`. Positions are sub-units (1 world unit = 1000).
 
 use crate::dev::DevState;
-use protocol::consts::INTERACT_RANGE_SQ;
+use protocol::consts::{INTERACT_RANGE_SQ, WALL_COST};
 use protocol::geometry::{coord_for, neighborhood, ChunkCoord, SUB_UNITS_PER_UNIT};
 use protocol::wire::{
     BuildPayload, CarcassWire, ChunkSnapshot, DamagePayload, HarvestPayload, MovePayload, NodeWire,
@@ -16,9 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The 3×3 View-window radius (Chebyshev) the client keeps subscribed.
 const VIEW_RADIUS: i32 = 1;
-/// Wall build cost in wood — a UX gate; the server is authoritative. Matches the
-/// server catalogue's `[(Wood, 5)]`.
-const WALL_COST: u32 = 5;
+// Wall build cost is `protocol::consts::WALL_COST` — the same source the server
+// catalogue uses (a client-side UX gate; the server stays authoritative).
 
 /// A command the model asks the transport layer to perform.
 #[derive(Debug, Clone, PartialEq)]
@@ -485,6 +484,23 @@ mod tests {
             cmds,
             vec![Cmd::Send(Outbound::Build(BuildPayload { kind: "wall".into(), x: 3_500, y: 3_500 }))]
         );
+    }
+
+    #[test]
+    fn build_gate_threshold_is_the_shared_wall_cost() {
+        // Exactly WALL_COST wood → builds; one less → refused. The gate tracks
+        // the shared constant, so it cannot drift from the server catalogue.
+        let mut afford = model_with_player_at(3_200, 3_200);
+        afford.on_self(SelfPayload {
+            inventory: BTreeMap::from([("wood".to_string(), WALL_COST)]),
+        });
+        assert!(!afford.click(3.2, 3.2).is_empty(), "WALL_COST wood affords a wall");
+
+        let mut short = model_with_player_at(3_200, 3_200);
+        short.on_self(SelfPayload {
+            inventory: BTreeMap::from([("wood".to_string(), WALL_COST - 1)]),
+        });
+        assert!(short.click(3.2, 3.2).is_empty(), "one below WALL_COST is refused");
     }
 
     #[test]
