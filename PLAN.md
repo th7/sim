@@ -27,21 +27,20 @@ pending test. Blocked on v1-scope confirmation — do **not** implement until th
 - Held story scenarios will arrive once the designer answers the PO's gaps (multi-member Party
   Instance entry; the one-authority / never-under-merge observable). Add their proving tests then.
 
-## Landed: lossless crash on a tick panic
+## Landed: parallel tick + lossless crash on a tick panic
 
-A tick panic no longer poisons the shared mutex and silently freezes the world. Per the chosen
-model, a panic takes the whole runtime **down** (no in-process recovery / per-cluster re-home — the
-runtime is presumed corrupt), but `flush_now()` first makes the durable store as current as possible
-(fresh player positions + drained persist events), so loss is bounded to the unflushed window. The
-transport aborts after the flush for a supervisor to restart from the durable store.
+Production drives the **parallel tick** (the server enables the worker pool; `tick_or_flush`
+dispatches to it). A tick panic — on the tick thread *or* a worker thread — no longer poisons the
+shared mutex, hangs the pool, or silently freezes the world. Per the chosen model the runtime is
+presumed corrupt and goes **down** (no in-process recovery / per-cluster re-home), but on the way:
+worker panics are caught and re-raised on the tick thread, `flush_now()` makes the durable store as
+current as possible (fresh player positions + drained persist events), and the transport aborts —
+so loss is bounded to the unflushed window and a supervisor restarts from durable state.
 
 ## Deferred follow-ups
 
 Fault tolerance — residual:
 
-- **`tick_parallel` / `WorkerPool` panic path is unguarded.** Production uses serial `tick()`
-  (now `tick_or_flush`); the pool's worker-thread panic still propagates via `join().expect(...)`.
-  If the server ever drives the parallel tick, give it the same flush-then-down treatment.
 - **External supervisor + restart-from-Datastore** is deployment config (systemd/orchestrator), not
   code; the rehydrate-on-connect path already restores durable state.
 
