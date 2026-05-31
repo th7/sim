@@ -50,9 +50,25 @@ pub struct ClusterResult {
     pub elapsed_secs: f64,
 }
 
+/// A worker's output for one dispatched batch: the per-cluster results, or the
+/// panic payload if computing the batch panicked. The pool propagates the
+/// payload to the calling (tick) thread so a worker bug crashes the runtime
+/// cleanly via the tick's panic guard, rather than hanging on a missing result.
+type WorkerOutput = std::thread::Result<Vec<ClusterResult>>;
+
+/// Test-only hook: when set, [`run_cluster`] panics, standing in for a worker
+/// bug so the panic-propagation path can be exercised from a test.
+#[cfg(test)]
+pub(crate) static PANIC_IN_RUN_CLUSTER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Run one cluster's movement: integrate each mover's velocity, clamp against
 /// the cluster's obstacles and bounds. Pure; no shared state.
 pub fn run_cluster(job: &ClusterJob, dt: f64) -> ClusterResult {
+    #[cfg(test)]
+    if PANIC_IN_RUN_CLUSTER.load(std::sync::atomic::Ordering::Relaxed) {
+        panic!("injected run_cluster panic (test)");
+    }
     let start = Instant::now();
     let mut positions = Vec::with_capacity(job.movers.len());
     for &(e, x, y, vx, vy) in &job.movers {
@@ -108,8 +124,14 @@ pub fn execute(
             })
             .collect();
         for h in handles {
-            for r in h.join().expect("worker thread panicked") {
-                results.insert(r.cid, r);
+            match h.join() {
+                Ok(batch) => {
+                    for r in batch {
+                        results.insert(r.cid, r);
+                    }
+                }
+                // Re-raise a worker panic on this thread so the tick's guard sees it.
+                Err(payload) => std::panic::resume_unwind(payload),
             }
         }
     });
@@ -127,7 +149,7 @@ pub fn execute(
 /// removes that overhead.
 pub struct WorkerPool {
     senders: Vec<Sender<PoolMsg>>,
-    results: Receiver<Vec<ClusterResult>>,
+    results: Receiver<WorkerOutput>,
     handles: Vec<JoinHandle<()>>,
     size: usize,
 }
@@ -141,7 +163,7 @@ impl WorkerPool {
     /// Create a pool of `size` worker threads (clamped to ≥1).
     pub fn new(size: usize) -> Self {
         let size = size.max(1);
-        let (result_tx, results) = channel::<Vec<ClusterResult>>();
+        let (result_tx, results) = channel::<WorkerOutput>();
         let mut senders = Vec::with_capacity(size);
         let mut handles = Vec::with_capacity(size);
         for _ in 0..size {
@@ -151,8 +173,13 @@ impl WorkerPool {
                 while let Ok(msg) = task_rx.recv() {
                     match msg {
                         PoolMsg::Run(jobs, dt) => {
-                            let out: Vec<ClusterResult> =
-                                jobs.iter().map(|j| run_cluster(j, dt)).collect();
+                            // Isolate a worker bug: catch the panic and ship the
+                            // payload back so the tick thread re-raises it (a clean
+                            // crash) instead of this thread dying and the caller
+                            // blocking forever on the missing result.
+                            let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                jobs.iter().map(|j| run_cluster(j, dt)).collect::<Vec<_>>()
+                            }));
                             if result_tx.send(out).is_err() {
                                 break;
                             }
@@ -202,9 +229,18 @@ impl WorkerPool {
 
         let mut results = BTreeMap::new();
         for _ in 0..expected {
-            let batch = self.results.recv().expect("worker result");
-            for r in batch {
-                results.insert(r.cid, r);
+            match self.results.recv() {
+                Ok(Ok(batch)) => {
+                    for r in batch {
+                        results.insert(r.cid, r);
+                    }
+                }
+                // A worker panicked computing its batch: re-raise on this (the
+                // tick) thread so the tick's panic guard flushes and takes the
+                // runtime down — rather than blocking forever on a result that
+                // will never arrive.
+                Ok(Err(payload)) => std::panic::resume_unwind(payload),
+                Err(_) => panic!("worker pool thread died before sending its result"),
             }
         }
         results
@@ -219,5 +255,36 @@ impl Drop for WorkerPool {
         for h in self.handles.drain(..) {
             let _ = h.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    /// A panic inside a worker must surface to the caller as a panic (so the
+    /// tick's guard can crash cleanly) — never silently block `run()` forever on
+    /// a result the dead worker will never send.
+    #[test]
+    fn a_worker_panic_propagates_to_the_caller_not_a_hang() {
+        let pool = WorkerPool::new(2);
+        let jobs = vec![ClusterJob {
+            cid: ClusterId(0),
+            obstacles: Vec::new(),
+            movers: Vec::new(),
+            bounds: None,
+        }];
+
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        PANIC_IN_RUN_CLUSTER.store(true, Ordering::Relaxed);
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pool.run(jobs, &BTreeMap::new(), 0.05)
+        }));
+        PANIC_IN_RUN_CLUSTER.store(false, Ordering::Relaxed);
+        std::panic::set_hook(prev);
+
+        assert!(res.is_err(), "a worker panic must reach the caller, not hang or vanish");
     }
 }

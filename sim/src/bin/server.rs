@@ -47,6 +47,13 @@ async fn main() {
     let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     sim.set_clock_ms(now_ms);
 
+    // Drive the parallel tick: clusters are entity-disjoint, so independent
+    // clusters tick across a persistent worker pool (one dense cluster is the
+    // single-core floor). Leave a couple of cores for the async transport.
+    let workers = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2)).unwrap_or(1).max(1);
+    sim.enable_pool(workers);
+    eprintln!("sim: parallel tick on {workers} worker thread(s)");
+
     let shared = Shared::with_sim(sim);
 
     let listener = TcpListener::bind(("0.0.0.0", port)).await.expect("bind");

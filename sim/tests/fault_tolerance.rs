@@ -48,3 +48,22 @@ fn tick_or_flush_is_ok_on_a_normal_tick() {
     assert!(sim.tick_or_flush().is_ok(), "a normal tick reports healthy");
     assert_eq!(sim.tick_count(), before + 1, "the tick advanced");
 }
+
+/// With a pool enabled (production config), the guarded entry drives the
+/// parallel tick: it stays healthy and moves players, matching the serial tick.
+#[test]
+fn pooled_tick_or_flush_drives_the_parallel_tick() {
+    let mut sim = Sim::new();
+    sim.enable_pool(4);
+    sim.connect_at("ada", at(8_000, 12_000), Inventory::default());
+    sim.set_intent("ada", 1.0, 0.0);
+    for _ in 0..10 {
+        assert!(sim.tick_or_flush().is_ok(), "the pooled tick stays healthy");
+    }
+    // 10 ticks east at 4000 sub-units/s · 0.05 s = 200/tick → +2000.
+    assert_eq!(
+        sim.position("ada"),
+        Some(at(10_000, 12_000)),
+        "the parallel tick integrates movement exactly as the serial tick does"
+    );
+}

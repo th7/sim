@@ -342,7 +342,16 @@ impl Sim {
     /// payload so the caller takes the whole runtime down: a clean, lossless
     /// crash a supervisor can restart from the durable store.
     pub fn tick_or_flush(&mut self) -> std::thread::Result<()> {
-        self.guard(|s| s.tick())
+        match self.pool.as_ref().map(|p| p.size()) {
+            // With a pool, drive the parallel tick (movement compute on workers).
+            // `workers` is ignored by `tick_parallel` when a pool is present; the
+            // repack budget is the per-tick wall-clock budget.
+            Some(workers) => {
+                let budget = TICK_MS as f64 / 1000.0;
+                self.guard(|s| s.tick_parallel(workers, budget))
+            }
+            None => self.guard(|s| s.tick()),
+        }
     }
 
     /// Run `body`; if it panics, flush durable state and return the panic payload.
@@ -715,5 +724,28 @@ mod tests {
             0,
             "the guard flushed durable state on the way out"
         );
+    }
+
+    /// With a pool enabled, `tick_or_flush` must drive the *parallel* tick (so the
+    /// movement compute runs on worker threads), and a worker panic must surface
+    /// as a lossless crash: durable state flushed, panic reported (not hung).
+    #[test]
+    fn pooled_tick_or_flush_crashes_losslessly_on_a_worker_panic() {
+        use std::sync::atomic::Ordering;
+        let mut sim = Sim::new();
+        sim.enable_pool(2);
+        sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
+        sim.harvest("a", 8_000, 8_000).unwrap(); // depletion → a pending durable write
+        assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
+
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        crate::parallel::PANIC_IN_RUN_CLUSTER.store(true, Ordering::Relaxed);
+        let res = sim.tick_or_flush();
+        crate::parallel::PANIC_IN_RUN_CLUSTER.store(false, Ordering::Relaxed);
+        std::panic::set_hook(prev);
+
+        assert!(res.is_err(), "a worker panic must surface through the parallel tick, not be lost");
+        assert_eq!(sim.datastore().pending_len(), 0, "durable state flushed on the way down");
     }
 }
