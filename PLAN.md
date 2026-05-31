@@ -44,15 +44,14 @@ Fault tolerance — residual:
 - **External supervisor + restart-from-Datastore** is deployment config (systemd/orchestrator), not
   code; the rehydrate-on-connect path already restores durable state.
 
-Client / wire (migrated from the retired `docs/frontend-port-notes.md`):
+Client / wire:
 
-- **Generate `contract/contract.json` from the `protocol` structs** (+ a freshness check) instead of
-  hand-maintaining it; today it is committed and only conformance-guarded (`sim/tests/contract.rs`).
-- **`WALL_COST = 5` is hardcoded in the client model** and could drift from the server catalogue —
-  consider exposing the cost via `protocol`.
 - **Cosmetic rendering gaps to confirm on a real display** (no GL in-container): portal ring, grid
   lines, dev chunk borders + coordinate labels, shadows; dev toggle is on `Tab` (no backtick in
   three-d's `Key`).
+
+_Done: `contract.json` is now generated from the server types + freshness-checked
+(`export-contract` bin); `WALL_COST` is sourced from `protocol::consts`._
 
 Ecosystem / NPC depth (migrated from the retired AGENT_LOG):
 

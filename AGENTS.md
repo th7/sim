@@ -3,7 +3,7 @@ Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per 
 ## Project guidelines
 
 - Prefer obvious tests and obvious code over documentation. When documentation is unavoidable, keep it terse.
-- The wire contract (`contract/contract.json`) is the shared schema; the backend conforms to it (`sim/tests/contract.rs`) and the client (de)serializes the `protocol/` wire structs. Don't change one side's wire shape without the other.
+- The wire contract (`contract/contract.json`) is generated from the server types (`cargo run -p sim --bin export-contract`) and both conformance- and freshness-checked by `sim/tests/contract.rs`; the client (de)serializes the `protocol/` wire structs. Don't change one side's wire shape without the other; regenerate the contract after changing an emitted shape.
 - Before considering work done: `cargo test --workspace` (and `cargo build --workspace --all-targets` warning-free).
 
 ## Architecture invariants
