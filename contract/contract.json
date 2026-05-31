@@ -290,6 +290,56 @@
       "payload": {
         "additionalProperties": false,
         "properties": {
+          "carcasses": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+                "meat": {
+                  "type": "integer"
+                },
+                "x": {
+                  "type": "integer"
+                },
+                "y": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "x",
+                "y",
+                "meat"
+              ],
+              "type": "object"
+            },
+            "type": "object"
+          },
+          "npcs": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+                "hp": {
+                  "type": "integer"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "x": {
+                  "type": "integer"
+                },
+                "y": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "type",
+                "x",
+                "y",
+                "hp"
+              ],
+              "type": "object"
+            },
+            "type": "object"
+          },
           "players": {
             "additionalProperties": {
               "additionalProperties": false,
@@ -304,56 +354,6 @@
               "required": [
                 "x",
                 "y"
-              ],
-              "type": "object"
-            },
-            "type": "object"
-          },
-          "npcs": {
-            "additionalProperties": {
-              "additionalProperties": false,
-              "properties": {
-                "type": {
-                  "type": "string"
-                },
-                "x": {
-                  "type": "integer"
-                },
-                "y": {
-                  "type": "integer"
-                },
-                "hp": {
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "type",
-                "x",
-                "y",
-                "hp"
-              ],
-              "type": "object"
-            },
-            "type": "object"
-          },
-          "carcasses": {
-            "additionalProperties": {
-              "additionalProperties": false,
-              "properties": {
-                "x": {
-                  "type": "integer"
-                },
-                "y": {
-                  "type": "integer"
-                },
-                "meat": {
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "x",
-                "y",
-                "meat"
               ],
               "type": "object"
             },
@@ -505,10 +505,10 @@
             },
             "type": "array"
           },
-          "total_players": {
+          "total_npcs": {
             "type": "integer"
           },
-          "total_npcs": {
+          "total_players": {
             "type": "integer"
           }
         },

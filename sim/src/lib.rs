@@ -17,6 +17,7 @@ pub use protocol::{consts, geometry, ids, phx};
 
 pub mod catalogue;
 pub mod chunkgraph;
+pub mod contract;
 pub mod collision;
 pub mod components;
 pub mod datastore;

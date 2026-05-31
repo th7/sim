@@ -118,6 +118,32 @@ fn validate_typed(t: &str, schema: &Value, value: &Value, path: &str) -> Result<
 }
 
 #[test]
+fn committed_contract_is_freshly_generated() {
+    // The committed file must equal what the generator produces, so the schema
+    // can never drift from the code. Regenerate with the `export-contract` bin.
+    let committed = load_contract();
+    let generated = sim::contract::contract();
+    if committed != generated {
+        // Point at the first differing message for a fast diagnosis.
+        let empty = vec![];
+        let cms = committed["messages"].as_array().unwrap_or(&empty);
+        let gms = generated["messages"].as_array().unwrap_or(&empty);
+        for cm in cms {
+            let key = (&cm["direction"], &cm["event"]);
+            match gms.iter().find(|g| (&g["direction"], &g["event"]) == key) {
+                None => panic!("generator is missing message {key:?}"),
+                Some(g) if *g != *cm => panic!("message {key:?} differs:\n committed={cm:#}\n generated={g:#}"),
+                _ => {}
+            }
+        }
+        let extra: Vec<_> = gms.iter().map(|g| (&g["direction"], &g["event"]))
+            .filter(|k| !cms.iter().any(|c| (&c["direction"], &c["event"]) == *k)).collect();
+        assert!(extra.is_empty(), "generator emits messages not in the committed file: {extra:?}");
+        panic!("contract mismatch (count: committed {} vs generated {})", cms.len(), gms.len());
+    }
+}
+
+#[test]
 fn snapshot_payload_conforms() {
     let contract = load_contract();
     let schema = payload_schema(&contract, "snapshot");
