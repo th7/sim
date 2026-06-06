@@ -3,8 +3,3 @@ features:
   # Project-authored agent briefs. Drop *.md files into
   # .my-agent/file_briefs/ (each must lead with a `## Heading` line).
   # - file_briefs
-
-roles:
-  designer:
-  product_owner:
-  engineer:
