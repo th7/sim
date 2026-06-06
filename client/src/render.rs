@@ -8,6 +8,7 @@
 use crate::session::RenderState;
 use protocol::consts::IDLE_TIMEOUT_MS;
 use protocol::geometry::{ChunkCoord, SUB_UNITS_PER_UNIT};
+use protocol::types::{NpcKind, PortalDirection};
 use protocol::wire::{ChunkLifecycle, RealmWire, StatsPayload};
 use std::collections::HashMap;
 use three_d::*;
@@ -179,14 +180,25 @@ impl View {
         }
         // Portals: a flat disc, coloured by direction (the torus ring the old
         // client drew has no three-d primitive — omitted, see port notes).
+        // An unmapped wire string renders loud magenta rather than silently
+        // passing as some known kind; the exhaustive match makes a new enum
+        // variant a compile error here.
         for p in rs.portals.values() {
-            let color = if p.direction == "into_instance" { rgb(0x7e57c2) } else { rgb(0xff7043) };
+            let color = match PortalDirection::parse(&p.direction) {
+                Some(PortalDirection::IntoInstance) => rgb(0x7e57c2),
+                Some(PortalDirection::OutOfInstance) => rgb(0xff7043),
+                None => rgb(0xff00ff),
+            };
             objects.push(cylinder_at(context, w(p.x), 0.0, w(p.y), 0.65, 0.04, color));
         }
         // NPCs: a body box coloured by kind (wolf grey, deer tan) + a small head.
         for n in rs.npcs.values() {
             let (x, z) = (w(n.x), w(n.y));
-            let color = if n.kind == "wolf" { rgb(0x607d8b) } else { rgb(0xbcaaa4) };
+            let color = match NpcKind::parse(&n.kind) {
+                Some(NpcKind::Wolf) => rgb(0x607d8b),
+                Some(NpcKind::Deer) => rgb(0xbcaaa4),
+                None => rgb(0xff00ff),
+            };
             objects.push(box_at(context, x, 0.4, z, 0.7, 0.5, 0.35, color));
             objects.push(box_at(context, x, 0.75, z, 0.3, 0.3, 0.3, color));
         }

@@ -21,21 +21,9 @@ impl P2 {
     }
 }
 
-/// The kinds of NPC in v1.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NpcKind {
-    Wolf,
-    Deer,
-}
-
-impl NpcKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            NpcKind::Wolf => "wolf",
-            NpcKind::Deer => "deer",
-        }
-    }
-}
+/// The kinds of NPC in v1 — the protocol's closed enum, shared with the
+/// client (re-exported here so sim code keeps its `motivation::NpcKind` path).
+pub use protocol::types::NpcKind;
 
 /// One entity the NPC senses, with the wire/actor id used to target it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

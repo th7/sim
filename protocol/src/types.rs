@@ -77,10 +77,27 @@ pub enum PortalDirection {
 }
 
 impl PortalDirection {
+    /// Every direction — what the showcase enumerates to display them all. The
+    /// guard match breaks this const's compile when a variant is added.
+    pub const ALL: [Self; 2] = {
+        let all = [PortalDirection::IntoInstance, PortalDirection::OutOfInstance];
+        match all[0] {
+            PortalDirection::IntoInstance | PortalDirection::OutOfInstance => {}
+        }
+        all
+    };
+
     pub fn as_str(self) -> &'static str {
         match self {
             PortalDirection::IntoInstance => "into_instance",
             PortalDirection::OutOfInstance => "out_of_instance",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "into_instance" => Some(PortalDirection::IntoInstance),
+            "out_of_instance" => Some(PortalDirection::OutOfInstance),
+            _ => None,
         }
     }
 }
@@ -95,5 +112,60 @@ impl PortalKind {
         match self {
             PortalKind::Dungeon => "dungeon",
         }
+    }
+}
+
+/// NPC kinds (the v1 wildlife pair).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NpcKind {
+    Wolf,
+    Deer,
+}
+
+impl NpcKind {
+    /// Every kind — what the showcase enumerates to display them all. The
+    /// guard match below breaks this const's compile when a variant is added,
+    /// so the list cannot silently fall behind the enum.
+    pub const ALL: [Self; 2] = {
+        let all = [NpcKind::Wolf, NpcKind::Deer];
+        match all[0] {
+            NpcKind::Wolf | NpcKind::Deer => {}
+        }
+        all
+    };
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NpcKind::Wolf => "wolf",
+            NpcKind::Deer => "deer",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "wolf" => Some(NpcKind::Wolf),
+            "deer" => Some(NpcKind::Deer),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn portal_direction_wire_strings_roundtrip() {
+        for d in PortalDirection::ALL {
+            assert_eq!(PortalDirection::parse(d.as_str()), Some(d));
+        }
+        assert_eq!(PortalDirection::parse("sideways"), None);
+    }
+
+    #[test]
+    fn npc_kind_wire_strings_roundtrip() {
+        for k in NpcKind::ALL {
+            assert_eq!(NpcKind::parse(k.as_str()), Some(k));
+        }
+        assert_eq!(NpcKind::parse("gibberish"), None);
     }
 }

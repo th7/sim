@@ -108,6 +108,18 @@ pub enum ChunkLifecycle {
     Cold,
 }
 
+impl ChunkLifecycle {
+    /// Every lifecycle — what the showcase enumerates to display them all. The
+    /// guard match breaks this const's compile when a variant is added.
+    pub const ALL: [Self; 3] = {
+        let all = [ChunkLifecycle::Hot, ChunkLifecycle::IdleArmed, ChunkLifecycle::Cold];
+        match all[0] {
+            ChunkLifecycle::Hot | ChunkLifecycle::IdleArmed | ChunkLifecycle::Cold => {}
+        }
+        all
+    };
+}
+
 /// One chunk's lifecycle status in the dev overlay ring.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChunkStatWire {
@@ -167,6 +179,14 @@ pub struct PlayerJoinParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chunk_lifecycle_serde_roundtrip_over_all() {
+        for l in ChunkLifecycle::ALL {
+            let v = serde_json::to_value(l).unwrap();
+            assert_eq!(serde_json::from_value::<ChunkLifecycle>(v).unwrap(), l);
+        }
+    }
 
     #[test]
     fn realm_wire_matches_contract_shape() {
