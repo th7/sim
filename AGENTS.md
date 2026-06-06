@@ -37,12 +37,3 @@ Distilled from the former `docs/adr/` — load-bearing; change them only deliber
 
 - The Rust suite is unit + integration (`sim/tests/`); the cross-restart Postgres test self-skips unless `SIM_TEST_DATABASE_URL` is set.
 - `client/tests/integration.rs` is the load-bearing end-to-end description: it boots the real server in-process and drives the native client over a WebSocket, re-pinning every phase.
-
-## Roles & flow
-
-Work runs through a three-role pipeline — **designer** (`design/`) → **product owner**
-(`stories/`) → **engineer** (code + tests, `PLAN.md`) — coordinating through `messages/`. Each
-role's brief is the source of truth for how that role works; this file holds only the
-cross-cutting *engineering* conventions above. The engineer drives every new behaviour
-**test-first** (red → green) then a **stay-green refactor**, commits at every stable point
-(warning-free, `cargo test --workspace` green), and keeps the next increment in `PLAN.md`.
