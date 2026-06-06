@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Build and run the showcase: every UI element in every appearance-affecting
+# state, rendered through the real client pipeline. Needs a display (GL); no
+# server. Space cycles scenarios, Tab toggles the dev panel.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+echo "showcase: building (release)…"
+cargo build --release --bin showcase
+
+exec ./target/release/showcase "$@"

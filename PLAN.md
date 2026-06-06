@@ -57,7 +57,9 @@ Client / wire:
 
 - **Cosmetic rendering gaps to confirm on a real display** (no GL in-container): portal ring, grid
   lines, dev chunk borders + coordinate labels, shadows; dev toggle is on `Tab` (no backtick in
-  three-d's `Key`).
+  three-d's `Key`). Confirm via `bin/showcase` — it displays every UI element in every
+  appearance-affecting state through the real render path (presence is machine-checked; only
+  appearance needs eyes).
 
 _Done: `contract.json` is now generated from the server types + freshness-checked
 (`export-contract` bin); `WALL_COST` is sourced from `protocol::consts`._
