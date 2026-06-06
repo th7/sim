@@ -10,14 +10,13 @@
 use crate::components::{Inventory, Position, PortalDirection, StructureKind};
 use crate::consts::{FLUSH_MS, TICK_MS};
 use crate::motivation::{Drives, NpcKind};
-use crate::datastore::{Datastore, DurableStore, MemStore, PersistEvent, PlayerRecord};
+use crate::datastore::{Datastore, DurableStore, MemStore, Mode, PersistEvent, PlayerRecord, Thresholds};
 use crate::ecosystem::{self, Stratum};
 use crate::geometry::{chunk_center, coord_for, ChunkCoord};
 use crate::ids::{ClusterId, Realm};
-use crate::verbs::VerbError;
 use crate::world::{instance_bounds, RealmWorld};
 use crate::worldgen;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// A per-player server→client event the transport layer (Phase 4) pushes.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,7 +25,37 @@ pub enum OutboundEvent {
     SelfInventory { username: String, inventory: Inventory },
     /// The player changed realm/chunk (the `relocated` wire event).
     Relocated { username: String, realm: Realm, coord: ChunkCoord },
+    /// A queued action could not be carried out — either dropped at the door
+    /// (`queue_full`) or rejected by the verb at tick-time (`too_far`, …). The
+    /// single async outcome channel for action failures.
+    ActionRejected { username: String, verb: &'static str, x: i64, y: i64, reason: &'static str },
 }
+
+/// A queued, fire-and-forget player action intent. Enqueued on receipt and
+/// resolved in the tick (never on receipt) — the unified intent model, so an
+/// overload freeze is simply "skip the tick".
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    Harvest { x: i64, y: i64 },
+    Build { kind: StructureKind, x: i64, y: i64 },
+    Damage { x: i64, y: i64 },
+}
+
+impl Action {
+    /// The wire verb name and target cell — used to attribute an outcome event.
+    fn verb_target(&self) -> (&'static str, i64, i64) {
+        match *self {
+            Action::Harvest { x, y } => ("harvest", x, y),
+            Action::Build { x, y, .. } => ("build", x, y),
+            Action::Damage { x, y } => ("damage", x, y),
+        }
+    }
+}
+
+/// Most actions an actor may have queued for resolution. Beyond this, new
+/// intents are refused at the door (`queue_full`) — bounding memory and a
+/// post-freeze resume burst by construction.
+const ACTION_QUEUE_CAP: usize = 8;
 
 pub struct Sim {
     clock_ms: u64,
@@ -37,6 +66,8 @@ pub struct Sim {
     /// Per-player Instance return info: `(entry chunk, entry portal pos)`.
     return_to: BTreeMap<String, (ChunkCoord, (i64, i64))>,
     pending: Vec<OutboundEvent>,
+    /// Per-actor queued action intents, resolved in the tick (never on receipt).
+    action_queues: BTreeMap<String, VecDeque<Action>>,
     next_instance: u64,
     pool: Option<crate::parallel::WorkerPool>,
     datastore: Datastore<BoxedStore>,
@@ -107,6 +138,7 @@ impl Sim {
             player_realm: BTreeMap::new(),
             return_to: BTreeMap::new(),
             pending: Vec::new(),
+            action_queues: BTreeMap::new(),
             next_instance: 1,
             pool: None,
             datastore: Datastore::new(Box::new(store)),
@@ -120,6 +152,12 @@ impl Sim {
     /// Off by default; the game server enables it.
     pub fn set_wildlife(&mut self, on: bool) {
         self.wildlife = on;
+    }
+
+    /// Retune the Datastore's backpressure high/low-water marks (tests drive
+    /// overload deterministically; a deployment could tune them).
+    pub fn set_persist_thresholds(&mut self, thresholds: Thresholds) {
+        self.datastore.set_thresholds(thresholds);
     }
 
     /// Resume from an existing store (kept for tests that round-trip
@@ -342,6 +380,14 @@ impl Sim {
     /// payload so the caller takes the whole runtime down: a clean, lossless
     /// crash a supervisor can restart from the durable store.
     pub fn tick_or_flush(&mut self) -> std::thread::Result<()> {
+        // Overload freeze: the Datastore can't keep up, so skip the tick body —
+        // the world (clock included) does not advance, no new writes are made,
+        // and no queued action resolves. We still flush, unconditionally, so the
+        // backlog drains and the freeze self-relieves the moment it falls below
+        // the low-water mark. "Freeze" is literally skip-the-tick.
+        if self.datastore.mode() == Mode::Backpressured {
+            return self.guard(|s| s.freeze_flush());
+        }
         match self.pool.as_ref().map(|p| p.size()) {
             // With a pool, drive the parallel tick (movement compute on workers).
             // `workers` is ignored by `tick_parallel` when a pool is present; the
@@ -352,6 +398,15 @@ impl Sim {
             }
             None => self.guard(|s| s.tick()),
         }
+    }
+
+    /// The frozen-tick body: don't touch the clock or resolve anything; just
+    /// drain any residual buffered writes and flush durable, which re-evaluates
+    /// the backpressure mode and lets it disengage once the buffer is below the
+    /// low-water mark.
+    fn freeze_flush(&mut self) {
+        self.drain_persistence();
+        self.datastore.flush();
     }
 
     /// Run `body`; if it panics, flush durable state and return the panic payload.
@@ -372,6 +427,7 @@ impl Sim {
     pub fn tick(&mut self) {
         self.clock_ms += TICK_MS;
         self.tick_count += 1;
+        self.resolve_action_intents();
         self.overworld.tick(TICK_MS, self.clock_ms);
         for inst in self.instances.values_mut() {
             inst.tick(TICK_MS, self.clock_ms);
@@ -391,6 +447,8 @@ impl Sim {
         self.tick_count += 1;
         let dt = TICK_MS as f64 / 1000.0;
         let clock = self.clock_ms;
+
+        self.resolve_action_intents();
 
         let tick_realm = |rw: &mut RealmWorld| {
             rw.drive_npcs(TICK_MS, clock);
@@ -469,47 +527,65 @@ impl Sim {
         self.realm_world(realm)?.inventory_of(username)
     }
 
-    pub fn harvest(&mut self, username: &str, tx: i64, ty: i64) -> Result<(), VerbError> {
-        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
-        let clock = self.clock_ms;
-        let rw = self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?;
-        let inv = rw.harvest(username, tx, ty, clock)?;
-        self.pending.push(OutboundEvent::SelfInventory {
-            username: username.to_string(),
-            inventory: inv,
-        });
-        self.drain_persistence();
-        Ok(())
-    }
+    // Player verbs (harvest/build/damage) are not applied on receipt: they are
+    // fire-and-forget [`Action`] intents (see [`Sim::enqueue_action`]) resolved
+    // in the tick by [`Sim::resolve_action_intents`]. The verb *logic* lives on
+    // the realm (`RealmWorld::{harvest,build,damage}`).
 
-    pub fn build(
-        &mut self,
-        username: &str,
-        kind: StructureKind,
-        x: i64,
-        y: i64,
-    ) -> Result<(), VerbError> {
-        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
-        if let Realm::Instance(_) = realm {
-            return Err(VerbError::NoBuildInInstance);
+    /// Enqueue a player action intent (fire-and-forget). Resolved in the tick,
+    /// never on receipt.
+    pub fn enqueue_action(&mut self, username: &str, action: Action) {
+        let queue = self.action_queues.entry(username.to_string()).or_default();
+        if queue.len() >= ACTION_QUEUE_CAP {
+            // Reject the newest; the committed queue is honoured first.
+            let (verb, x, y) = action.verb_target();
+            self.pending.push(OutboundEvent::ActionRejected {
+                username: username.to_string(),
+                verb,
+                x,
+                y,
+                reason: "queue_full",
+            });
+            return;
         }
-        let rw = self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?;
-        let inv = rw.build(username, kind, x, y)?;
-        self.pending.push(OutboundEvent::SelfInventory {
-            username: username.to_string(),
-            inventory: inv,
-        });
-        self.drain_persistence();
-        Ok(())
+        queue.push_back(action);
     }
 
-    pub fn damage(&mut self, username: &str, x: i64, y: i64) -> Result<(), VerbError> {
-        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
+    /// Resolve every actor's queued action intents, in id (username) order,
+    /// FIFO within an actor — run at the top of the tick, before movement, so a
+    /// freshly built obstacle is solid for the same tick's integrator and range
+    /// checks use start-of-tick positions. Reuses the realm verb logic.
+    fn resolve_action_intents(&mut self) {
         let clock = self.clock_ms;
-        let rw = self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?;
-        rw.damage(username, x, y, clock)?;
-        self.drain_persistence();
-        Ok(())
+        let queues = std::mem::take(&mut self.action_queues);
+        for (username, actions) in queues {
+            let Some(realm) = self.realm_of(&username) else { continue };
+            for action in actions {
+                let Some(rw) = self.realm_world_mut(realm) else { continue };
+                let (verb, x, y) = action.verb_target();
+                let outcome = match action {
+                    Action::Harvest { x, y } => rw.harvest(&username, x, y, clock).map(Some),
+                    Action::Build { kind, x, y } => rw.build(&username, kind, x, y).map(Some),
+                    Action::Damage { x, y } => {
+                        rw.damage(&username, x, y, clock).map(|_| None::<Inventory>)
+                    }
+                };
+                match outcome {
+                    Ok(Some(inv)) => self.pending.push(OutboundEvent::SelfInventory {
+                        username: username.clone(),
+                        inventory: inv,
+                    }),
+                    Ok(None) => {}
+                    Err(e) => self.pending.push(OutboundEvent::ActionRejected {
+                        username: username.clone(),
+                        verb,
+                        x,
+                        y,
+                        reason: e.as_str(),
+                    }),
+                }
+            }
+        }
     }
 
     // --- Instance transitions (portal-triggered) ---
@@ -702,6 +778,196 @@ impl Sim {
 mod tests {
     use super::*;
 
+    use crate::components::Item;
+
+    /// The unified intent model: an enqueued action is recorded, not resolved, on
+    /// receipt; the *tick* resolves it. (Tracer for the whole migration.)
+    #[test]
+    fn enqueued_action_resolves_on_the_next_tick_not_on_receipt() {
+        let mut sim = Sim::new();
+        sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
+        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+
+        // Not resolved on receipt — inventory unchanged.
+        assert_eq!(
+            sim.inventory_of("a").unwrap().items.get(&Item::Wood).copied().unwrap_or(0),
+            0,
+            "enqueue must not resolve the action on receipt"
+        );
+
+        sim.tick();
+
+        // The tick resolved it.
+        assert_eq!(
+            sim.inventory_of("a").unwrap().items.get(&Item::Wood).copied(),
+            Some(1),
+            "the queued harvest resolves in the tick"
+        );
+    }
+
+    fn queue_full_events(evs: &[OutboundEvent]) -> usize {
+        evs.iter()
+            .filter(|e| matches!(e, OutboundEvent::ActionRejected { reason: "queue_full", .. }))
+            .count()
+    }
+
+    /// A full action queue (cap 8) refuses the *newest* intent with an async
+    /// `queue_full` rejection; the first cap intents are accepted silently.
+    #[test]
+    fn a_full_action_queue_rejects_the_newest_intent() {
+        let mut sim = Sim::new();
+        sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
+
+        for _ in 0..ACTION_QUEUE_CAP {
+            sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        }
+        assert_eq!(queue_full_events(&sim.drain_events()), 0, "the first cap intents are accepted");
+
+        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        assert_eq!(
+            queue_full_events(&sim.drain_events()),
+            1,
+            "the intent past the cap is refused with queue_full"
+        );
+    }
+
+    /// A gameplay failure at tick-time (here: out of range) comes back as an
+    /// async `ActionRejected` carrying the verb's reason — not a synchronous
+    /// error, since resolution happens in the tick.
+    #[test]
+    fn a_failed_action_is_reported_async_with_its_reason() {
+        let mut sim = Sim::new();
+        sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
+        let _ = sim.drain_events(); // clear connect-time events
+
+        sim.enqueue_action("a", Action::Harvest { x: 80_000, y: 80_000 }); // far away
+        sim.tick();
+
+        let rejected: Vec<_> = sim
+            .drain_events()
+            .into_iter()
+            .filter(|e| matches!(e, OutboundEvent::ActionRejected { .. }))
+            .collect();
+        assert_eq!(
+            rejected,
+            vec![OutboundEvent::ActionRejected {
+                username: "a".to_string(),
+                verb: "harvest",
+                x: 80_000,
+                y: 80_000,
+                reason: "too_far",
+            }],
+            "an out-of-range harvest is reported async as too_far"
+        );
+    }
+
+    /// Action intents resolve *before* movement integration: a wall built this
+    /// tick is a solid obstacle for this tick's movement. A player at x=2600
+    /// moving east would coast to 2800 unobstructed; with the wall (west face at
+    /// x=3000, player radius 300 → contact at 2700) solid the same tick, they
+    /// stop at the contact instead.
+    #[test]
+    fn a_build_is_solid_for_the_same_tick_movement() {
+        let mut sim = Sim::new();
+        let mut inv = Inventory::default();
+        inv.items.insert(Item::Wood, crate::consts::WALL_COST);
+        sim.connect_at("p", Position { x: 2_600, y: 3_000 }, inv);
+        sim.set_intent("p", 1.0, 0.0); // heading east, into the wall's path
+
+        sim.enqueue_action("p", Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 });
+        sim.tick();
+
+        let x = sim.position("p").unwrap().x;
+        assert!(x > 2_600, "the player did move east this tick (x={x})");
+        assert!(
+            x <= 2_700,
+            "the same-tick wall blocks this tick's movement at the contact (x={x}); \
+             unobstructed the player would have reached 2800"
+        );
+    }
+
+    /// All of an actor's queued actions drain in one tick, FIFO. Two harvests
+    /// enqueued before a tick both resolve in that tick.
+    #[test]
+    fn all_queued_actions_drain_in_one_tick() {
+        let mut sim = Sim::new();
+        sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
+        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        sim.enqueue_action("a", Action::Harvest { x: 8_500, y: 8_500 });
+
+        sim.tick();
+
+        assert_eq!(
+            sim.inventory_of("a").unwrap().items.get(&Item::Wood).copied(),
+            Some(2),
+            "both queued harvests resolve in a single tick"
+        );
+    }
+
+    /// Under backpressure the tick body is skipped: the world does not advance.
+    /// Movement is frozen and the clock is held — "freeze" is literally
+    /// skip-the-tick. (n_high=0/n_low=0 ⇒ a permanent freeze for the assertion.)
+    #[test]
+    fn a_backpressured_tick_freezes_the_world() {
+        let mut sim = Sim::new();
+        sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
+        sim.set_intent("a", 1.0, 0.0); // standing velocity east
+
+        sim.set_persist_thresholds(Thresholds { n_high: 0, n_low: 0 });
+        assert_eq!(sim.datastore().mode(), Mode::Backpressured, "overload engaged");
+
+        let pos_before = sim.position("a").unwrap();
+        let clock_before = sim.clock_ms();
+        sim.tick_or_flush().unwrap();
+
+        assert_eq!(sim.position("a").unwrap(), pos_before, "frozen: the player does not move");
+        assert_eq!(sim.clock_ms(), clock_before, "frozen: the clock does not advance");
+    }
+
+    /// The freeze keeps flushing, so it self-relieves: once the buffer drains
+    /// below the low-water mark the mode disengages, and an intent queued before
+    /// the freeze survives it and resolves on resume — nothing dropped.
+    #[test]
+    fn the_freeze_self_relieves_and_queued_intents_resume_intact() {
+        let mut sim = Sim::new();
+        sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
+
+        // A resolved harvest leaves pending writes in the buffer (un-flushed:
+        // the DB-flush cadence hasn't elapsed) — our overload to drain.
+        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        sim.tick();
+        assert!(sim.datastore().pending_len() > 0, "buffered writes to drain");
+        assert_eq!(sim.inventory_of("a").unwrap().items.get(&Item::Wood).copied(), Some(1));
+
+        // Queue another intent and start moving, then trip the overload.
+        sim.enqueue_action("a", Action::Harvest { x: 8_500, y: 8_500 });
+        sim.set_intent("a", 1.0, 0.0);
+        sim.set_persist_thresholds(Thresholds { n_high: 1, n_low: 1 });
+        assert_eq!(sim.datastore().mode(), Mode::Backpressured, "overload engaged");
+
+        let pos_before = sim.position("a").unwrap();
+
+        // Frozen tick: world held, but the flush drains the buffer → disengages.
+        sim.tick_or_flush().unwrap();
+        assert_eq!(sim.position("a").unwrap(), pos_before, "frozen: no movement");
+        assert_eq!(
+            sim.inventory_of("a").unwrap().items.get(&Item::Wood).copied(),
+            Some(1),
+            "frozen: the queued harvest did not resolve"
+        );
+        assert_eq!(sim.datastore().pending_len(), 0, "frozen: no new writes; buffer drained");
+        assert_eq!(sim.datastore().mode(), Mode::Flowing, "the freeze self-relieved");
+
+        // Resume: the surviving queued intent resolves and movement continues.
+        sim.tick_or_flush().unwrap();
+        assert_eq!(
+            sim.inventory_of("a").unwrap().items.get(&Item::Wood).copied(),
+            Some(2),
+            "the pre-freeze queued harvest resolved intact on resume"
+        );
+        assert!(sim.position("a").unwrap().x > pos_before.x, "movement resumed");
+    }
+
     /// A panic inside the guarded body must not be swallowed (the runtime is
     /// presumed corrupt) — but durable state is flushed before it propagates, so
     /// the pending write window is emptied on the way down.
@@ -709,7 +975,8 @@ mod tests {
     fn guard_flushes_durable_state_then_reports_the_panic() {
         let mut sim = Sim::new();
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.harvest("a", 8_000, 8_000).unwrap(); // depletion → a pending durable write
+        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        sim.tick(); // resolve the harvest → a pending durable write
         assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
 
         // Silence the default panic print for this expected, caught panic.
@@ -735,7 +1002,8 @@ mod tests {
         let mut sim = Sim::new();
         sim.enable_pool(2);
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.harvest("a", 8_000, 8_000).unwrap(); // depletion → a pending durable write
+        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        sim.tick(); // resolve the harvest → a pending durable write
         assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
 
         let prev = std::panic::take_hook();

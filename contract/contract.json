@@ -26,35 +26,6 @@
         ],
         "type": "object"
       },
-      "reply": {
-        "error": {
-          "additionalProperties": false,
-          "properties": {
-            "reason": {
-              "enum": [
-                "invalid_type",
-                "out_of_chunk",
-                "footprint_blocked",
-                "no_player",
-                "insufficient_materials",
-                "no_build_in_instance",
-                "no_chunk"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "reason"
-          ],
-          "type": "object"
-        },
-        "ok": {
-          "additionalProperties": false,
-          "properties": {},
-          "required": [],
-          "type": "object"
-        }
-      },
       "topic": "player"
     },
     {
@@ -76,32 +47,6 @@
         ],
         "type": "object"
       },
-      "reply": {
-        "error": {
-          "additionalProperties": false,
-          "properties": {
-            "reason": {
-              "enum": [
-                "no_player",
-                "too_far",
-                "no_target",
-                "no_chunk"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "reason"
-          ],
-          "type": "object"
-        },
-        "ok": {
-          "additionalProperties": false,
-          "properties": {},
-          "required": [],
-          "type": "object"
-        }
-      },
       "topic": "player"
     },
     {
@@ -122,33 +67,6 @@
           "y"
         ],
         "type": "object"
-      },
-      "reply": {
-        "error": {
-          "additionalProperties": false,
-          "properties": {
-            "reason": {
-              "enum": [
-                "no_player",
-                "too_far",
-                "depleted",
-                "no_target",
-                "no_chunk"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "reason"
-          ],
-          "type": "object"
-        },
-        "ok": {
-          "additionalProperties": false,
-          "properties": {},
-          "required": [],
-          "type": "object"
-        }
       },
       "topic": "player"
     },
@@ -198,6 +116,52 @@
         "required": [
           "dx",
           "dy"
+        ],
+        "type": "object"
+      },
+      "topic": "player"
+    },
+    {
+      "direction": "out",
+      "event": "action_rejected",
+      "payload": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "enum": [
+              "no_player",
+              "too_far",
+              "depleted",
+              "no_target",
+              "no_chunk",
+              "out_of_chunk",
+              "footprint_blocked",
+              "insufficient_materials",
+              "no_build_in_instance",
+              "queue_full"
+            ],
+            "type": "string"
+          },
+          "verb": {
+            "enum": [
+              "harvest",
+              "build",
+              "damage"
+            ],
+            "type": "string"
+          },
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "verb",
+          "x",
+          "y",
+          "reason"
         ],
         "type": "object"
       },

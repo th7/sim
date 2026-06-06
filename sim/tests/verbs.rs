@@ -18,13 +18,33 @@ fn with_wood(n: u32) -> Inventory {
     inv
 }
 
+// The verb *logic* (range, depletion, materials, footprint, instance gate) lives
+// on the realm. These helpers exercise it directly and return its `Result`, the
+// natural layer for the error-reason assertions below. (Players send these as
+// fire-and-forget intents over the wire; that path — enqueue + tick + async
+// outcome — is covered by the sim/stories suites.)
+fn harvest(sim: &mut Sim, who: &str, x: i64, y: i64) -> Result<(), VerbError> {
+    let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
+    let clock = sim.clock_ms();
+    sim.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.harvest(who, x, y, clock).map(|_| ())
+}
+fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) -> Result<(), VerbError> {
+    let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
+    sim.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.build(who, kind, x, y).map(|_| ())
+}
+fn damage(sim: &mut Sim, who: &str, x: i64, y: i64) -> Result<(), VerbError> {
+    let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
+    let clock = sim.clock_ms();
+    sim.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.damage(who, x, y, clock).map(|_| ())
+}
+
 #[test]
 fn harvest_yields_wood_and_depletes_then_respawns() {
     let mut sim = Sim::new();
     // Spawn on the center tree at (8000,8000) in chunk (0,0).
     sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
 
-    assert_eq!(sim.harvest("alice", 8_000, 8_000), Ok(()));
+    assert_eq!(harvest(&mut sim, "alice", 8_000, 8_000), Ok(()));
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&1));
 
     // Node is now depleted.
@@ -34,13 +54,13 @@ fn harvest_yields_wood_and_depletes_then_respawns() {
         other => panic!("expected depleted node, got {other:?}"),
     }
     // Re-harvesting a depleted node fails.
-    assert_eq!(sim.harvest("alice", 8_000, 8_000), Err(VerbError::Depleted));
+    assert_eq!(harvest(&mut sim, "alice", 8_000, 8_000), Err(VerbError::Depleted));
 
     // After RESPAWN_MS (30s = 600 ticks) it is gatherable again.
     for _ in 0..600 {
         sim.tick();
     }
-    assert_eq!(sim.harvest("alice", 8_000, 8_000), Ok(()));
+    assert_eq!(harvest(&mut sim, "alice", 8_000, 8_000), Ok(()));
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&2));
 }
 
@@ -50,11 +70,11 @@ fn harvest_errors() {
     sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
 
     // Far-away target → too_far (checked before target existence).
-    assert_eq!(sim.harvest("alice", 50_000, 50_000), Err(VerbError::TooFar));
+    assert_eq!(harvest(&mut sim, "alice", 50_000, 50_000), Err(VerbError::TooFar));
     // In-range empty cell → no_target.
-    assert_eq!(sim.harvest("alice", 8_010, 8_010), Err(VerbError::NoTarget));
+    assert_eq!(harvest(&mut sim, "alice", 8_010, 8_010), Err(VerbError::NoTarget));
     // Unknown player → no_player.
-    assert_eq!(sim.harvest("ghost", 0, 0), Err(VerbError::NoPlayer));
+    assert_eq!(harvest(&mut sim, "ghost", 0, 0), Err(VerbError::NoPlayer));
 }
 
 #[test]
@@ -63,7 +83,7 @@ fn build_places_wall_and_spends_wood() {
     sim.connect_at("alice", at(8_000, 8_000), with_wood(7));
 
     // Build on a clear cell in the player's chunk.
-    assert_eq!(sim.build("alice", StructureKind::Wall, 3_000, 3_000), Ok(()));
+    assert_eq!(build(&mut sim, "alice", StructureKind::Wall, 3_000, 3_000), Ok(()));
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&2));
 
     // The structure appears on the wire with full HP.
@@ -84,7 +104,7 @@ fn build_errors() {
 
     // Not enough wood (have 4, need 5).
     assert_eq!(
-        sim.build("alice", StructureKind::Wall, 3_000, 3_000),
+        build(&mut sim, "alice", StructureKind::Wall, 3_000, 3_000),
         Err(VerbError::InsufficientMaterials)
     );
 
@@ -92,13 +112,13 @@ fn build_errors() {
     let mut rich = Sim::new();
     rich.connect_at("bob", at(8_000, 8_000), with_wood(10));
     assert_eq!(
-        rich.build("bob", StructureKind::Wall, 20_000, 20_000),
+        build(&mut rich, "bob", StructureKind::Wall, 20_000, 20_000),
         Err(VerbError::OutOfChunk)
     );
 
     // Footprint blocked: building on the center tree.
     assert_eq!(
-        rich.build("bob", StructureKind::Wall, 8_000, 8_000),
+        build(&mut rich, "bob", StructureKind::Wall, 8_000, 8_000),
         Err(VerbError::FootprintBlocked)
     );
 }
@@ -110,11 +130,11 @@ fn damage_reduces_hp_and_destroys_at_zero() {
     // center (= body radius 300 + half-width 500), so the build is not
     // footprint-blocked yet the wall is inside the 1000-sub-unit interact range.
     sim.connect_at("alice", at(2_700, 3_000), with_wood(5));
-    assert_eq!(sim.build("alice", StructureKind::Wall, 3_500, 3_000), Ok(()));
+    assert_eq!(build(&mut sim, "alice", StructureKind::Wall, 3_500, 3_000), Ok(()));
 
     // 100 HP, 25/hit → 4 hits to destroy. First three leave it standing.
     for _ in 0..3 {
-        assert_eq!(sim.damage("alice", 3_500, 3_000), Ok(()));
+        assert_eq!(damage(&mut sim, "alice", 3_500, 3_000), Ok(()));
     }
     let states = entity_states(sim.overworld());
     match states.get(&WireId("structure:3500:3000".into())) {
@@ -122,21 +142,21 @@ fn damage_reduces_hp_and_destroys_at_zero() {
         other => panic!("expected structure at 25hp, got {other:?}"),
     }
     // Fourth hit destroys it.
-    assert_eq!(sim.damage("alice", 3_500, 3_000), Ok(()));
+    assert_eq!(damage(&mut sim, "alice", 3_500, 3_000), Ok(()));
     let states = entity_states(sim.overworld());
     assert!(!states.contains_key(&WireId("structure:3500:3000".into())));
     // Now no target there.
-    assert_eq!(sim.damage("alice", 3_500, 3_000), Err(VerbError::NoTarget));
+    assert_eq!(damage(&mut sim, "alice", 3_500, 3_000), Err(VerbError::NoTarget));
 }
 
 #[test]
 fn damage_too_far() {
     let mut sim = Sim::new();
     sim.connect_at("alice", at(2_700, 3_000), with_wood(5));
-    sim.build("alice", StructureKind::Wall, 3_500, 3_000).unwrap();
+    build(&mut sim, "alice", StructureKind::Wall, 3_500, 3_000).unwrap();
     // A player far from the wall cannot damage it.
     sim.connect_at("bob", at(10_000, 10_000), Inventory::default());
-    assert_eq!(sim.damage("bob", 3_500, 3_000), Err(VerbError::TooFar));
+    assert_eq!(damage(&mut sim, "bob", 3_500, 3_000), Err(VerbError::TooFar));
 }
 
 #[test]
@@ -161,7 +181,7 @@ fn portal_entry_and_exit_round_trip() {
         .any(|e| matches!(e, sim::sim::OutboundEvent::Relocated { coord, .. } if *coord == ChunkCoord::new(1, 1))));
 
     // Building in an Instance is refused.
-    assert_eq!(sim.build("alice", StructureKind::Wall, 23_000, 24_000), Err(VerbError::NoBuildInInstance));
+    assert_eq!(build(&mut sim, "alice", StructureKind::Wall, 23_000, 24_000), Err(VerbError::NoBuildInInstance));
 
     // Walk east onto the return portal → exit back to the Overworld.
     sim.set_intent("alice", 1.0, 0.0);
@@ -214,7 +234,7 @@ fn a_wall_can_be_built_next_to_the_depleted_cluster() {
 
     // Harvest the cluster → 5 wood; all five footprints remain solid.
     for (dx, dy) in [(500, 500), (500, -500), (-500, 500), (-500, -500), (0, 0)] {
-        sim.harvest("alice", 8_000 + dx, 8_000 + dy).unwrap();
+        harvest(&mut sim, "alice", 8_000 + dx, 8_000 + dy).unwrap();
     }
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&5));
 
@@ -232,6 +252,6 @@ fn a_wall_can_be_built_next_to_the_depleted_cluster() {
     sim.set_intent("alice", 0.0, 0.0);
 
     // Now place the wall one tile north of the NE depleted tree (8500, 7500).
-    assert_eq!(sim.build("alice", StructureKind::Wall, 8_500, 6_500), Ok(()));
+    assert_eq!(build(&mut sim, "alice", StructureKind::Wall, 8_500, 6_500), Ok(()));
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&0));
 }

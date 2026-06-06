@@ -12,7 +12,7 @@ use crate::components::StructureKind;
 use crate::geometry::ChunkCoord;
 use crate::ids::Realm;
 use crate::phx::{push, PhxMessage};
-use crate::sim::Sim;
+use crate::sim::{Action, Sim};
 use crate::wire::{chunk_snapshot, inventory_payload};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -90,10 +90,38 @@ pub fn route(sim: &mut Sim, conn: &mut ConnState, msg: &PhxMessage) -> Outcome {
             }
             Outcome::default() // move takes no reply (matches Elixir :noreply)
         }
-        "harvest" => verb_reply(msg, conn.username.clone(), sim_harvest(sim, conn, msg)),
-        "damage" => verb_reply(msg, conn.username.clone(), sim_damage(sim, conn, msg)),
-        "build" => on_build(sim, conn, msg),
+        // Verbs are fire-and-forget intents: enqueue and reply nothing (like
+        // `move`). The outcome — effect deltas or an async `action_rejected` —
+        // arrives later through the broadcast channel. Malformed frames are
+        // dropped silently, as `move` drops a missing dx/dy.
+        "harvest" => {
+            enqueue_xy(sim, conn, msg, |x, y| Action::Harvest { x, y });
+            Outcome::default()
+        }
+        "damage" => {
+            enqueue_xy(sim, conn, msg, |x, y| Action::Damage { x, y });
+            Outcome::default()
+        }
+        "build" => {
+            if let (Some(user), Some(kind), Some(x), Some(y)) = (
+                conn.username.clone(),
+                msg.payload.get("type").and_then(|v| v.as_str()).and_then(StructureKind::parse),
+                int(&msg.payload, "x"),
+                int(&msg.payload, "y"),
+            ) {
+                sim.enqueue_action(&user, Action::Build { kind, x, y });
+            }
+            Outcome::default()
+        }
         _ => Outcome::default(),
+    }
+}
+
+/// Enqueue an `(x, y)` action intent for the connection's player, if both the
+/// player and a valid target cell are present.
+fn enqueue_xy(sim: &mut Sim, conn: &ConnState, msg: &PhxMessage, make: impl Fn(i64, i64) -> Action) {
+    if let (Some(user), Some((x, y))) = (conn.username.clone(), xy(&msg.payload)) {
+        sim.enqueue_action(&user, make(x, y));
     }
 }
 
@@ -144,41 +172,6 @@ fn on_leave(sim: &mut Sim, conn: &mut ConnState, msg: &PhxMessage) -> Outcome {
         }
     }
     Outcome { reply: Some(msg.ok()), pushes: Vec::new(), disconnected }
-}
-
-fn on_build(sim: &mut Sim, conn: &mut ConnState, msg: &PhxMessage) -> Outcome {
-    let Some(user) = conn.username.clone() else {
-        return verb_reply(msg, None, Err("no_player".to_string()));
-    };
-    let kind = msg.payload.get("type").and_then(|v| v.as_str()).and_then(StructureKind::parse);
-    let Some(kind) = kind else {
-        return Outcome { reply: Some(msg.error_reason("invalid_type")), ..Default::default() };
-    };
-    let (Some(x), Some(y)) = (int(&msg.payload, "x"), int(&msg.payload, "y")) else {
-        return Outcome { reply: Some(msg.error_reason("invalid_type")), ..Default::default() };
-    };
-    let res = sim.build(&user, kind, x, y).map_err(|e| e.as_str().to_string());
-    verb_reply(msg, Some(user), res)
-}
-
-fn sim_harvest(sim: &mut Sim, conn: &ConnState, msg: &PhxMessage) -> Result<(), String> {
-    let user = conn.username.clone().ok_or("no_player".to_string())?;
-    let (x, y) = xy(&msg.payload).ok_or("no_target".to_string())?;
-    sim.harvest(&user, x, y).map_err(|e| e.as_str().to_string())
-}
-
-fn sim_damage(sim: &mut Sim, conn: &ConnState, msg: &PhxMessage) -> Result<(), String> {
-    let user = conn.username.clone().ok_or("no_player".to_string())?;
-    let (x, y) = xy(&msg.payload).ok_or("no_target".to_string())?;
-    sim.damage(&user, x, y).map_err(|e| e.as_str().to_string())
-}
-
-fn verb_reply(msg: &PhxMessage, _user: Option<String>, res: Result<(), String>) -> Outcome {
-    let reply = match res {
-        Ok(()) => msg.ok(),
-        Err(reason) => msg.error_reason(&reason),
-    };
-    Outcome { reply: Some(reply), ..Default::default() }
 }
 
 /// Build the `snapshot` push for one chunk topic, or `None` if the realm is gone.
@@ -277,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn harvest_verb_replies_and_updates_inventory() {
+    fn harvest_enqueues_and_resolves_on_the_tick_with_no_reply() {
         let mut sim = Sim::new();
         sim.connect_at("alice", crate::components::Position { x: 8_000, y: 8_000 }, Default::default());
         let mut conn = ConnState { username: Some("alice".into()), ..Default::default() };
@@ -289,12 +282,16 @@ mod tests {
             payload: json!({"x":8000,"y":8000}),
         };
         let out = route(&mut sim, &mut conn, &msg);
-        assert_eq!(out.reply.unwrap().payload["status"], "ok");
+        // Fire-and-forget: no synchronous reply, and nothing resolved yet.
+        assert!(out.reply.is_none(), "a harvest intent is :noreply");
+        assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), None);
+        // The tick resolves it.
+        sim.tick();
         assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&1));
     }
 
     #[test]
-    fn build_invalid_type_reason() {
+    fn build_with_invalid_type_is_dropped() {
         let mut sim = Sim::new();
         sim.connect_at("alice", crate::components::Position { x: 8_000, y: 8_000 }, Default::default());
         let mut conn = ConnState { username: Some("alice".into()), ..Default::default() };
@@ -306,6 +303,9 @@ mod tests {
             payload: json!({"type":"castle","x":3000,"y":3000}),
         };
         let out = route(&mut sim, &mut conn, &msg);
-        assert_eq!(out.reply.unwrap().payload["response"]["reason"], "invalid_type");
+        // A malformed frame is dropped silently (no reply, nothing enqueued).
+        assert!(out.reply.is_none(), "a malformed build frame is dropped, not replied to");
+        sim.tick();
+        assert!(sim.drain_events().is_empty(), "nothing was enqueued, so nothing is rejected");
     }
 }

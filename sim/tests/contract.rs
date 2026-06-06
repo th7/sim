@@ -8,7 +8,7 @@ use sim::components::{Inventory, Item, Position, StructureKind};
 use sim::geometry::ChunkCoord;
 use sim::ids::Realm;
 use sim::dev::stats_payload;
-use sim::sim::Sim;
+use sim::sim::{Action, Sim};
 use sim::wire::{chunk_snapshot, inventory_payload, relocated_payload};
 
 fn load_contract() -> Value {
@@ -153,7 +153,8 @@ fn snapshot_payload_conforms() {
     let mut inv = Inventory::default();
     inv.items.insert(Item::Wood, 5);
     sim.connect_at("alice", Position { x: 2_700, y: 3_000 }, inv);
-    sim.build("alice", StructureKind::Wall, 3_500, 3_000).unwrap();
+    sim.enqueue_action("alice", Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 });
+    sim.tick();
 
     let states = sim.overworld().snapshot_states();
     let snap = chunk_snapshot(&states, ChunkCoord::new(0, 0));

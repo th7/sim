@@ -10,7 +10,7 @@ use sim::components::{Inventory, Item, Position, StructureKind, WireId};
 use sim::datastore::DurableStore;
 use sim::geometry::ChunkCoord;
 use sim::pgstore::PgStore;
-use sim::sim::Sim;
+use sim::sim::{Action, Sim};
 use sim::wire::{entity_states, EntityWire};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,7 +39,8 @@ fn cross_restart_durability_via_postgres() {
         let mut inv = Inventory::default();
         inv.items.insert(Item::Wood, 5);
         sim.connect_at(&user, Position { x: 2_700, y: 3_000 }, inv);
-        sim.build(&user, StructureKind::Wall, 3_500, 3_000).unwrap();
+        sim.enqueue_action(&user, Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 });
+    sim.tick();
         assert_eq!(sim.inventory_of(&user).unwrap().items.get(&Item::Wood).copied().unwrap_or(0), 0);
 
         sim.flush_now(); // durable before "restart"

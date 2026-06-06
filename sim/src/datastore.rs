@@ -183,6 +183,15 @@ impl<S: DurableStore> Datastore<S> {
         self.mode
     }
 
+    /// Retune the backpressure thresholds and re-evaluate the mode immediately
+    /// against the current buffer depth (so a config change takes effect now,
+    /// not only on the next write/flush).
+    pub fn set_thresholds(&mut self, thresholds: Thresholds) {
+        self.thresholds = thresholds;
+        self.maybe_engage_backpressure();
+        self.maybe_disengage_backpressure();
+    }
+
     /// Consume the Datastore, returning the durable backend (e.g. to hand to a
     /// fresh `Sim` — modelling a process restart). Flush first to not lose
     /// pending writes.

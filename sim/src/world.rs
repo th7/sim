@@ -1074,9 +1074,9 @@ impl RealmWorld {
         Ok(self.inventory_of(username).unwrap_or_default())
     }
 
-    /// Build a structure of `kind` at `(x, y)`. Check order (the realm/instance
-    /// gate is applied by the caller): out_of_chunk → footprint_blocked →
-    /// no_player → insufficient_materials. Returns the new inventory.
+    /// Build a structure of `kind` at `(x, y)`. Check order: no_build_in_instance
+    /// → out_of_chunk → footprint_blocked → no_player → insufficient_materials.
+    /// Returns the new inventory.
     pub fn build(
         &mut self,
         username: &str,
@@ -1084,6 +1084,10 @@ impl RealmWorld {
         x: i64,
         y: i64,
     ) -> Result<Inventory, VerbError> {
+        // Structures are an Overworld-only affordance; Instances are ephemeral.
+        if !self.realm.is_overworld() {
+            return Err(VerbError::NoBuildInInstance);
+        }
         // Build cell must be in the player's current chunk.
         let player_pos = self.position_of(username).ok_or(VerbError::NoPlayer)?;
         if coord_for(x, y) != player_pos.chunk() {

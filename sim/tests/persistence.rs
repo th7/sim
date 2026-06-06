@@ -4,11 +4,27 @@
 use sim::components::{Inventory, Item, Position, StructureKind, WireId};
 use sim::geometry::ChunkCoord;
 use sim::ids::Realm;
-use sim::sim::Sim;
+use sim::sim::{Action, Sim};
 use sim::wire::{entity_states, EntityWire};
 
 fn at(x: i64, y: i64) -> Position {
     Position { x, y }
+}
+
+// Player actions are fire-and-forget intents resolved in the tick; these helpers
+// enqueue one and tick so the effect (and its durable write) lands, mirroring the
+// old immediate verbs for terse persistence setup.
+fn harvest(sim: &mut Sim, who: &str, x: i64, y: i64) {
+    sim.enqueue_action(who, Action::Harvest { x, y });
+    sim.tick();
+}
+fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) {
+    sim.enqueue_action(who, Action::Build { kind, x, y });
+    sim.tick();
+}
+fn damage(sim: &mut Sim, who: &str, x: i64, y: i64) {
+    sim.enqueue_action(who, Action::Damage { x, y });
+    sim.tick();
 }
 
 /// Tick up to `max` times, stopping as soon as `pred` holds; assert it did.
@@ -35,7 +51,7 @@ fn reconnect_resumes_position_and_inventory() {
     let mut sim = Sim::new();
     // Spawn on a tree, harvest a wood, walk east a bit.
     sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
-    sim.harvest("alice", 8_000, 8_000).unwrap();
+    harvest(&mut sim, "alice", 8_000, 8_000);
     sim.set_intent("alice", 1.0, 0.0);
     for _ in 0..5 {
         sim.tick();
@@ -56,7 +72,7 @@ fn reconnect_resumes_position_and_inventory() {
 fn reconnect_to_different_chunk_keeps_inventory_spawns_at_center() {
     let mut sim = Sim::new();
     sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
-    sim.harvest("alice", 8_000, 8_000).unwrap();
+    harvest(&mut sim, "alice", 8_000, 8_000);
     sim.disconnect("alice");
 
     // Reconnect declaring a different chunk → spawn at that chunk's center, but
@@ -75,7 +91,7 @@ fn structure_survives_restart() {
             i.items.insert(Item::Wood, 5);
             i
         });
-        sim.build("alice", StructureKind::Wall, 3_500, 3_000).unwrap();
+        build(&mut sim, "alice", StructureKind::Wall, 3_500, 3_000);
         sim.into_store() // flushes pending → durable
     };
 
@@ -101,10 +117,10 @@ fn destroyed_structure_stays_gone_after_restart() {
             i.items.insert(Item::Wood, 5);
             i
         });
-        sim.build("alice", StructureKind::Wall, 3_500, 3_000).unwrap();
+        build(&mut sim, "alice", StructureKind::Wall, 3_500, 3_000);
         // 100 hp / 25 → 4 hits.
         for _ in 0..4 {
-            sim.damage("alice", 3_500, 3_000).unwrap();
+            damage(&mut sim, "alice", 3_500, 3_000);
         }
         sim.into_store()
     };
@@ -123,7 +139,7 @@ fn depletion_survives_restart() {
     let store = {
         let mut sim = Sim::new();
         sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
-        sim.harvest("alice", 8_000, 8_000).unwrap(); // depletes tree:8000:8000
+        harvest(&mut sim, "alice", 8_000, 8_000); // depletes tree:8000:8000
         sim.into_store()
     };
 
@@ -142,7 +158,7 @@ fn depletion_survives_restart() {
 fn reconnect_replaces_prior_live_session() {
     let mut sim = Sim::new();
     sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
-    sim.harvest("alice", 8_000, 8_000).unwrap(); // wood 1
+    harvest(&mut sim, "alice", 8_000, 8_000); // wood 1
 
     // A second connect for the same username (a reconnect race) must replace the
     // old session, not duplicate it.
@@ -164,7 +180,7 @@ fn idle_chunk_deactivates_then_rehydrates_from_persistence() {
     let mut inv = Inventory::default();
     inv.items.insert(Item::Wood, 5);
     sim.connect_at("alice", at(2_700, 3_000), inv);
-    sim.build("alice", StructureKind::Wall, 3_500, 3_000).unwrap();
+    build(&mut sim, "alice", StructureKind::Wall, 3_500, 3_000);
 
     // A few ticks with alice present keep chunk (0,0) hot.
     for _ in 0..5 {
@@ -201,7 +217,7 @@ fn tree_depletion_survives_walking_away_until_chunk_stops() {
     // depleted — its state was persisted and rehydrated, not regenerated.
     let mut sim = Sim::new();
     sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
-    assert_eq!(sim.harvest("alice", 8_000, 8_000), Ok(()));
+    harvest(&mut sim, "alice", 8_000, 8_000);
 
     // Sanity: the centre tree is depleted and its chunk is hot (owned).
     assert!(tree_depleted(&sim, "tree:8000:8000"));

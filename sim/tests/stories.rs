@@ -31,6 +31,26 @@ fn wood(sim: &Sim, who: &str) -> u32 {
     sim.inventory_of(who).unwrap().items.get(&Item::Wood).copied().unwrap_or(0)
 }
 
+// The verb *logic* lives on the realm; these exercise it directly and return its
+// `Result` — the right layer for the error-reason assertions, and a synchronous
+// match for the old immediate verbs (no tick, so "two clicks, no tick between"
+// still holds). Players send these as intents over the wire; that path (enqueue
+// + tick + async outcome) is pinned in `overload_backpressure` and the sim suite.
+fn harvest(sim: &mut Sim, who: &str, x: i64, y: i64) -> Result<(), VerbError> {
+    let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
+    let clock = sim.clock_ms();
+    sim.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.harvest(who, x, y, clock).map(|_| ())
+}
+fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) -> Result<(), VerbError> {
+    let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
+    sim.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.build(who, kind, x, y).map(|_| ())
+}
+fn damage(sim: &mut Sim, who: &str, x: i64, y: i64) -> Result<(), VerbError> {
+    let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
+    let clock = sim.clock_ms();
+    sim.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.damage(who, x, y, clock).map(|_| ())
+}
+
 fn player_wire_count(sim: &Sim) -> usize {
     entity_states(sim.overworld())
         .values()
@@ -77,7 +97,7 @@ mod connect_and_resume {
     fn returning_player_resumes_position_and_inventory() {
         let mut sim = Sim::new();
         sim.connect_at("ada", at(8_000, 8_000), Inventory::default());
-        sim.harvest("ada", 8_000, 8_000).unwrap(); // wood 1
+        harvest(&mut sim, "ada", 8_000, 8_000).unwrap(); // wood 1
         walk_until(&mut sim, "ada", 1.0, 0.0, 5, |_| false);
         let saved = sim.position("ada").unwrap();
 
@@ -149,7 +169,7 @@ mod continuous_movement {
         let mut sim = Sim::new();
         // Deplete the centre tree (the harvester is grandfathered through it).
         sim.connect_at("h", at(8_000, 8_000), Inventory::default());
-        sim.harvest("h", 8_000, 8_000).unwrap();
+        harvest(&mut sim, "h", 8_000, 8_000).unwrap();
         // A fresh Player who never overlapped it is still stopped by its Footprint.
         sim.connect_at("p", at(6_000, 8_000), Inventory::default());
         walk_until(&mut sim, "p", 1.0, 0.0, 100, |_| false);
@@ -227,27 +247,70 @@ mod world_persistence {
 // overload-backpressure.feature
 // ===========================================================================
 mod overload_backpressure {
-    // GAP — not yet implemented. The Datastore has a backpressure state machine
-    // (`Mode::Flowing`/`Backpressured`, unit-tested in
-    // `sim::datastore::tests::backpressure_engages_and_disengages`), but that
-    // mode is read *nowhere outside datastore.rs*: it is not wired to stall
-    // Player input, so the story's observable (a group of Players sharing one
-    // authority freeze together, then resume with state intact) cannot be proven.
-    //
-    // Surfaced to the product owner — this story was itself flagged as derived /
-    // v1-scope-uncertain. See `messages/engineer-to-product_owner-backpressure-not-wired.md`.
-    //
-    // When the freeze is wired, the ignored test below becomes the proving test.
+    // Wired via the unified intent model: all player input is a fire-and-forget
+    // intent resolved only in the tick, so an overload freeze is simply
+    // skip-the-tick while the Datastore is `Backpressured`. There is one
+    // Datastore (the single persistence authority), so the freeze is global —
+    // everyone sharing that authority freezes together. See
+    // `design/backpressure-freeze.html`.
     use super::*;
+    use sim::datastore::{Mode, Thresholds};
+    use sim::sim::Action;
 
+    /// Scenario: Under sustained overload, affected Players freeze instead of
+    /// losing state. Scenario: Play resumes when the overload clears, with the
+    /// actions taken before the freeze intact.
     #[test]
-    #[ignore = "freeze-on-overload not wired to Player input; only the Datastore Mode machine exists (see messages/engineer-to-product_owner-backpressure-not-wired.md)"]
     fn players_freeze_under_overload_and_resume_intact() {
-        // Intended: drive a shared-authority group's persistence into sustained
-        // overload, assert their inputs stall (positions stop advancing) with no
-        // state dropped, then assert play resumes once the buffer drains.
-        let _ = Sim::new();
-        unimplemented!("freeze-on-overload behaviour");
+        let mut sim = Sim::new();
+        // A group sharing one authority — the single Datastore. (They sit in
+        // separate interaction-clusters, which makes the point: they freeze
+        // together because they share the *persistence* authority, not a cluster.)
+        let group = ["a", "b", "c"];
+        sim.connect_at("a", at(8_000, 8_000), Inventory::default());
+        sim.connect_at("b", at(12_000, 12_000), Inventory::default());
+        sim.connect_at("c", at(16_000, 16_000), Inventory::default());
+
+        // A resolved harvest leaves buffered writes — the backlog to drain.
+        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        sim.tick();
+        assert!(sim.datastore().pending_len() > 0, "a write backlog exists");
+
+        // Everyone is moving; "a" has a further action queued (taken pre-freeze).
+        for who in group {
+            sim.set_intent(who, 1.0, 0.0);
+        }
+        sim.enqueue_action("a", Action::Harvest { x: 8_500, y: 8_500 });
+
+        let before: Vec<Position> = group.iter().map(|w| sim.position(w).unwrap()).collect();
+        let inv_a_before = sim.inventory_of("a").unwrap();
+
+        // The world's persistence cannot keep up → the whole authority freezes.
+        sim.set_persist_thresholds(Thresholds { n_high: 1, n_low: 1 });
+        assert_eq!(sim.datastore().mode(), Mode::Backpressured, "overload engaged");
+
+        // Then: those Players' inputs stall — they freeze together; no state is
+        // dropped or corrupted; the system does not crash.
+        sim.tick_or_flush().expect("the freeze does not crash");
+        for (i, who) in group.iter().enumerate() {
+            assert_eq!(sim.position(who).unwrap(), before[i], "{who} froze with the group");
+        }
+        assert_eq!(sim.inventory_of("a").unwrap(), inv_a_before, "no state dropped while frozen");
+
+        // When the persistence subsystem recovers (the flush drained the backlog):
+        assert_eq!(sim.datastore().mode(), Mode::Flowing, "the overload cleared");
+
+        // Then the frozen Players resume play, and the actions they took before
+        // the freeze are intact.
+        sim.tick_or_flush().expect("resume does not crash");
+        for (i, who) in group.iter().enumerate() {
+            assert!(sim.position(who).unwrap().x > before[i].x, "{who} resumed play");
+        }
+        assert_eq!(
+            sim.inventory_of("a").unwrap().items.get(&Item::Wood).copied(),
+            Some(2),
+            "the harvest queued before the freeze resolved intact on resume"
+        );
     }
 }
 
@@ -278,14 +341,14 @@ mod instances {
         enter_instance(&mut sim, "p");
         // No Structures: building is refused outright inside an Instance.
         assert_eq!(
-            sim.build("p", StructureKind::Wall, 23_000, 24_000),
+            build(&mut sim, "p", StructureKind::Wall, 23_000, 24_000),
             Err(VerbError::NoBuildInInstance),
             "an Instance hosts no Structures"
         );
         // No Resource nodes: a harvest in range finds nothing to gather.
         let p = sim.position("p").unwrap();
         assert_eq!(
-            sim.harvest("p", p.x, p.y),
+            harvest(&mut sim, "p", p.x, p.y),
             Err(VerbError::NoTarget),
             "an Instance hosts no Resource nodes"
         );
@@ -323,13 +386,13 @@ mod harvest_resource_node {
         sim.connect_at("p", at(8_000, 8_000), Inventory::default());
         // Harvest the whole centre cluster → 5 wood; every Footprint stays solid.
         for (dx, dy) in [(0, 0), (500, 500), (500, -500), (-500, 500), (-500, -500)] {
-            sim.harvest("p", 8_000 + dx, 8_000 + dy).unwrap();
+            harvest(&mut sim, "p", 8_000 + dx, 8_000 + dy).unwrap();
         }
         assert_eq!(wood(&sim, "p"), 5);
         // Building on the depleted centre node is still Footprint-blocked, exactly
         // as it is for a full node (`verbs::build_errors`).
         assert_eq!(
-            sim.build("p", StructureKind::Wall, 8_000, 8_000),
+            build(&mut sim, "p", StructureKind::Wall, 8_000, 8_000),
             Err(VerbError::FootprintBlocked),
             "a depleted node keeps its Footprint"
         );
@@ -352,7 +415,7 @@ mod build_structure {
         let mut sim = Sim::new();
         // Builder at the wall's west contact point places a wall at (3500,3000).
         sim.connect_at("builder", at(2_700, 3_000), with_wood(5));
-        sim.build("builder", StructureKind::Wall, 3_500, 3_000).unwrap();
+        build(&mut sim, "builder", StructureKind::Wall, 3_500, 3_000).unwrap();
 
         // A fresh Player walking east into it is stopped before the wall.
         sim.connect_at("p", at(1_500, 3_000), Inventory::default());
@@ -377,9 +440,9 @@ mod damage_structure {
     fn a_destroyed_structure_no_longer_blocks_movement() {
         let mut sim = Sim::new();
         sim.connect_at("builder", at(2_700, 3_000), with_wood(5));
-        sim.build("builder", StructureKind::Wall, 3_500, 3_000).unwrap();
+        build(&mut sim, "builder", StructureKind::Wall, 3_500, 3_000).unwrap();
         for _ in 0..4 {
-            sim.damage("builder", 3_500, 3_000).unwrap(); // 100hp / 25 → 4 hits
+            damage(&mut sim, "builder", 3_500, 3_000).unwrap(); // 100hp / 25 → 4 hits
         }
         assert!(
             !entity_states(sim.overworld()).contains_key(&WireId("structure:3500:3000".into())),
@@ -417,8 +480,8 @@ mod harvest_carcass {
         sim.spawn_npc(NpcKind::Deer, at(8_300, 8_000), Drives::default());
         // Two 25-dmg clicks kill the 50-HP deer, leaving a Carcass (proven harvestable
         // elsewhere — here we leave it untouched).
-        sim.damage("alice", 8_300, 8_000).unwrap();
-        sim.damage("alice", 8_300, 8_000).unwrap();
+        damage(&mut sim, "alice", 8_300, 8_000).unwrap();
+        damage(&mut sim, "alice", 8_300, 8_000).unwrap();
         assert!(!has_npc(&sim, NpcKind::Deer), "the deer is dead, leaving a Carcass");
 
         // CARCASS_PERISH_MS = 60_000 → 1200 ticks at 50 ms. Let it rot.
@@ -426,7 +489,7 @@ mod harvest_carcass {
             sim.tick();
         }
         assert!(
-            sim.harvest("alice", 8_300, 8_000).is_err(),
+            harvest(&mut sim, "alice", 8_300, 8_000).is_err(),
             "a left Carcass perishes and can no longer be harvested"
         );
     }

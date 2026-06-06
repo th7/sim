@@ -40,6 +40,13 @@ pub fn relocated_payload(realm: Realm, coord: ChunkCoord) -> Value {
     json!({ "realm": realm_value(realm), "coord": [coord.cx, coord.cy] })
 }
 
+/// The `action_rejected` push: a queued action could not be carried out, with the
+/// originating verb + target cell (to correlate it to the player's input) and the
+/// reason (`queue_full` or a tick-time verb error).
+pub fn action_rejected_payload(verb: &str, x: i64, y: i64, reason: &str) -> Value {
+    json!({ "verb": verb, "x": x, "y": y, "reason": reason })
+}
+
 /// The observable state of one entity, keyed on the wire by its [`WireId`].
 /// Equality drives changed-only delta diffing.
 #[derive(Debug, Clone, PartialEq, Eq)]

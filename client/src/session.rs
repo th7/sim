@@ -270,16 +270,13 @@ impl Session {
                     self.model.on_stats(p);
                 }
             }
-            "phx_reply" => {
-                // Surface error reasons from verb rejections (build/harvest/damage)
-                // into the model so the view can show them — otherwise the user
-                // sees clicks fail silently.
-                if m.payload.get("status").and_then(|v| v.as_str()) == Some("error") {
-                    if let Some(reason) =
-                        m.payload.get("response").and_then(|r| r.get("reason")).and_then(|s| s.as_str())
-                    {
-                        self.model.on_verb_error(reason.to_string());
-                    }
+            "action_rejected" => {
+                // Verbs are fire-and-forget intents resolved server-side in the
+                // tick; a refusal (a tick-time verb error, or `queue_full` under
+                // overload) comes back as this async push. Surface its reason so
+                // the user doesn't see clicks fail silently.
+                if let Some(reason) = m.payload.get("reason").and_then(|s| s.as_str()) {
+                    self.model.on_verb_error(reason.to_string());
                 }
             }
             _ => {} // join/leave lifecycle frames carry no model state

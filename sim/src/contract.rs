@@ -15,21 +15,16 @@ use serde_json::{json, Value};
 pub fn contract() -> Value {
     json!({
         "messages": [
-            verb("build", build_payload(), reply(reasons(&[
-                VerbError::InvalidType, VerbError::OutOfChunk, VerbError::FootprintBlocked,
-                VerbError::NoPlayer, VerbError::InsufficientMaterials, VerbError::NoBuildInInstance,
-                VerbError::NoChunk,
-            ]))),
-            verb("damage", xy_payload(), reply(reasons(&[
-                VerbError::NoPlayer, VerbError::TooFar, VerbError::NoTarget, VerbError::NoChunk,
-            ]))),
-            verb("harvest", xy_payload(), reply(reasons(&[
-                VerbError::NoPlayer, VerbError::TooFar, VerbError::Depleted, VerbError::NoTarget,
-                VerbError::NoChunk,
-            ]))),
+            // Verbs are fire-and-forget intents (like `move`): no reply. The
+            // outcome arrives asynchronously — effect deltas, a `self` push, or
+            // an `action_rejected` push.
+            intent("build", build_payload()),
+            intent("damage", xy_payload()),
+            intent("harvest", xy_payload()),
             // `join` errors are channel-join reasons (not VerbError), kept as literals.
             join_message(),
             move_message(),
+            out("action_rejected", "player", action_rejected_payload()),
             out("relocated", "player", relocated_payload()),
             out("self", "player", self_payload()),
             out("snapshot", "chunk", snapshot_payload()),
@@ -40,9 +35,9 @@ pub fn contract() -> Value {
 
 // --- message shells ---
 
-/// An inbound verb on the `player` topic: a payload plus an ok/error reply.
-fn verb(event: &str, payload: Value, reply: Value) -> Value {
-    json!({ "direction": "in", "event": event, "topic": "player", "payload": payload, "reply": reply })
+/// An inbound fire-and-forget intent on the `player` topic: a payload, no reply.
+fn intent(event: &str, payload: Value) -> Value {
+    json!({ "direction": "in", "event": event, "topic": "player", "payload": payload })
 }
 
 /// An outbound push (no reply).
@@ -75,6 +70,40 @@ fn build_payload() -> Value {
 
 fn xy_payload() -> Value {
     object(&[("x", integer()), ("y", integer())], &["x", "y"])
+}
+
+fn action_rejected_payload() -> Value {
+    object(
+        &[
+            ("verb", enum_str(&["harvest", "build", "damage"])),
+            ("x", integer()),
+            ("y", integer()),
+            ("reason", action_reasons()),
+        ],
+        &["verb", "x", "y", "reason"],
+    )
+}
+
+/// The reasons an action intent can be refused: every tick-time verb error the
+/// realm can return, plus `queue_full` (refused at the door when the per-actor
+/// queue is full).
+fn action_reasons() -> Value {
+    let mut rs: Vec<&str> = [
+        VerbError::NoPlayer,
+        VerbError::TooFar,
+        VerbError::Depleted,
+        VerbError::NoTarget,
+        VerbError::NoChunk,
+        VerbError::OutOfChunk,
+        VerbError::FootprintBlocked,
+        VerbError::InsufficientMaterials,
+        VerbError::NoBuildInInstance,
+    ]
+    .iter()
+    .map(|e| e.as_str())
+    .collect();
+    rs.push("queue_full");
+    enum_str(&rs)
 }
 
 fn relocated_payload() -> Value {
@@ -162,15 +191,12 @@ fn map_of(value: Value) -> Value {
 }
 
 /// An ok/error reply pair, the error carrying a `reason` from `reasons`.
+/// (Only channel-join messages still reply; verbs are fire-and-forget intents.)
 fn reply(reasons: Value) -> Value {
     json!({
         "ok": object(&[], &[]),
         "error": object(&[("reason", reasons)], &["reason"]),
     })
-}
-
-fn reasons(errs: &[VerbError]) -> Value {
-    enum_str(&errs.iter().map(|e| e.as_str()).collect::<Vec<_>>())
 }
 
 fn enum_str(variants: &[&str]) -> Value {

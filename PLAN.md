@@ -9,21 +9,30 @@ stories in `stories/`; the architecture invariants are in `AGENTS.md`.
 
 `sim/tests/stories.rs` makes the product owner's 14 `.feature` files executable — one module per
 story, every scenario either pinned by a proving `#[test]` or cited to the test elsewhere that
-proves it. The system satisfies **13 of 14** stories; coverage was expanded with the edge/negative/
+proves it. The system satisfies **all 14** stories; coverage was expanded with the edge/negative/
 boundary cases the stories leave to engineering (footprint blocking across full/depleted/built/
 destroyed, one-way Player collision, continuous boundary crossing, Instance fixtures + teardown,
 Carcass perishing, starving-deer-feeds-through-threat, wildlife identity/population, Region healing).
 
-**One unmet story — `overload-backpressure`.** The Datastore `Mode` machine exists but is not wired
-to freeze Player input, so the freeze observable can't be proven. Pushed upstream as a behaviour gap
-(`messages/engineer-to-product_owner-backpressure-not-wired.md`); represented as an `#[ignore]`d
-pending test. Blocked on v1-scope confirmation — do **not** implement until the PO/designer resolve it.
+## Landed: freeze-on-overload via the unified intent model
+
+`overload-backpressure` is wired and its proving test
+(`players_freeze_under_overload_and_resume_intact`) is no longer `#[ignore]`d. The key move: **all
+player input is now a fire-and-forget [`Action`] intent** (`harvest`/`build`/`damage` join `move`),
+enqueued on receipt into a per-actor bounded FIFO and resolved only in the tick (before movement),
+with outcomes async (`self` deltas, or an `action_rejected` push). With nothing resolving outside
+the tick, the overload freeze is just **skip-the-tick** while the Datastore is `Backpressured` (clock
+held, flush kept running so it self-relieves). There is one Datastore, so the freeze is global —
+everyone sharing that persistence authority freezes together. Verb *logic* now lives only on the
+realm (`RealmWorld::{harvest,build,damage}`); the synchronous verb replies left the wire contract,
+replaced by the `action_rejected` event. Design + decision record: `design/backpressure-freeze.html`.
+
+> Note: this proceeded at the engineer's direction ahead of a formal PO/designer reply on the open
+> behaviour-gap thread (`messages/engineer-to-product_owner-backpressure-not-wired.md`); per-cluster
+> backpressure (only the overloaded Island freezes) remains deferred as v2.
 
 ## Candidate next increments
 
-- **Wire freeze-on-overload** — once the PO confirms v1 scope and the trigger/resume semantics.
-  Consume `datastore::Mode::Backpressured` in the tick to stall a cluster's Player input, then
-  un-ignore the pending test. (Behaviour gap thread open.)
 - Held story scenarios will arrive once the designer answers the PO's gaps (multi-member Party
   Instance entry; the one-authority / never-under-merge observable). Add their proving tests then.
 

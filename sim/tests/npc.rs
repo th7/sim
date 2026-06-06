@@ -4,7 +4,7 @@
 
 use sim::components::{Inventory, Item, Position};
 use sim::motivation::{Drives, NpcKind};
-use sim::sim::Sim;
+use sim::sim::{Action, Sim};
 
 fn pos(x: i64, y: i64) -> Position {
     Position { x, y }
@@ -83,13 +83,17 @@ fn player_kills_deer_into_carcass_then_harvests_meat_and_hide() {
     sim.connect_at("alice", pos(8_000, 8_000), Inventory::default());
     sim.spawn_npc(NpcKind::Deer, pos(8_300, 8_000), Drives::default());
 
-    // Two 25-damage clicks kill the 50-HP deer (no tick between, so it can't flee).
-    sim.damage("alice", 8_300, 8_000).unwrap();
-    sim.damage("alice", 8_300, 8_000).unwrap();
+    // Two 25-damage clicks kill the 50-HP deer. Both resolve in one tick (FIFO,
+    // before movement), so the deer can't flee between them — the intent-model
+    // equivalent of "no tick between".
+    sim.enqueue_action("alice", Action::Damage { x: 8_300, y: 8_000 });
+    sim.enqueue_action("alice", Action::Damage { x: 8_300, y: 8_000 });
+    sim.tick();
     assert!(!has_npc(&sim, NpcKind::Deer), "deer should be dead");
 
     // The Carcass it left is harvestable into meat + hide.
-    sim.harvest("alice", 8_300, 8_000).unwrap();
+    sim.enqueue_action("alice", Action::Harvest { x: 8_300, y: 8_000 });
+    sim.tick();
     let inv = sim.inventory_of("alice").unwrap();
     assert_eq!(inv.items.get(&Item::Meat).copied(), Some(3));
     assert_eq!(inv.items.get(&Item::Hide).copied(), Some(1));
@@ -118,7 +122,8 @@ fn attacked_wolf_flees_when_not_hungry() {
     sim.connect_at("alice", pos(8_000, 8_000), Inventory::default());
     sim.spawn_npc(NpcKind::Wolf, pos(8_500, 8_000), Drives { hunger: 0.2, ..Default::default() });
 
-    sim.damage("alice", 8_500, 8_000).unwrap(); // provoke it
+    sim.enqueue_action("alice", Action::Damage { x: 8_500, y: 8_000 }); // provoke it
+    sim.tick();
     let before = npc_x(&sim, NpcKind::Wolf);
     for _ in 0..5 {
         sim.tick();
