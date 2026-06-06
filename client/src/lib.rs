@@ -8,4 +8,5 @@
 pub mod conn;
 pub mod dev;
 pub mod model;
+pub mod render;
 pub mod session;

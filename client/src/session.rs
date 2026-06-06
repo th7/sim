@@ -34,6 +34,28 @@ pub struct RenderState {
     pub last_error: Option<String>,
 }
 
+impl RenderState {
+    /// Snapshot everything the view renders out of the model. The single point
+    /// where model state becomes a render frame — the live session and the
+    /// showcase's synthetic scenarios both go through here.
+    pub fn from_model(model: &ClientModel) -> Self {
+        RenderState {
+            own: model.username().to_string(),
+            realm: model.realm(),
+            window_center: model.window_center(),
+            players: model.players(),
+            nodes: model.nodes(),
+            structures: model.structures(),
+            portals: model.portals(),
+            npcs: model.npcs(),
+            carcasses: model.carcasses(),
+            inventory: model.inventory().clone(),
+            stats: model.stats().cloned(),
+            last_error: model.last_error().map(str::to_string),
+        }
+    }
+}
+
 /// User input the render thread hands to the session task.
 #[derive(Debug, Clone, Copy)]
 pub enum Input {
@@ -100,20 +122,7 @@ impl Session {
 
     /// A cloneable render snapshot of the current model state.
     pub fn render_state(&self) -> RenderState {
-        RenderState {
-            own: self.username.clone(),
-            realm: self.model.realm(),
-            window_center: self.model.window_center(),
-            players: self.model.players(),
-            nodes: self.model.nodes(),
-            structures: self.model.structures(),
-            portals: self.model.portals(),
-            npcs: self.model.npcs(),
-            carcasses: self.model.carcasses(),
-            inventory: self.model.inventory().clone(),
-            stats: self.model.stats().cloned(),
-            last_error: self.model.last_error().map(str::to_string),
-        }
+        RenderState::from_model(&self.model)
     }
 
     /// Drive the session for the life of the connection: dispatch inbound frames,

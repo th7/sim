@@ -259,6 +259,22 @@ harvest; **Resource nodes** and **Carcasses** are its two kinds.
 
 ---
 
+## Client & display
+
+**UI element** — Anything the client can draw: the HUD panels *and* the in-world renderings
+of entities (**Players**, **Resource nodes**, **Structures**, **Portals**, **NPCs**,
+**Carcasses**) and overlays. Deliberately broader than typical usage — a rendered wolf is a
+UI element.
+_Avoid:_ Widget, control (imply HUD-only); component (web connotation).
+
+**Showcase** — The client utility that displays every **UI element** in every
+appearance-affecting state, for manual visual verification on a real display.
+_Design promise:_ completeness — a new kind of drawable thing cannot be added without the
+Showcase displaying it. The mechanism that keeps the promise is engineer-owned.
+_Avoid:_ Gallery (implies a widget library), demo (implies audience-facing).
+
+---
+
 ## Relationships
 
 - A **World** is one **Overworld** plus zero-or-more live **Instances**.

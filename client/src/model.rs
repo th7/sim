@@ -194,6 +194,10 @@ impl ClientModel {
 
     // --- observable state (the view + tests read these) ---
 
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
     pub fn realm(&self) -> RealmWire {
         self.realm
     }
