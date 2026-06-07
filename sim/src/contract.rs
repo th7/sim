@@ -144,9 +144,9 @@ fn snapshot_payload() -> Value {
     object(
         &[
             ("players", players), ("npcs", npcs), ("carcasses", carcasses), ("portals", portals),
-            ("resource_nodes", resource_nodes), ("structures", structures),
+            ("resource_nodes", resource_nodes), ("structures", structures), ("tick", integer()),
         ],
-        &["players", "portals", "resource_nodes", "structures", "npcs", "carcasses"],
+        &["players", "portals", "resource_nodes", "structures", "npcs", "carcasses", "tick"],
     )
 }
 

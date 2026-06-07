@@ -62,6 +62,10 @@ pub struct CarcassWire {
 /// empty so older payloads still parse.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ChunkSnapshot {
+    /// The server tick this snapshot is the state of — the authoritative
+    /// baseline the client's Mirror overrides at.
+    #[serde(default)]
+    pub tick: u64,
     pub players: BTreeMap<String, PlayerWire>,
     pub resource_nodes: BTreeMap<String, NodeWire>,
     pub structures: BTreeMap<String, StructureWire>,

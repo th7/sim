@@ -183,7 +183,7 @@ pub fn chunk_snapshot_push(
 ) -> Option<PhxMessage> {
     let rw = sim.realm_world(realm)?;
     let states = rw.snapshot_states();
-    let snap = chunk_snapshot(&states, coord);
+    let snap = chunk_snapshot(&states, coord, sim.tick_count());
     Some(push(topic, "snapshot", serde_json::to_value(snap).ok()?))
 }
 
@@ -254,6 +254,21 @@ mod tests {
         let out = route(&mut sim, &mut conn, &join("player:alice", json!({"username":"bob"})));
         assert_eq!(out.reply.unwrap().payload["response"]["reason"], "username_mismatch");
         assert!(conn.username.is_none());
+    }
+
+    /// The Mirror overrides its state *at* an authoritative tick — so every
+    /// snapshot says which tick it is the state of.
+    #[test]
+    fn snapshot_carries_the_server_tick() {
+        let mut sim = Sim::new();
+        sim.connect_at("alice", crate::components::Position { x: 8_000, y: 8_000 }, Default::default());
+        sim.tick();
+        sim.tick();
+        sim.tick();
+        let mut conn = ConnState::default();
+        let out = route(&mut sim, &mut conn, &join("chunk:0:0", json!({"username":"alice"})));
+        let snap = out.pushes.iter().find(|p| p.event == "snapshot").expect("snapshot push");
+        assert_eq!(snap.payload["tick"], 3, "snapshot is stamped with the tick it captures");
     }
 
     #[test]

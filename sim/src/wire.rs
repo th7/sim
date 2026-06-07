@@ -129,9 +129,14 @@ pub fn entity_states(rw: &RealmWorld) -> BTreeMap<WireId, EntityWire> {
 }
 
 /// Build the full snapshot of one chunk from a set of entity states (those
-/// whose position falls in `coord`).
-pub fn chunk_snapshot(states: &BTreeMap<WireId, EntityWire>, coord: ChunkCoord) -> ChunkSnapshot {
-    let mut snap = ChunkSnapshot::default();
+/// whose position falls in `coord`), stamped with the server `tick` it
+/// captures.
+pub fn chunk_snapshot(
+    states: &BTreeMap<WireId, EntityWire>,
+    coord: ChunkCoord,
+    tick: u64,
+) -> ChunkSnapshot {
+    let mut snap = ChunkSnapshot { tick, ..ChunkSnapshot::default() };
     for (wid, state) in states {
         if state.chunk() != coord {
             continue;

@@ -407,6 +407,9 @@
               "type": "object"
             },
             "type": "object"
+          },
+          "tick": {
+            "type": "integer"
           }
         },
         "required": [
@@ -415,7 +418,8 @@
           "resource_nodes",
           "structures",
           "npcs",
-          "carcasses"
+          "carcasses",
+          "tick"
         ],
         "type": "object"
       },

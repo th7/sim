@@ -157,7 +157,7 @@ fn snapshot_payload_conforms() {
     sim.tick();
 
     let states = sim.overworld().snapshot_states();
-    let snap = chunk_snapshot(&states, ChunkCoord::new(0, 0));
+    let snap = chunk_snapshot(&states, ChunkCoord::new(0, 0), sim.tick_count());
     let value = serde_json::to_value(&snap).unwrap();
 
     // Has all four categories populated.
