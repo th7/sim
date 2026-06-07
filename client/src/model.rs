@@ -44,6 +44,20 @@ pub enum Outbound {
     Damage(DamagePayload),
 }
 
+/// The Verb button's display state. The readiness hint reads the lawful render
+/// — the same frame the Island judges in — so it is honest by construction;
+/// `Dimmed` is a hint, never a gate (a dimmed press still sends).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerbButton {
+    /// No Target: the button is inert (a press sends nothing).
+    Inert,
+    /// The Target is within lawful-rendered interact range of the player.
+    Ready(&'static str),
+    /// The Target's lawful render is out of range — the press probably fails,
+    /// but the Island's authoritative answer may differ; it still sends.
+    Dimmed(&'static str),
+}
+
 pub struct ClientModel {
     username: String,
     realm: RealmWire,
@@ -102,7 +116,22 @@ impl ClientModel {
     pub fn on_snapshot(&mut self, coord: ChunkCoord, snap: ChunkSnapshot) -> Vec<Cmd> {
         self.mirror.on_snapshot(coord, &snap);
         self.snaps.insert(coord, snap);
+        // The Target cannot outlive the entity's visibility: despawned or out
+        // of the View window → cleared. (Distance and depletion never clear.)
+        if self.target.as_ref().is_some_and(|wid| !self.is_visible(wid)) {
+            self.target = None;
+        }
         self.maybe_shift_window()
+    }
+
+    /// Whether a WireId is currently visible in the merged View window.
+    fn is_visible(&self, wid: &str) -> bool {
+        self.snaps.values().any(|s| {
+            s.resource_nodes.contains_key(wid)
+                || s.structures.contains_key(wid)
+                || s.npcs.contains_key(wid)
+                || s.carcasses.contains_key(wid)
+        })
     }
 
     /// The server consumed our input frames through `seq` as of `tick` — the
@@ -128,8 +157,10 @@ impl ClientModel {
         self.realm = payload.realm;
         self.window_center = ChunkCoord::new(payload.coord[0], payload.coord[1]);
         self.snaps.clear();
-        // Born frozen again: the new realm speculates only from its own authority.
+        // Born frozen again: the new realm speculates only from its own
+        // authority — and the Target is born empty there too.
         self.mirror.reset();
+        self.target = None;
         let want = window(self.window_center);
         self.subscribed = want.iter().copied().collect();
         cmds.extend(want.into_iter().map(Cmd::Subscribe));
@@ -212,32 +243,34 @@ impl ClientModel {
         cmds
     }
 
-    /// The targetable entity at the click, if any: the WireId of a Resource
-    /// node, Structure, NPC, or Carcass whose rendered position is within
-    /// `tol`. Players and Portals are not targetable.
+    /// The targetable entity at the click, if any: the WireId of the *nearest*
+    /// Resource node, Structure, NPC, or Carcass whose rendered position is
+    /// within `tol` — nearest, not first-category, so a wolf standing beside a
+    /// tree doesn't lose the click to the tree. Players and Portals are not
+    /// targetable.
     fn targetable_at(&self, cx: i64, cy: i64, tol: i64) -> Option<String> {
-        let hit = |x: i64, y: i64| (x - cx).abs() < tol && (y - cy).abs() < tol;
-        for (wid, node) in self.nodes() {
-            if hit(node.x, node.y) {
-                return Some(wid);
+        let mut best: Option<(i64, String)> = None;
+        let mut consider = |x: i64, y: i64, wid: String| {
+            if (x - cx).abs() < tol && (y - cy).abs() < tol {
+                let d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+                if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                    best = Some((d, wid));
+                }
             }
+        };
+        for (wid, n) in self.nodes() {
+            consider(n.x, n.y, wid);
         }
         for (wid, s) in self.structures() {
-            if hit(s.x, s.y) {
-                return Some(wid);
-            }
+            consider(s.x, s.y, wid);
         }
         for (wid, npc) in self.npcs() {
-            if hit(npc.x, npc.y) {
-                return Some(wid);
-            }
+            consider(npc.x, npc.y, wid);
         }
         for (wid, c) in self.carcasses() {
-            if hit(c.x, c.y) {
-                return Some(wid);
-            }
+            consider(c.x, c.y, wid);
         }
-        None
+        best.map(|(_, wid)| wid)
     }
 
     /// The click-to-build path: place a wall on the clicked empty cell if
@@ -274,6 +307,43 @@ impl ClientModel {
     /// The current Target's WireId, if any.
     pub fn target(&self) -> Option<&str> {
         self.target.as_deref()
+    }
+
+    /// The Verb the current Target implies and the entity's rendered position
+    /// — `None` when no Target is visible.
+    fn target_verb_and_pos(&self) -> Option<(&'static str, i64, i64)> {
+        let wid = self.target.as_deref()?;
+        if let Some(n) = self.nodes().get(wid) {
+            return Some(("harvest", n.x, n.y));
+        }
+        if let Some(c) = self.carcasses().get(wid) {
+            return Some(("harvest", c.x, c.y));
+        }
+        if let Some(npc) = self.npcs().get(wid) {
+            return Some(("damage", npc.x, npc.y));
+        }
+        if let Some(s) = self.structures().get(wid) {
+            return Some(("damage", s.x, s.y));
+        }
+        None
+    }
+
+    /// The Verb button's display state — see [`VerbButton`]. The range hint
+    /// reads the lawful render (own Mirror position vs the Target's rendered
+    /// position), the same frame the Island judges in.
+    pub fn verb_button(&self) -> VerbButton {
+        let Some((verb, tx, ty)) = self.target_verb_and_pos() else {
+            return VerbButton::Inert;
+        };
+        let Some(me) = self.player_pos(&self.username) else {
+            return VerbButton::Dimmed(verb);
+        };
+        let (dx, dy) = (me.x - tx, me.y - ty);
+        if dx * dx + dy * dy <= INTERACT_RANGE_SQ {
+            VerbButton::Ready(verb)
+        } else {
+            VerbButton::Dimmed(verb)
+        }
     }
 
     /// The Verb button: issue the entity-directed Verb the current Target
@@ -731,6 +801,99 @@ mod tests {
         m.on_snapshot(cc(0, 0), snap);
         assert!(m.click(3.5, 3.0).is_empty(), "clicking selects only");
         assert_eq!(m.target(), Some("structure:3500:3000"));
+    }
+
+    #[test]
+    fn the_verb_button_reads_inert_ready_or_dimmed() {
+        // Inert without a Target; Ready with one in lawful-rendered range;
+        // Dimmed (but still pressable — always-send) out of range.
+        let mut m = model_with_player_at(8_000, 8_000);
+        assert_eq!(m.verb_button(), VerbButton::Inert);
+
+        let mut snap = snap_with_player("alice", 8_000, 8_000);
+        snap.resource_nodes.insert(
+            "tree:8500:8000".into(),
+            NodeWire { kind: "tree".into(), x: 8_500, y: 8_000, depleted: false },
+        );
+        snap.npcs.insert(
+            "npc:wolf:3".into(),
+            NpcWire { kind: "wolf".into(), x: 12_000, y: 8_000, hp: 80, ..NpcWire::default() },
+        );
+        m.on_snapshot(cc(0, 0), snap);
+
+        m.click(8.5, 8.0);
+        assert_eq!(m.verb_button(), VerbButton::Ready("harvest"), "in-range Gatherable");
+
+        m.click(12.0, 8.0);
+        assert_eq!(m.verb_button(), VerbButton::Dimmed("damage"), "out-of-range NPC: dimmed, not denied");
+        assert!(
+            matches!(&m.press_verb()[..], [Cmd::Send(Outbound::Damage(_))]),
+            "a dimmed press still sends — the Island judges"
+        );
+    }
+
+    #[test]
+    fn the_click_targets_the_nearest_candidate_not_the_first_category() {
+        // A wolf standing beside a tree: clicking the wolf's exact position
+        // must select the wolf, even though nodes are merged first.
+        let mut m = model_with_player_at(8_000, 8_000);
+        let mut snap = snap_with_player("alice", 8_000, 8_000);
+        snap.resource_nodes.insert(
+            "tree:8500:7600".into(),
+            NodeWire { kind: "tree".into(), x: 8_500, y: 7_600, depleted: false },
+        );
+        snap.npcs.insert(
+            "npc:wolf:0".into(),
+            NpcWire { kind: "wolf".into(), x: 8_500, y: 7_900, hp: 80, ..NpcWire::default() },
+        );
+        m.on_snapshot(cc(0, 0), snap);
+        m.click(8.5, 7.9);
+        assert_eq!(m.target(), Some("npc:wolf:0"), "nearest wins, not first-category");
+    }
+
+    #[test]
+    fn the_target_clears_when_the_entity_despawns() {
+        // A wolf is targeted; the next authoritative snapshot of its chunk no
+        // longer lists it (killed → Carcass elsewhere in the map). The Target
+        // cannot outlive the entity's visibility.
+        let mut m = model_with_player_at(8_000, 8_000);
+        let mut snap = snap_with_player("alice", 8_000, 8_000);
+        snap.npcs.insert(
+            "npc:wolf:3".into(),
+            NpcWire { kind: "wolf".into(), x: 8_200, y: 8_100, hp: 80, ..NpcWire::default() },
+        );
+        m.on_snapshot(cc(0, 0), snap);
+        m.click(8.2, 8.1);
+        assert_eq!(m.target(), Some("npc:wolf:3"));
+
+        m.on_snapshot(cc(0, 0), snap_with_player("alice", 8_000, 8_000));
+        assert_eq!(m.target(), None, "despawn clears the Target");
+    }
+
+    #[test]
+    fn the_target_survives_distance_but_not_relocation() {
+        // Distance never clears (sticky observation): the wolf walks to the far
+        // side of the visible chunk — still targeted. A world transition
+        // (relocation) clears: the Target is born empty there, like the Mirror.
+        let mut m = model_with_player_at(8_000, 8_000);
+        let mut snap = snap_with_player("alice", 8_000, 8_000);
+        snap.npcs.insert(
+            "npc:wolf:3".into(),
+            NpcWire { kind: "wolf".into(), x: 8_200, y: 8_100, hp: 80, ..NpcWire::default() },
+        );
+        m.on_snapshot(cc(0, 0), snap);
+        m.click(8.2, 8.1);
+
+        let mut far = snap_with_player("alice", 8_000, 8_000);
+        far.npcs.insert(
+            "npc:wolf:3".into(),
+            NpcWire { kind: "wolf".into(), x: 15_000, y: 15_000, hp: 80, ..NpcWire::default() },
+        );
+        m.on_snapshot(cc(0, 0), far);
+        assert_eq!(m.target(), Some("npc:wolf:3"), "distance never clears the Target");
+
+        m.on_relocated(RelocatedPayload { realm: RealmWire::Instance { id: 1 }, coord: [100, 100] });
+        assert_eq!(m.target(), None, "a world transition clears the Target");
     }
 
     #[test]

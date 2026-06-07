@@ -1111,10 +1111,14 @@ impl RealmWorld {
         if !self.realm.is_overworld() {
             return Err(VerbError::NoBuildInInstance);
         }
-        // Build cell must be in the player's current chunk.
+        // Build cell must be in the player's current chunk, and in reach — the
+        // Island judges range for every verb; the client's gate is only a hint.
         let player_pos = self.position_of(username).ok_or(VerbError::NoPlayer)?;
         if coord_for(x, y) != player_pos.chunk() {
             return Err(VerbError::OutOfChunk);
+        }
+        if !in_range(player_pos.x, player_pos.y, x, y) {
+            return Err(VerbError::TooFar);
         }
 
         // Footprint clear of obstacles and player bodies.

@@ -86,9 +86,9 @@ fn harvest_errors() {
 #[test]
 fn build_places_wall_and_spends_wood() {
     let mut sim = Sim::new();
-    sim.connect_at("alice", at(8_000, 8_000), with_wood(7));
+    sim.connect_at("alice", at(3_000, 3_800), with_wood(7));
 
-    // Build on a clear cell in the player's chunk.
+    // Build on a clear, adjacent cell in the player's chunk.
     assert_eq!(build(&mut sim, "alice", StructureKind::Wall, 3_000, 3_000), Ok(()));
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&2));
 
@@ -106,11 +106,12 @@ fn build_places_wall_and_spends_wood() {
 #[test]
 fn build_errors() {
     let mut sim = Sim::new();
-    sim.connect_at("alice", at(8_000, 8_000), with_wood(4));
+    // Clear of the tree cluster; the target cell is adjacent (in range).
+    sim.connect_at("alice", at(8_000, 12_000), with_wood(4));
 
     // Not enough wood (have 4, need 5).
     assert_eq!(
-        build(&mut sim, "alice", StructureKind::Wall, 3_000, 3_000),
+        build(&mut sim, "alice", StructureKind::Wall, 8_000, 12_800),
         Err(VerbError::InsufficientMaterials)
     );
 
@@ -127,6 +128,24 @@ fn build_errors() {
         build(&mut rich, "bob", StructureKind::Wall, 8_000, 8_000),
         Err(VerbError::FootprintBlocked)
     );
+}
+
+/// The Island judges build range — the client's gate is a UX hint, not the
+/// law. Without this check a hostile client could place walls anywhere in its
+/// chunk (and every missing intent's could-affect shadow would be chunk-sized;
+/// see design/targeting-and-wysiwyg.md).
+#[test]
+fn build_is_range_gated_server_side() {
+    let mut sim = Sim::new();
+    sim.connect_at("alice", at(8_000, 12_000), with_wood(10));
+
+    // Same chunk, two units away → too_far.
+    assert_eq!(
+        build(&mut sim, "alice", StructureKind::Wall, 8_000, 14_000),
+        Err(VerbError::TooFar)
+    );
+    // Adjacent cell → builds.
+    assert_eq!(build(&mut sim, "alice", StructureKind::Wall, 8_000, 12_800), Ok(()));
 }
 
 #[test]

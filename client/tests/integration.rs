@@ -561,6 +561,58 @@ async fn a_rejected_press_surfaces_the_islands_reason_in_last_error() {
     assert_eq!(alice.render_state().last_error.as_deref(), Some("depleted"));
 }
 
+/// The full hunt loop over the wire: click an NPC → Target; press the Verb
+/// button → entity-directed damage kills it into a Carcass; click the Carcass
+/// → retarget (no auto-transfer — the Carcass is a different entity); press →
+/// harvest yields meat + hide. A wolf is the quarry: it idles until provoked,
+/// and the four presses queue into the same resolving tick (FIFO drains whole
+/// queues per tick), so it is dead before it can flee.
+#[tokio::test]
+async fn hunt_target_press_kill_then_harvest_the_carcass() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut sim = sim::sim::Sim::new();
+    sim.spawn_npc(
+        sim::motivation::NpcKind::Wolf,
+        sim::components::Position { x: 8_500, y: 8_000 },
+        sim::motivation::Drives::default(),
+    );
+    tokio::spawn(sim::transport::serve(listener, sim::transport::Shared::with_sim(sim)));
+
+    let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
+    assert!(alice.pump_until(T, |m| !m.npcs().is_empty()).await, "the wolf is visible");
+    let (wolf_id, wolf) = alice.model().npcs().into_iter().next().unwrap();
+
+    // Click the wolf's rendered position → it becomes the Target.
+    alice.click(wolf.x as f64 / 1_000.0, wolf.y as f64 / 1_000.0).await.unwrap();
+    assert_eq!(alice.model().target(), Some(wolf_id.as_str()));
+
+    // Four presses (80 HP / 25 per hit) — identity-directed, no re-aiming.
+    for _ in 0..4 {
+        alice.press_verb().await.unwrap();
+    }
+    assert!(
+        alice.pump_until(T, |m| m.npcs().is_empty() && !m.carcasses().is_empty()).await,
+        "the wolf dies into a Carcass"
+    );
+    assert_eq!(alice.model().target(), None, "despawn cleared the Target — no auto-transfer");
+
+    // Retarget the Carcass and harvest it.
+    let (carcass_id, c) = alice.model().carcasses().into_iter().next().unwrap();
+    alice.click(c.x as f64 / 1_000.0, c.y as f64 / 1_000.0).await.unwrap();
+    assert_eq!(alice.model().target(), Some(carcass_id.as_str()));
+    alice.press_verb().await.unwrap();
+    assert!(
+        alice
+            .pump_until(T, |m| {
+                m.inventory().get("hide").copied().unwrap_or(0) >= 1
+                    && m.inventory().get("meat").copied().unwrap_or(0) >= 1
+            })
+            .await,
+        "harvesting the Carcass yields meat and hide"
+    );
+}
+
 /// With wildlife enabled, a connected client sees NPCs materialize in its view —
 /// the full server→wire→client path for the new entity kind.
 #[tokio::test]
