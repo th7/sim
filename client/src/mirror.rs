@@ -92,15 +92,25 @@ impl Mirror {
         }
     }
 
-    /// Frozen means: do not speculate. Born frozen — no baseline, no
-    /// speculation.
+    /// Frozen means: do not speculate. Born frozen (no baseline yet), and
+    /// frozen whole at the Lead bound — the Mirror never runs more than
+    /// [`protocol::consts::LEAD_BOUND_TICKS`] past the last authoritative
+    /// tick (the client-side face of Backpressure).
     pub fn frozen(&self) -> bool {
-        self.auth_tick.is_none()
+        match self.auth_tick {
+            None => true,
+            Some(auth) => self.mirror_tick - auth >= protocol::consts::LEAD_BOUND_TICKS,
+        }
     }
 
     /// Queue one of our own input frames (the same frame that goes to the
-    /// server) for speculative consumption and eventual replay.
+    /// server) for speculative consumption and eventual replay. Inputs stall
+    /// while frozen: the frame is dropped, so the replay tape cannot grow
+    /// during an outage. (The session also stops *sending* while frozen.)
     pub fn push_input(&mut self, seq: u32, dx: f64, dy: f64) {
+        if self.frozen() {
+            return;
+        }
         self.unacked.push_back(InputFrame { seq, dx, dy });
     }
 
@@ -282,6 +292,50 @@ mod tests {
         snap.players.insert("alice".into(), PlayerWire { x, y, vx: 0.0, vy: 0.0 });
         m.on_snapshot(cc(0, 0), &snap);
         m
+    }
+
+    /// The Backpressure promise, client-side: the Mirror never speculates more
+    /// than LEAD_BOUND_TICKS past authority — at the bound the *whole* Mirror
+    /// freezes (own player and everyone else; inputs stall), and the next
+    /// authoritative tick thaws it.
+    #[test]
+    fn freezes_whole_at_the_lead_bound() {
+        use protocol::consts::LEAD_BOUND_TICKS;
+        let mut m = Mirror::new("alice");
+        let mut snap = ChunkSnapshot { tick: 100, ..ChunkSnapshot::default() };
+        snap.players.insert("alice".into(), PlayerWire { x: 8_000, y: 8_000, vx: 0.0, vy: 0.0 });
+        snap.players.insert("bob".into(), PlayerWire { x: 20_000, y: 8_000, vx: 4_000.0, vy: 0.0 });
+        m.on_snapshot(cc(0, 0), &snap);
+
+        // Authority goes quiet; the client keeps trying to walk east.
+        for i in 1..=(LEAD_BOUND_TICKS + 5) {
+            m.push_input(i as u32, 1.0, 0.0);
+            m.tick();
+        }
+        assert!(m.frozen(), "at the bound the Mirror freezes");
+        let capped = 8_000 + 200 * LEAD_BOUND_TICKS as i64;
+        assert_eq!(m.position_of("alice"), Some((capped, 8_000)), "own speculation capped at K");
+        assert_eq!(
+            m.position_of("bob"),
+            Some((20_000 + 200 * LEAD_BOUND_TICKS as i64, 8_000)),
+            "whole-Mirror: bob's speculation freezes at the same bound"
+        );
+
+        // Inputs stall while frozen: frames pushed at the bound are dropped,
+        // so the replay tape cannot grow during an outage.
+        let tape_before = m.position_of("alice");
+        m.push_input(99, -1.0, 0.0);
+        m.tick();
+        assert_eq!(m.position_of("alice"), tape_before);
+
+        // Authority catches up; the Mirror thaws and speculates again.
+        let mut snap = ChunkSnapshot { tick: 102, ..ChunkSnapshot::default() };
+        snap.players.insert("alice".into(), PlayerWire { x: 8_400, y: 8_000, vx: 4_000.0, vy: 0.0 });
+        m.on_snapshot(cc(0, 0), &snap);
+        assert!(!m.frozen(), "authority advancing thaws the Mirror");
+        let before = m.position_of("alice").unwrap();
+        m.tick();
+        assert_ne!(m.position_of("alice").unwrap(), before, "speculation resumes");
     }
 
     /// Every other actor advances by its last-known Intent (the velocity the

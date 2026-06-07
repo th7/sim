@@ -30,3 +30,8 @@ pub const WALL_COST: u32 = 5;
 /// Intent holds for this many ticks (absorbing network jitter), then expires
 /// to zero — the player stands still rather than walking on stale Intent.
 pub const INTENT_GRACE_TICKS: u64 = 3;
+/// The Mirror's Lead bound: how many ticks the client's speculative simulation
+/// may run ahead of the last authoritative tick. One shared constant — a
+/// structural promise (lead ≤ bound, else whole-Mirror freeze), not a
+/// per-connection tuning. Sized to support ~400ms RTT comfortably at 20 Hz.
+pub const LEAD_BOUND_TICKS: u64 = 10;
