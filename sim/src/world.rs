@@ -1165,23 +1165,29 @@ impl RealmWorld {
         Ok(self.inventory_of(username).unwrap_or_default())
     }
 
-    /// Damage the structure at `(x, y)` by [`DAMAGE_PER_CLICK`]. Destroys it at
-    /// ≤0 HP. Check order: no_player → too_far → no_target. Returns the
-    /// structure's remaining HP (`None` if destroyed).
+    /// Damage the Structure or NPC named by `target` by [`DAMAGE_PER_CLICK`].
+    /// Entity-directed: the Verb acts on the Target's identity, judged here
+    /// against authoritative position — naming a deer hits *that* deer, however
+    /// it has moved, never a nearer one. Destroys/kills at ≤0 HP. Players are
+    /// invulnerable (not targetable). Check order: no_player → no_target →
+    /// too_far. Returns the target's remaining HP (`None` if destroyed).
     pub fn damage(
         &mut self,
         username: &str,
-        x: i64,
-        y: i64,
+        target: &WireId,
         clock_ms: u64,
     ) -> Result<Option<i64>, VerbError> {
         let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(VerbError::NoPlayer)?;
+        let e = self.wire_index.get(target).copied().ok_or(VerbError::NoTarget)?;
+        let (x, y) = self
+            .world
+            .get::<&Position>(e)
+            .map(|p| (p.x, p.y))
+            .map_err(|_| VerbError::NoTarget)?;
         if !in_range(px, py, x, y) {
             return Err(VerbError::TooFar);
         }
-        let wid = WireId(format!("structure:{x}:{y}"));
-        if let Some(e) = self.wire_index.get(&wid).copied() {
-            // Structure at exactly (x, y).
+        if self.world.get::<&Structure>(e).is_ok() {
             let new_hp = self.world.get::<&Structure>(e).map(|s| s.hp).unwrap_or(0) - DAMAGE_PER_CLICK;
             if new_hp > 0 {
                 let owner = self.world.get::<&Structure>(e).map(|s| s.owner.clone()).unwrap_or_default();
@@ -1199,45 +1205,32 @@ impl RealmWorld {
                 }));
                 return Ok(Some(new_hp));
             }
-            self.despawn_wire(&wid);
+            self.despawn_wire(target);
             self.emit(PersistEvent::DeleteStructure { x, y });
             return Ok(None);
         }
 
-        // No structure: the nearest NPC within interact range of the click (the
-        // player extends the same damage verb to wildlife). Players are invulnerable.
-        let ne = self
-            .nearest_npc_within(x, y, crate::consts::INTERACT_RANGE_SQ)
-            .ok_or(VerbError::NoTarget)?;
+        // An NPC: the player extends the same damage verb to wildlife.
+        if self.world.get::<&Npc>(e).is_err() {
+            return Err(VerbError::NoTarget);
+        }
         let by = self
             .username_index
             .get(username)
             .and_then(|&pe| self.world.get::<&PlayerControlled>(pe).ok().map(|p| p.actor.0))
             .unwrap_or(0);
         let dead = {
-            let mut h = self.world.get::<&mut Health>(ne).map_err(|_| VerbError::NoTarget)?;
+            let mut h = self.world.get::<&mut Health>(e).map_err(|_| VerbError::NoTarget)?;
             h.hp -= DAMAGE_PER_CLICK;
             h.hp <= 0
         };
-        let _ = self.world.insert_one(ne, Hurt { last_ms: clock_ms, by });
+        let _ = self.world.insert_one(e, Hurt { last_ms: clock_ms, by });
         if dead {
-            self.kill_npc(ne, clock_ms);
+            self.kill_npc(e, clock_ms);
             return Ok(None);
         }
-        let hp = self.world.get::<&Health>(ne).map(|h| h.hp).unwrap_or(0);
+        let hp = self.world.get::<&Health>(e).map(|h| h.hp).unwrap_or(0);
         Ok(Some(hp))
-    }
-
-    /// Nearest NPC entity within `range_sq` of `(x, y)`.
-    fn nearest_npc_within(&self, x: i64, y: i64, range_sq: i64) -> Option<Entity> {
-        let target = P2::new(x, y);
-        self.world
-            .query::<(&Position, &Npc)>()
-            .iter()
-            .map(|(e, (p, _))| (e, dist_sq(P2::new(p.x, p.y), target)))
-            .filter(|(_, d)| *d <= range_sq)
-            .min_by_key(|(_, d)| *d)
-            .map(|(e, _)| e)
     }
 
     /// Portals in this realm a player at `(px, py)` currently overlaps, with the

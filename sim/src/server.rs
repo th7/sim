@@ -98,18 +98,14 @@ pub fn route(sim: &mut Sim, conn: &mut ConnState, msg: &PhxMessage) -> Outcome {
         // `move`). The outcome — effect deltas or an async `action_rejected` —
         // arrives later through the broadcast channel. Malformed frames are
         // dropped silently, as `move` drops a missing dx/dy.
+        // Harvest/damage are entity-directed: the payload names the Target's
+        // WireId.
         "harvest" => {
-            // Entity-directed: the payload names the Target's WireId.
-            if let (Some(user), Some(target)) = (
-                conn.username.clone(),
-                msg.payload.get("target").and_then(|v| v.as_str()),
-            ) {
-                sim.enqueue_action(&user, Action::Harvest { target: WireId(target.to_string()) });
-            }
+            enqueue_entity_verb(sim, conn, msg, |target| Action::Harvest { target });
             Outcome::default()
         }
         "damage" => {
-            enqueue_xy(sim, conn, msg, |x, y| Action::Damage { x, y });
+            enqueue_entity_verb(sim, conn, msg, |target| Action::Damage { target });
             Outcome::default()
         }
         "build" => {
@@ -127,11 +123,18 @@ pub fn route(sim: &mut Sim, conn: &mut ConnState, msg: &PhxMessage) -> Outcome {
     }
 }
 
-/// Enqueue an `(x, y)` action intent for the connection's player, if both the
-/// player and a valid target cell are present.
-fn enqueue_xy(sim: &mut Sim, conn: &ConnState, msg: &PhxMessage, make: impl Fn(i64, i64) -> Action) {
-    if let (Some(user), Some((x, y))) = (conn.username.clone(), xy(&msg.payload)) {
-        sim.enqueue_action(&user, make(x, y));
+/// Enqueue an entity-directed action intent for the connection's player, if
+/// both the player and a target WireId are present.
+fn enqueue_entity_verb(
+    sim: &mut Sim,
+    conn: &ConnState,
+    msg: &PhxMessage,
+    make: impl Fn(WireId) -> Action,
+) {
+    if let (Some(user), Some(target)) =
+        (conn.username.clone(), msg.payload.get("target").and_then(|v| v.as_str()))
+    {
+        sim.enqueue_action(&user, make(WireId(target.to_string())));
     }
 }
 
@@ -213,10 +216,6 @@ fn num(payload: &Value, key: &str) -> Option<f64> {
 fn int(payload: &Value, key: &str) -> Option<i64> {
     payload.get(key).and_then(|v| v.as_i64())
 }
-fn xy(payload: &Value) -> Option<(i64, i64)> {
-    Some((int(payload, "x")?, int(payload, "y")?))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

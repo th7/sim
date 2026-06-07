@@ -20,6 +20,16 @@ fn npc_x(sim: &Sim, kind: NpcKind) -> i64 {
         .expect("npc present")
 }
 
+
+/// WireId of the first NPC of `kind` on the wire.
+fn npc_wid(sim: &Sim, kind: NpcKind) -> sim::components::WireId {
+    let prefix = format!("npc:{}:", kind.as_str());
+    entity_states(sim.overworld())
+        .into_iter()
+        .find_map(|(wid, s)| (matches!(s, EntityWire::Npc { .. }) && wid.0.starts_with(&prefix)).then_some(wid))
+    .expect("npc on the wire")
+}
+
 fn has_npc(sim: &Sim, kind: NpcKind) -> bool {
     sim.npcs().iter().any(|(_, k, _, _, _)| *k == kind)
 }
@@ -87,8 +97,9 @@ fn player_kills_deer_into_carcass_then_harvests_meat_and_hide() {
     // Two 25-damage clicks kill the 50-HP deer. Both resolve in one tick (FIFO,
     // before movement), so the deer can't flee between them — the intent-model
     // equivalent of "no tick between".
-    sim.enqueue_action("alice", Action::Damage { x: 8_300, y: 8_000 });
-    sim.enqueue_action("alice", Action::Damage { x: 8_300, y: 8_000 });
+    let deer = npc_wid(&sim, NpcKind::Deer);
+    sim.enqueue_action("alice", Action::Damage { target: deer.clone() });
+    sim.enqueue_action("alice", Action::Damage { target: deer });
     sim.tick();
     assert!(!has_npc(&sim, NpcKind::Deer), "deer should be dead");
 
@@ -102,6 +113,43 @@ fn player_kills_deer_into_carcass_then_harvests_meat_and_hide() {
     let inv = sim.inventory_of("alice").unwrap();
     assert_eq!(inv.items.get(&Item::Meat).copied(), Some(3));
     assert_eq!(inv.items.get(&Item::Hide).copied(), Some(1));
+}
+
+/// Entity-directed damage acts on *identity, not place*: with two deer in
+/// range, naming the farther one hits the farther one — even though the old
+/// position-based verb would have resolved to the nearer.
+#[test]
+fn damage_by_identity_hits_the_named_deer_not_the_nearest() {
+    let mut sim = Sim::new();
+    sim.connect_at("alice", pos(8_000, 8_000), Inventory::default());
+    sim.spawn_npc(NpcKind::Deer, pos(8_300, 8_000), Drives::default()); // nearer
+    sim.spawn_npc(NpcKind::Deer, pos(8_800, 8_000), Drives::default()); // farther
+
+    // Find the farther deer's WireId.
+    let farther = entity_states(sim.overworld())
+        .into_iter()
+        .find_map(|(wid, s)| match s {
+            EntityWire::Npc { x, .. } if x == 8_800 => Some(wid),
+            _ => None,
+        })
+        .expect("the farther deer is on the wire");
+
+    sim.enqueue_action("alice", Action::Damage { target: farther.clone() });
+    sim.tick();
+
+    let hps: Vec<(String, i64)> = entity_states(sim.overworld())
+        .into_iter()
+        .filter_map(|(wid, s)| match s {
+            EntityWire::Npc { hp, .. } => Some((wid.0, hp)),
+            _ => None,
+        })
+        .collect();
+    let hp_of = |w: &str| hps.iter().find(|(wid, _)| wid == w).map(|(_, hp)| *hp);
+    assert_eq!(hp_of(&farther.0), Some(25), "the named deer took the hit");
+    assert!(
+        hps.iter().any(|(wid, hp)| wid != &farther.0 && *hp == 50),
+        "the nearer, unnamed deer is untouched"
+    );
 }
 
 #[test]
@@ -127,7 +175,7 @@ fn attacked_wolf_flees_when_not_hungry() {
     sim.connect_at("alice", pos(8_000, 8_000), Inventory::default());
     sim.spawn_npc(NpcKind::Wolf, pos(8_500, 8_000), Drives { hunger: 0.2, ..Default::default() });
 
-    sim.enqueue_action("alice", Action::Damage { x: 8_500, y: 8_000 }); // provoke it
+    sim.enqueue_action("alice", Action::Damage { target: npc_wid(&sim, NpcKind::Wolf) }); // provoke it
     sim.tick();
     let before = npc_x(&sim, NpcKind::Wolf);
     for _ in 0..5 {

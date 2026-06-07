@@ -277,25 +277,25 @@ impl ClientModel {
     }
 
     /// The Verb button: issue the entity-directed Verb the current Target
-    /// implies — a Gatherable (Resource node or Carcass) → harvest. Inert
-    /// without a Target. With one, it always sends: eligibility (range, state)
-    /// is the Island's to judge, and a refusal arrives async as
-    /// `action_rejected` — the client never suppresses a press on speculated
-    /// data.
+    /// implies — a Gatherable (Resource node or Carcass) → harvest; a
+    /// Structure or NPC → damage. Inert without a Target. With one, it always
+    /// sends: eligibility (range, state) is the Island's to judge, and a
+    /// refusal arrives async as `action_rejected` — the client never
+    /// suppresses a press on speculated data.
     pub fn press_verb(&mut self) -> Vec<Cmd> {
         let Some(wid) = self.target.clone() else {
             return Vec::new();
         };
-        let is_gatherable =
-            self.nodes().contains_key(&wid) || self.carcasses().contains_key(&wid);
-        if is_gatherable {
-            self.last_error = None;
-            return vec![Cmd::Send(Outbound::Harvest(HarvestPayload {
-                target: wid,
-                seq: self.move_seq,
-            }))];
-        }
-        Vec::new()
+        let out = if self.nodes().contains_key(&wid) || self.carcasses().contains_key(&wid) {
+            Outbound::Harvest(HarvestPayload { target: wid, seq: self.move_seq })
+        } else if self.npcs().contains_key(&wid) || self.structures().contains_key(&wid) {
+            Outbound::Damage(DamagePayload { target: wid, seq: self.move_seq })
+        } else {
+            // The Target is no longer visible — nothing to act on.
+            return Vec::new();
+        };
+        self.last_error = None;
+        vec![Cmd::Send(out)]
     }
 
     // --- observable state (the view + tests read these) ---
@@ -680,6 +680,43 @@ mod tests {
         assert!(
             matches!(&m.press_verb()[..], [Cmd::Send(Outbound::Harvest(_))]),
             "the press sends; the Island answers `depleted`"
+        );
+    }
+
+    #[test]
+    fn the_verb_button_damages_a_targeted_npc_by_identity() {
+        let mut m = model_with_player_at(8_000, 8_000);
+        let mut snap = snap_with_player("alice", 8_000, 8_000);
+        snap.npcs.insert(
+            "npc:deer:5".into(),
+            NpcWire { kind: "deer".into(), x: 8_200, y: 8_000, hp: 50, ..NpcWire::default() },
+        );
+        m.on_snapshot(cc(0, 0), snap);
+        m.click(8.2, 8.0);
+        let cmds = m.press_verb();
+        assert_eq!(
+            cmds,
+            vec![Cmd::Send(Outbound::Damage(DamagePayload { target: "npc:deer:5".into(), seq: 0 }))]
+        );
+    }
+
+    #[test]
+    fn the_verb_button_damages_a_targeted_structure_by_identity() {
+        let mut m = model_with_player_at(3_000, 3_000);
+        let mut snap = snap_with_player("alice", 3_000, 3_000);
+        snap.structures.insert(
+            "structure:3500:3000".into(),
+            StructureWire { kind: "wall".into(), x: 3_500, y: 3_000, hp: 100, owner: "bob".into() },
+        );
+        m.on_snapshot(cc(0, 0), snap);
+        m.click(3.5, 3.0);
+        let cmds = m.press_verb();
+        assert_eq!(
+            cmds,
+            vec![Cmd::Send(Outbound::Damage(DamagePayload {
+                target: "structure:3500:3000".into(),
+                seq: 0,
+            }))]
         );
     }
 

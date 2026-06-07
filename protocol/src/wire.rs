@@ -209,10 +209,11 @@ pub struct BuildPayload {
     pub y: i64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// An entity-directed Verb: see [`HarvestPayload`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DamagePayload {
-    pub x: i64,
-    pub y: i64,
+    pub target: String,
+    pub seq: u32,
 }
 
 /// Params the client sends when joining its `player:<username>` channel.

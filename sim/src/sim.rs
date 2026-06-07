@@ -50,7 +50,7 @@ pub enum RejectedAt {
 pub enum Action {
     Harvest { target: WireId },
     Build { kind: StructureKind, x: i64, y: i64 },
-    Damage { x: i64, y: i64 },
+    Damage { target: WireId },
 }
 
 impl Action {
@@ -60,7 +60,7 @@ impl Action {
         match self {
             Action::Harvest { target } => ("harvest", RejectedAt::Entity(target.clone())),
             Action::Build { x, y, .. } => ("build", RejectedAt::Cell { x: *x, y: *y }),
-            Action::Damage { x, y } => ("damage", RejectedAt::Cell { x: *x, y: *y }),
+            Action::Damage { target } => ("damage", RejectedAt::Entity(target.clone())),
         }
     }
 }
@@ -675,8 +675,8 @@ impl Sim {
                 let outcome = match action {
                     Action::Harvest { target } => rw.harvest(&username, &target, clock).map(Some),
                     Action::Build { kind, x, y } => rw.build(&username, kind, x, y).map(Some),
-                    Action::Damage { x, y } => {
-                        rw.damage(&username, x, y, clock).map(|_| None::<Inventory>)
+                    Action::Damage { target } => {
+                        rw.damage(&username, &target, clock).map(|_| None::<Inventory>)
                     }
                 };
                 match outcome {

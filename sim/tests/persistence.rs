@@ -22,8 +22,8 @@ fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) {
     sim.enqueue_action(who, Action::Build { kind, x, y });
     sim.tick();
 }
-fn damage(sim: &mut Sim, who: &str, x: i64, y: i64) {
-    sim.enqueue_action(who, Action::Damage { x, y });
+fn damage(sim: &mut Sim, who: &str, target: &str) {
+    sim.enqueue_action(who, Action::Damage { target: WireId(target.into()) });
     sim.tick();
 }
 
@@ -120,7 +120,7 @@ fn destroyed_structure_stays_gone_after_restart() {
         build(&mut sim, "alice", StructureKind::Wall, 3_500, 3_000);
         // 100 hp / 25 → 4 hits.
         for _ in 0..4 {
-            damage(&mut sim, "alice", 3_500, 3_000);
+            damage(&mut sim, "alice", "structure:3500:3000");
         }
         sim.into_store()
     };

@@ -225,9 +225,9 @@ async fn gather_build_and_destroy_a_wall() {
         "the five wood is spent on the wall"
     );
 
-    // Damage it to destruction: 4 clicks × 25 HP = 100.
+    // Damage it to destruction: 4 presses × 25 HP = 100 — by its identity.
     for _ in 0..4 {
-        alice.send_damage(wx, wy).await.unwrap();
+        alice.send_damage(&format!("structure:{wx}:{wy}")).await.unwrap();
         alice.pump_for(Duration::from_millis(150)).await;
     }
     assert!(

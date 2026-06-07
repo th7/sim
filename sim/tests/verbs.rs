@@ -35,10 +35,13 @@ fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) -> Resul
     let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
     sim.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.build(who, kind, x, y).map(|_| ())
 }
-fn damage(sim: &mut Sim, who: &str, x: i64, y: i64) -> Result<(), VerbError> {
+fn damage(sim: &mut Sim, who: &str, target: &str) -> Result<(), VerbError> {
     let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
     let clock = sim.clock_ms();
-    sim.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.damage(who, x, y, clock).map(|_| ())
+    sim.realm_world_mut(realm)
+        .ok_or(VerbError::NoChunk)?
+        .damage(who, &WireId(target.into()), clock)
+        .map(|_| ())
 }
 
 #[test]
@@ -137,7 +140,7 @@ fn damage_reduces_hp_and_destroys_at_zero() {
 
     // 100 HP, 25/hit → 4 hits to destroy. First three leave it standing.
     for _ in 0..3 {
-        assert_eq!(damage(&mut sim, "alice", 3_500, 3_000), Ok(()));
+        assert_eq!(damage(&mut sim, "alice", "structure:3500:3000"), Ok(()));
     }
     let states = entity_states(sim.overworld());
     match states.get(&WireId("structure:3500:3000".into())) {
@@ -145,11 +148,11 @@ fn damage_reduces_hp_and_destroys_at_zero() {
         other => panic!("expected structure at 25hp, got {other:?}"),
     }
     // Fourth hit destroys it.
-    assert_eq!(damage(&mut sim, "alice", 3_500, 3_000), Ok(()));
+    assert_eq!(damage(&mut sim, "alice", "structure:3500:3000"), Ok(()));
     let states = entity_states(sim.overworld());
     assert!(!states.contains_key(&WireId("structure:3500:3000".into())));
     // Now no target there.
-    assert_eq!(damage(&mut sim, "alice", 3_500, 3_000), Err(VerbError::NoTarget));
+    assert_eq!(damage(&mut sim, "alice", "structure:3500:3000"), Err(VerbError::NoTarget));
 }
 
 #[test]
@@ -159,7 +162,7 @@ fn damage_too_far() {
     build(&mut sim, "alice", StructureKind::Wall, 3_500, 3_000).unwrap();
     // A player far from the wall cannot damage it.
     sim.connect_at("bob", at(10_000, 10_000), Inventory::default());
-    assert_eq!(damage(&mut sim, "bob", 3_500, 3_000), Err(VerbError::TooFar));
+    assert_eq!(damage(&mut sim, "bob", "structure:3500:3000"), Err(VerbError::TooFar));
 }
 
 #[test]

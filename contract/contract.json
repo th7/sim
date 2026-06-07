@@ -34,16 +34,16 @@
       "payload": {
         "additionalProperties": false,
         "properties": {
-          "x": {
+          "seq": {
             "type": "integer"
           },
-          "y": {
-            "type": "integer"
+          "target": {
+            "type": "string"
           }
         },
         "required": [
-          "x",
-          "y"
+          "target",
+          "seq"
         ],
         "type": "object"
       },

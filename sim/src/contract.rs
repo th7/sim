@@ -19,7 +19,7 @@ pub fn contract() -> Value {
             // outcome arrives asynchronously — effect deltas, a `self` push, or
             // an `action_rejected` push.
             intent("build", build_payload()),
-            intent("damage", xy_payload()),
+            intent("damage", entity_verb_payload()),
             intent("harvest", entity_verb_payload()),
             // `join` errors are channel-join reasons (not VerbError), kept as literals.
             join_message(),
@@ -76,10 +76,6 @@ fn build_payload() -> Value {
         &[("type", enum_str(&[StructureKind::Wall.as_str()])), ("x", integer()), ("y", integer())],
         &["type", "x", "y"],
     )
-}
-
-fn xy_payload() -> Value {
-    object(&[("x", integer()), ("y", integer())], &["x", "y"])
 }
 
 /// An entity-directed verb: names its Target's WireId and the movement input

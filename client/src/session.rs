@@ -226,8 +226,8 @@ impl Session {
         self.push_verb("build", json!({ "type": kind, "x": x, "y": y })).await
     }
 
-    pub async fn send_damage(&mut self, x: i64, y: i64) -> Result<(), String> {
-        self.push_verb("damage", json!({ "x": x, "y": y })).await
+    pub async fn send_damage(&mut self, target: &str) -> Result<(), String> {
+        self.push_verb("damage", json!({ "target": target, "seq": 0 })).await
     }
 
     async fn push_verb(&mut self, event: &str, payload: serde_json::Value) -> Result<(), String> {
