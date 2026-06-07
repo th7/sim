@@ -159,10 +159,22 @@ pub struct StatsPayload {
 
 // --- Inbound: client → server (verb payloads the client sends) ---
 
+/// One per-tick movement input frame. The client sends one per client tick
+/// while moving (plus a final zero-frame on release); the server consumes
+/// exactly one per simulation tick and acks the last consumed `seq`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct MovePayload {
+    pub seq: u32,
     pub dx: f64,
     pub dy: f64,
+}
+
+/// The `ack` event: the server consumed input frames through `seq` as of
+/// `tick` — the authoritative anchor the Mirror replays unacked frames on.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AckPayload {
+    pub seq: u32,
+    pub tick: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -244,8 +256,8 @@ mod tests {
             serde_json::json!({ "type": "wall", "x": 3000, "y": 3000 })
         );
         assert_eq!(
-            serde_json::to_value(MovePayload { dx: 1.0, dy: 0.0 }).unwrap(),
-            serde_json::json!({ "dx": 1.0, "dy": 0.0 })
+            serde_json::to_value(MovePayload { seq: 7, dx: 1.0, dy: 0.0 }).unwrap(),
+            serde_json::json!({ "seq": 7, "dx": 1.0, "dy": 0.0 })
         );
     }
 }

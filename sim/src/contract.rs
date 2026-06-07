@@ -24,6 +24,7 @@ pub fn contract() -> Value {
             // `join` errors are channel-join reasons (not VerbError), kept as literals.
             join_message(),
             move_message(),
+            out("ack", "player", ack_payload()),
             out("action_rejected", "player", action_rejected_payload()),
             out("relocated", "player", relocated_payload()),
             out("self", "player", self_payload()),
@@ -53,10 +54,19 @@ fn join_message() -> Value {
 }
 
 fn move_message() -> Value {
+    // A seq-tagged per-tick input frame: the server consumes one per tick and
+    // acks the last consumed seq (the `ack` event).
     json!({
         "direction": "in", "event": "move", "topic": "player",
-        "payload": object(&[("dx", number()), ("dy", number())], &["dx", "dy"]),
+        "payload": object(
+            &[("seq", integer()), ("dx", number()), ("dy", number())],
+            &["seq", "dx", "dy"],
+        ),
     })
+}
+
+fn ack_payload() -> Value {
+    object(&[("seq", integer()), ("tick", integer())], &["seq", "tick"])
 }
 
 // --- payload schemas ---

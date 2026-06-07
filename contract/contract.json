@@ -111,11 +111,36 @@
           },
           "dy": {
             "type": "number"
+          },
+          "seq": {
+            "type": "integer"
           }
         },
         "required": [
+          "seq",
           "dx",
           "dy"
+        ],
+        "type": "object"
+      },
+      "topic": "player"
+    },
+    {
+      "direction": "out",
+      "event": "ack",
+      "payload": {
+        "additionalProperties": false,
+        "properties": {
+          "seq": {
+            "type": "integer"
+          },
+          "tick": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "tick"
         ],
         "type": "object"
       },

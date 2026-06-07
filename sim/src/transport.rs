@@ -9,7 +9,9 @@ use crate::phx::{push, PhxMessage};
 use crate::dev::stats_payload;
 use crate::server::{chunk_snapshot_push, parse_topic, route, ConnState, Topic};
 use crate::sim::{OutboundEvent, Sim};
-use crate::wire::{action_rejected_payload, inventory_payload, relocated_payload};
+use crate::wire::{
+    action_rejected_payload, inventory_payload, move_ack_payload, relocated_payload,
+};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -112,6 +114,11 @@ fn spawn_tick_loop(shared: Arc<Shared>) {
                             "action_rejected",
                             action_rejected_payload(verb, x, y, reason),
                         );
+                        (topic, f)
+                    }
+                    OutboundEvent::MoveAck { username, seq, tick } => {
+                        let topic = format!("player:{username}");
+                        let f = push(&topic, "ack", move_ack_payload(seq, tick));
                         (topic, f)
                     }
                 };

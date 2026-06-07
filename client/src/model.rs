@@ -52,6 +52,9 @@ pub struct ClientModel {
     inventory: BTreeMap<String, u32>,
     dev: DevState,
     last_intent: (f64, f64),
+    /// Seq of the last sent movement input frame (the server acks the last
+    /// consumed seq back; the Mirror replays everything after it).
+    move_seq: u32,
     last_error: Option<String>,
 }
 
@@ -69,6 +72,7 @@ impl ClientModel {
             inventory: BTreeMap::new(),
             dev: DevState::default(),
             last_intent: (0.0, 0.0),
+            move_seq: 0,
             last_error: None,
         };
         let cmds = want.into_iter().map(Cmd::Subscribe).collect();
@@ -130,7 +134,12 @@ impl ClientModel {
             return Vec::new();
         }
         self.last_intent = intent;
-        vec![Cmd::Send(Outbound::Move(MovePayload { dx: intent.0, dy: intent.1 }))]
+        self.move_seq += 1;
+        vec![Cmd::Send(Outbound::Move(MovePayload {
+            seq: self.move_seq,
+            dx: intent.0,
+            dy: intent.1,
+        }))]
     }
 
     /// A click at world-unit `(wx, wy)`: harvest a live tree there, else damage a
@@ -389,19 +398,19 @@ mod tests {
         let (mut m, _) = ClientModel::new("alice", cc(0, 0));
         // East only → (1,0), one Move.
         let c1 = m.set_movement(false, false, true, false);
-        assert_eq!(c1, vec![Cmd::Send(Outbound::Move(MovePayload { dx: 1.0, dy: 0.0 }))]);
+        assert_eq!(c1, vec![Cmd::Send(Outbound::Move(MovePayload { seq: 1, dx: 1.0, dy: 0.0 }))]);
         // Same keys again → no command (de-duped).
         assert!(m.set_movement(false, false, true, false).is_empty());
         // Diagonal SE → normalized.
         let c2 = m.set_movement(false, true, true, false);
-        if let Cmd::Send(Outbound::Move(MovePayload { dx, dy })) = &c2[0] {
+        if let Cmd::Send(Outbound::Move(MovePayload { dx, dy, .. })) = &c2[0] {
             assert!((dx - 0.70710678).abs() < 1e-6 && (dy - 0.70710678).abs() < 1e-6);
         } else {
             panic!("expected a Move");
         }
-        // Release all → (0,0).
+        // Release all → (0,0); each frame carries the next seq.
         let c3 = m.set_movement(false, false, false, false);
-        assert_eq!(c3, vec![Cmd::Send(Outbound::Move(MovePayload { dx: 0.0, dy: 0.0 }))]);
+        assert_eq!(c3, vec![Cmd::Send(Outbound::Move(MovePayload { seq: 3, dx: 0.0, dy: 0.0 }))]);
     }
 
     fn model_with_player_at(x: i64, y: i64) -> ClientModel {

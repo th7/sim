@@ -29,6 +29,9 @@ pub enum OutboundEvent {
     /// (`queue_full`) or rejected by the verb at tick-time (`too_far`, …). The
     /// single async outcome channel for action failures.
     ActionRejected { username: String, verb: &'static str, x: i64, y: i64, reason: &'static str },
+    /// The player's last-consumed movement input seq as of `tick` (the `ack`
+    /// wire event) — the anchor the client's Mirror replays unacked frames on.
+    MoveAck { username: String, seq: u32, tick: u64 },
 }
 
 /// A queued, fire-and-forget player action intent. Enqueued on receipt and
@@ -57,6 +60,21 @@ impl Action {
 /// post-freeze resume burst by construction.
 const ACTION_QUEUE_CAP: usize = 8;
 
+/// One seq-tagged movement input frame: the per-tick movement Intent a live
+/// session renews. Consumed one-per-tick by the simulation (never on receipt),
+/// so the client's Mirror can replay its unacked frames exactly.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MoveFrame {
+    seq: u32,
+    dx: f64,
+    dy: f64,
+}
+
+/// Most movement frames a player may have queued. Beyond this, the oldest is
+/// dropped — bounding memory; the resulting divergence is corrected by the
+/// client's next override like any other misprediction.
+const MOVE_QUEUE_CAP: usize = 64;
+
 pub struct Sim {
     clock_ms: u64,
     tick_count: u64,
@@ -68,6 +86,10 @@ pub struct Sim {
     pending: Vec<OutboundEvent>,
     /// Per-actor queued action intents, resolved in the tick (never on receipt).
     action_queues: BTreeMap<String, VecDeque<Action>>,
+    /// Per-player queued movement input frames, consumed one per tick.
+    move_queues: BTreeMap<String, VecDeque<MoveFrame>>,
+    /// Per-player last-consumed movement seq, acked to the client's Mirror.
+    last_move_seq: BTreeMap<String, u32>,
     next_instance: u64,
     pool: Option<crate::parallel::WorkerPool>,
     datastore: Datastore<BoxedStore>,
@@ -139,6 +161,8 @@ impl Sim {
             return_to: BTreeMap::new(),
             pending: Vec::new(),
             action_queues: BTreeMap::new(),
+            move_queues: BTreeMap::new(),
+            last_move_seq: BTreeMap::new(),
             next_instance: 1,
             pool: None,
             datastore: Datastore::new(Box::new(store)),
@@ -347,6 +371,8 @@ impl Sim {
 
     pub fn disconnect(&mut self, username: &str) {
         self.return_to.remove(username);
+        self.move_queues.remove(username);
+        self.last_move_seq.remove(username);
         if let Some(realm) = self.player_realm.remove(username) {
             // Leave-flush the player's final Overworld position before removal.
             if realm.is_overworld() {
@@ -371,6 +397,47 @@ impl Sim {
             if let Some(rw) = self.realm_world_mut(realm) {
                 rw.set_intent(username, dx, dy);
             }
+        }
+    }
+
+    /// Enqueue one seq-tagged movement input frame (fire-and-forget). Consumed
+    /// one-per-tick by [`Sim::consume_move_frames`], never applied on receipt.
+    /// At [`MOVE_QUEUE_CAP`] the oldest frame is dropped.
+    pub fn enqueue_move(&mut self, username: &str, seq: u32, dx: f64, dy: f64) {
+        let queue = self.move_queues.entry(username.to_string()).or_default();
+        if queue.len() >= MOVE_QUEUE_CAP {
+            queue.pop_front();
+        }
+        queue.push_back(MoveFrame { seq, dx, dy });
+    }
+
+    /// Tick-start consumption: exactly one queued movement frame per player
+    /// becomes that player's Intent for this tick; its seq is recorded for the
+    /// ack. An empty queue leaves the current Intent standing.
+    fn consume_move_frames(&mut self) {
+        let popped: Vec<(String, MoveFrame)> = self
+            .move_queues
+            .iter_mut()
+            .filter_map(|(u, q)| q.pop_front().map(|f| (u.clone(), f)))
+            .collect();
+        for (username, frame) in popped {
+            self.set_intent(&username, frame.dx, frame.dy);
+            self.last_move_seq.insert(username, frame.seq);
+        }
+    }
+
+    /// At broadcast ticks, ack each player's last-consumed movement seq along
+    /// with the tick it is current as of — the anchor the Mirror replays from.
+    fn emit_move_acks(&mut self) {
+        if self.tick_count % crate::consts::BROADCAST_EVERY != 0 {
+            return;
+        }
+        for (username, &seq) in &self.last_move_seq {
+            self.pending.push(OutboundEvent::MoveAck {
+                username: username.clone(),
+                seq,
+                tick: self.tick_count,
+            });
         }
     }
 
@@ -427,6 +494,7 @@ impl Sim {
     pub fn tick(&mut self) {
         self.clock_ms += TICK_MS;
         self.tick_count += 1;
+        self.consume_move_frames();
         self.resolve_action_intents();
         self.overworld.tick(TICK_MS, self.clock_ms);
         for inst in self.instances.values_mut() {
@@ -434,6 +502,7 @@ impl Sim {
         }
         self.process_portals();
         self.update_wildlife(self.clock_ms);
+        self.emit_move_acks();
         self.overlay_persisted_overworld();
         self.drain_persistence();
         self.maybe_flush();
@@ -448,6 +517,7 @@ impl Sim {
         let dt = TICK_MS as f64 / 1000.0;
         let clock = self.clock_ms;
 
+        self.consume_move_frames();
         self.resolve_action_intents();
 
         let tick_realm = |rw: &mut RealmWorld| {
@@ -467,6 +537,7 @@ impl Sim {
         }
         self.process_portals();
         self.update_wildlife(self.clock_ms);
+        self.emit_move_acks();
         self.overlay_persisted_overworld();
         self.drain_persistence();
         self.maybe_flush();

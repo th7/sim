@@ -83,12 +83,16 @@ pub fn route(sim: &mut Sim, conn: &mut ConnState, msg: &PhxMessage) -> Outcome {
         "phx_leave" => on_leave(sim, conn, msg),
         "heartbeat" => Outcome { reply: Some(msg.ok()), ..Default::default() },
         "move" => {
-            if let (Some(dx), Some(dy)) = (num(&msg.payload, "dx"), num(&msg.payload, "dy")) {
+            // A seq-tagged per-tick input frame: enqueued, consumed one per
+            // tick (never applied on receipt), acked back for Mirror replay.
+            if let (Some(seq), Some(dx), Some(dy)) =
+                (int(&msg.payload, "seq"), num(&msg.payload, "dx"), num(&msg.payload, "dy"))
+            {
                 if let Some(u) = &conn.username {
-                    sim.set_intent(u, dx, dy);
+                    sim.enqueue_move(&u.clone(), seq as u32, dx, dy);
                 }
             }
-            Outcome::default() // move takes no reply (matches Elixir :noreply)
+            Outcome::default() // move takes no reply
         }
         // Verbs are fire-and-forget intents: enqueue and reply nothing (like
         // `move`). The outcome — effect deltas or an async `action_rejected` —
@@ -211,6 +215,7 @@ fn xy(payload: &Value) -> Option<(i64, i64)> {
 mod tests {
     use super::*;
     use crate::components::Item;
+    use crate::sim::OutboundEvent;
     use serde_json::json;
 
     fn join(topic: &str, payload: Value) -> PhxMessage {
@@ -269,6 +274,59 @@ mod tests {
         let out = route(&mut sim, &mut conn, &join("chunk:0:0", json!({"username":"alice"})));
         let snap = out.pushes.iter().find(|p| p.event == "snapshot").expect("snapshot push");
         assert_eq!(snap.payload["tick"], 3, "snapshot is stamped with the tick it captures");
+    }
+
+    /// Exact replay needs "one input frame = one tick of integration": frames
+    /// queue on receipt and the tick consumes exactly one per player, so the
+    /// client can re-simulate its unacked frames knowing precisely which tick
+    /// each one drove.
+    #[test]
+    fn move_frames_are_consumed_one_per_tick() {
+        let mut sim = Sim::new();
+        sim.connect_at("alice", crate::components::Position { x: 8_000, y: 8_000 }, Default::default());
+        let mut conn = ConnState { username: Some("alice".into()), ..Default::default() };
+        let mv = |seq: u32, dx: f64, dy: f64| PhxMessage {
+            join_ref: None,
+            reference: None,
+            topic: "player:alice".into(),
+            event: "move".into(),
+            payload: json!({"seq": seq, "dx": dx, "dy": dy}),
+        };
+        // Two frames arrive within the same inter-tick gap: east, then stop.
+        route(&mut sim, &mut conn, &mv(1, 1.0, 0.0));
+        route(&mut sim, &mut conn, &mv(2, 0.0, 0.0));
+        // Tick 1 consumes frame 1 only: one tick east = 4000 * 0.05 = 200.
+        sim.tick();
+        let p = sim.overworld().position_of("alice").unwrap();
+        assert_eq!((p.x, p.y), (8_200, 8_000), "frame 2 must not pre-empt frame 1");
+        // Tick 2 consumes frame 2 (stop): no further movement.
+        sim.tick();
+        let p = sim.overworld().position_of("alice").unwrap();
+        assert_eq!((p.x, p.y), (8_200, 8_000), "frame 2 stops the player");
+    }
+
+    /// At broadcast ticks the server acks the last-consumed input seq together
+    /// with the tick it is current as of — the anchor the Mirror replays from.
+    #[test]
+    fn broadcast_ticks_ack_the_last_consumed_move_seq() {
+        let mut sim = Sim::new();
+        sim.connect_at("alice", crate::components::Position { x: 8_000, y: 8_000 }, Default::default());
+        let _ = sim.drain_events(); // clear connect-time events
+        sim.enqueue_move("alice", 7, 1.0, 0.0);
+        sim.tick(); // consumes seq 7; tick 1 is not a broadcast tick
+        assert!(
+            !sim.drain_events().iter().any(|e| matches!(e, OutboundEvent::MoveAck { .. })),
+            "acks only at broadcast cadence"
+        );
+        sim.tick(); // tick 2 broadcasts
+        let evs = sim.drain_events();
+        assert!(
+            evs.iter().any(|e| matches!(
+                e,
+                OutboundEvent::MoveAck { username, seq: 7, tick: 2 } if username == "alice"
+            )),
+            "expected ack(seq=7, tick=2), got {evs:?}"
+        );
     }
 
     /// The Mirror integrates every actor it sees by that actor's last-known

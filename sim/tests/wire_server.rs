@@ -112,7 +112,7 @@ async fn move_then_observe_position_change() {
     assert_eq!(s0.payload["players"]["bob"]["x"], 8000);
 
     // Move east (move takes no reply); observe x increase over snapshots.
-    send(&mut ws, "1", "3", "player:bob", "move", serde_json::json!({"dx":1.0,"dy":0.0})).await;
+    send(&mut ws, "1", "3", "player:bob", "move", serde_json::json!({"seq":1,"dx":1.0,"dy":0.0})).await;
     let moved = recv_until(&mut ws, |m| {
         m.event == "snapshot" && m.payload["players"]["bob"]["x"].as_i64().unwrap_or(8000) > 8000
     })

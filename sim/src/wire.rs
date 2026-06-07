@@ -47,6 +47,12 @@ pub fn action_rejected_payload(verb: &str, x: i64, y: i64, reason: &str) -> Valu
     json!({ "verb": verb, "x": x, "y": y, "reason": reason })
 }
 
+/// The `ack` push: the last-consumed movement input seq as of `tick` — the
+/// authoritative anchor the client's Mirror replays its unacked frames on.
+pub fn move_ack_payload(seq: u32, tick: u64) -> Value {
+    json!({ "seq": seq, "tick": tick })
+}
+
 /// The observable state of one entity, keyed on the wire by its [`WireId`].
 /// Equality drives changed-only delta diffing.
 #[derive(Debug, Clone, PartialEq)]
