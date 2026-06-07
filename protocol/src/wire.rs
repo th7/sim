@@ -49,7 +49,7 @@ pub struct PortalWire {
     pub y: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NpcWire {
     #[serde(rename = "type")]
     pub kind: String,
@@ -61,6 +61,20 @@ pub struct NpcWire {
     pub vx: f64,
     #[serde(default)]
     pub vy: f64,
+    /// The NPC's Demeanor (a [`crate::types::Demeanor`] wire string). Payloads
+    /// predating the field parse as Calm — the neutral read.
+    #[serde(default = "default_demeanor")]
+    pub demeanor: String,
+}
+
+fn default_demeanor() -> String {
+    crate::types::Demeanor::Calm.as_str().to_string()
+}
+
+impl Default for NpcWire {
+    fn default() -> Self {
+        NpcWire { kind: String::new(), x: 0, y: 0, hp: 0, vx: 0.0, vy: 0.0, demeanor: default_demeanor() }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -207,6 +221,17 @@ pub struct PlayerJoinParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A payload predating the demeanor field parses as Calm — the neutral
+    /// default an observer assumes about any animal it knows nothing about.
+    #[test]
+    fn npc_without_demeanor_parses_calm() {
+        let n: NpcWire = serde_json::from_value(serde_json::json!({
+            "type": "wolf", "x": 1, "y": 2, "hp": 80
+        }))
+        .unwrap();
+        assert_eq!(n.demeanor, crate::types::Demeanor::Calm.as_str());
+    }
 
     #[test]
     fn chunk_lifecycle_serde_roundtrip_over_all() {

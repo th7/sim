@@ -35,6 +35,7 @@ const PACE_PERIOD_MS: f64 = 4_000.0;
 pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario { name: "overworld", build: overworld },
+        Scenario { name: "wildlife", build: wildlife },
         Scenario { name: "instance", build: instance },
         Scenario { name: "frozen", build: frozen },
     ]
@@ -145,6 +146,50 @@ fn overworld(t_ms: f64) -> RenderState {
         .collect();
     model.on_stats(StatsPayload { active_chunks: 3, total_players: 7, total_npcs: 2, around });
 
+    RenderState::from_model(&model)
+}
+
+/// The wildlife grid: every kind × every Demeanor × every Health band — all
+/// 24 combinations at once, one kind per quadrant-row, a Demeanor per column,
+/// a band per row. The two pose axes are orthogonal; this grid displays it.
+/// Velocities aim each column's facing a different way (the urgent Demeanors
+/// also bob), without moving the grid.
+fn wildlife(_t_ms: f64) -> RenderState {
+    use crate::pose::HealthBand;
+    use protocol::types::Demeanor;
+
+    let (mut model, _) = ClientModel::new("showcase", ChunkCoord::new(0, 0));
+    let mut snap = ChunkSnapshot::default();
+
+    for (ki, kind) in NpcKind::ALL.into_iter().enumerate() {
+        let max = simcore::catalogue::npc_max_hp(kind);
+        for (di, demeanor) in Demeanor::ALL.into_iter().enumerate() {
+            // A distinct facing per column, so the grid also sweeps facings.
+            let (vx, vy) = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)][di];
+            for (bi, band) in HealthBand::ALL.into_iter().enumerate() {
+                let hp = match band {
+                    HealthBand::Unhurt => max,
+                    HealthBand::Wounded => max / 2,
+                    HealthBand::Critical => 1,
+                };
+                snap.npcs.insert(
+                    format!("npc:{}:{}:{}", kind.as_str(), demeanor.as_str(), bi),
+                    NpcWire {
+                        kind: kind.as_str().into(),
+                        x: 2_000 + 3_000 * di as i64,
+                        y: 1_500 + 1_800 * (bi + 4 * ki) as i64,
+                        hp,
+                        vx: vx * 1_000.0,
+                        vy: vy * 1_000.0,
+                        demeanor: demeanor.as_str().into(),
+                    },
+                );
+            }
+        }
+    }
+    // The showcase's own player anchors the camera at the grid centre.
+    snap.players.insert("showcase".into(), PlayerWire { x: 6_500, y: 7_000, ..PlayerWire::default() });
+    model.on_snapshot(ChunkCoord::new(0, 0), snap);
     RenderState::from_model(&model)
 }
 

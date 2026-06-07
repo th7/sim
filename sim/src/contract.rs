@@ -137,9 +137,9 @@ fn snapshot_payload() -> Value {
     let npcs = map_of(object(
         &[
             ("type", string()), ("x", integer()), ("y", integer()), ("hp", integer()),
-            ("vx", number()), ("vy", number()),
+            ("vx", number()), ("vy", number()), ("demeanor", string()),
         ],
-        &["type", "x", "y", "hp", "vx", "vy"],
+        &["type", "x", "y", "hp", "vx", "vy", "demeanor"],
     ));
     let carcasses = map_of(object(
         &[("x", integer()), ("y", integer()), ("meat", integer())],

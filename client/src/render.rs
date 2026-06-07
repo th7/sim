@@ -5,10 +5,11 @@
 //! NOTE: requires a GL context; nothing here is unit-testable headlessly. The
 //! model side is tested; pixels are verified manually on a real display.
 
+use crate::pose::{health_band, npc_pose, Facing};
 use crate::session::RenderState;
 use protocol::consts::IDLE_TIMEOUT_MS;
 use protocol::geometry::{ChunkCoord, SUB_UNITS_PER_UNIT};
-use protocol::types::{NpcKind, PortalDirection};
+use protocol::types::{Demeanor, NpcKind, PortalDirection};
 use protocol::wire::{ChunkLifecycle, RealmWire, StatsPayload};
 use std::collections::HashMap;
 use three_d::*;
@@ -64,6 +65,9 @@ pub struct View {
     ambient: AmbientLight,
     gui: GUI,
     lerps: HashMap<String, Lerp>,
+    /// Per-NPC facing: the last nonzero movement direction, persisted while
+    /// the NPC stands still (a stopped fight-to-hold wolf keeps aiming).
+    facings: HashMap<String, Facing>,
     last_realm: RealmWire,
     cam_target: Vec3,
 }
@@ -94,6 +98,7 @@ impl View {
             ambient,
             gui: GUI::new(context),
             lerps: HashMap::new(),
+            facings: HashMap::new(),
             last_realm: RealmWire::Overworld,
             cam_target,
         }
@@ -193,16 +198,62 @@ impl View {
             };
             objects.push(cylinder_at(context, w(p.x), 0.0, w(p.y), 0.65, 0.04, color));
         }
-        // NPCs: a body box coloured by kind (wolf grey, deer tan) + a small head.
-        for n in rs.npcs.values() {
+        // NPCs: a body box coloured by kind (wolf grey, deer tan) + a small
+        // head, posed diegetically — Demeanor pitches the body, places the
+        // head, and bobs the gait; the Health band sags the body (see
+        // `pose::npc_pose`). The whole pose is oriented along the facing.
+        // An unmapped kind or Demeanor wire string renders loud magenta
+        // rather than silently passing as some known state.
+        self.facings.retain(|id, _| rs.npcs.contains_key(id));
+        for (id, n) in &rs.npcs {
             let (x, z) = (w(n.x), w(n.y));
             let color = match NpcKind::parse(&n.kind) {
                 Some(NpcKind::Wolf) => rgb(0x607d8b),
                 Some(NpcKind::Deer) => rgb(0xbcaaa4),
                 None => rgb(0xff00ff),
             };
-            objects.push(box_at(context, x, 0.4, z, 0.7, 0.5, 0.35, color));
-            objects.push(box_at(context, x, 0.75, z, 0.3, 0.3, 0.3, color));
+            let (pose, color) = match Demeanor::parse(&n.demeanor) {
+                Some(d) => {
+                    let band = NpcKind::parse(&n.kind)
+                        .map_or(crate::pose::HealthBand::Unhurt, |k| health_band(n.hp, k));
+                    (npc_pose(d, band), color)
+                }
+                None => (npc_pose(Demeanor::Calm, crate::pose::HealthBand::Unhurt), rgb(0xff00ff)),
+            };
+            let facing = self.facings.entry(id.clone()).or_default();
+            facing.update(n.vx, n.vy);
+
+            // Gait bob: render-clock cosmetic only, phase staggered per id so
+            // a pack doesn't bounce in lockstep.
+            let phase = id.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+            let bob = pose.bob_amp * ((now * 0.014 + phase as f64).sin() as f32).abs();
+
+            // Body: long axis along the facing, sagged by the band, pitched by
+            // the Demeanor. CpuMesh::cube spans [-1,1], so halve the extents.
+            let body_h = 0.5 * pose.sag;
+            let body_y = 0.15 + body_h / 2.0 + bob;
+            let orient = Mat4::from_angle_y(radians(-facing.angle()))
+                * Mat4::from_angle_z(radians(-pose.pitch));
+            let mut body = Gm::new(
+                Mesh::new(context, &CpuMesh::cube()),
+                PhysicalMaterial::new_opaque(
+                    context,
+                    &CpuMaterial { albedo: color, ..Default::default() },
+                ),
+            );
+            body.set_transformation(
+                Mat4::from_translation(vec3(x, body_y, z))
+                    * orient
+                    * Mat4::from_nonuniform_scale(0.35, body_h / 2.0, 0.175),
+            );
+            objects.push(body);
+
+            // Head: rides the body top, lifted/dropped by the Demeanor, set
+            // slightly forward so the facing reads even on a level body.
+            let head_local = vec3(0.25, 0.15 + body_h + pose.head_dy + bob, 0.0);
+            let head_at = vec3(x, 0.0, z)
+                + (orient * head_local.extend(0.0)).truncate();
+            objects.push(box_at(context, head_at.x, head_at.y, head_at.z, 0.3, 0.3, 0.3, color));
         }
         // Carcasses: a low dark-red mound.
         for c in rs.carcasses.values() {

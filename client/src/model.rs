@@ -537,6 +537,35 @@ mod tests {
         assert_eq!(m.carcasses().get("carcass:9").unwrap().meat, 3);
     }
 
+    /// Demeanor and hp are discrete authoritative facts: the Mirror speculates
+    /// an NPC's position between snapshots but never its Demeanor or Health —
+    /// both read exactly as the last snapshot said, however far the Lead runs.
+    #[test]
+    fn mirror_speculates_npc_position_but_never_demeanor_or_hp() {
+        let mut m = model_with_player_at(8_000, 8_000);
+        let mut snap = snap_with_player("alice", 8_000, 8_000);
+        snap.npcs.insert(
+            "npc:wolf:3".into(),
+            NpcWire {
+                kind: "wolf".into(),
+                x: 8_200,
+                y: 8_100,
+                hp: 27,
+                vx: 2_000.0,
+                vy: 0.0,
+                demeanor: "aggressive".into(),
+            },
+        );
+        m.on_snapshot(cc(0, 0), snap);
+        for _ in 0..5 {
+            let _ = m.input_frame();
+        }
+        let n = m.npcs().get("npc:wolf:3").cloned().unwrap();
+        assert!(n.x > 8_200, "position speculates along the last-known Intent");
+        assert_eq!(n.demeanor, "aggressive", "Demeanor is never speculated");
+        assert_eq!(n.hp, 27, "Health is never speculated");
+    }
+
     #[test]
     fn click_damages_an_npc() {
         let mut m = model_with_player_at(8_000, 8_000);

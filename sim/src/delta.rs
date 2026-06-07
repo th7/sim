@@ -175,4 +175,28 @@ mod tests {
         let d = t.publish(&states);
         assert_eq!(d[&ChunkCoord::new(0, 0)].removes, vec![wid("alice")]);
     }
+
+    /// A Demeanor flip with nothing else changing is a real change: the calm
+    /// wolf that turns aggressive must reach observers as an upsert.
+    #[test]
+    fn demeanor_flip_alone_is_an_upsert() {
+        use protocol::types::{Demeanor, NpcKind};
+        let npc = |demeanor| EntityWire::Npc {
+            kind: NpcKind::Wolf,
+            hp: 80,
+            x: 8_000,
+            y: 8_000,
+            vx: 0.0,
+            vy: 0.0,
+            demeanor,
+        };
+        let mut t = DeltaTracker::new();
+        let mut states = BTreeMap::new();
+        states.insert(wid("npc:wolf:1"), npc(Demeanor::Calm));
+        t.publish(&states);
+
+        states.insert(wid("npc:wolf:1"), npc(Demeanor::Aggressive));
+        let d = t.publish(&states);
+        assert!(d[&ChunkCoord::new(0, 0)].upserts.contains_key(&wid("npc:wolf:1")));
+    }
 }

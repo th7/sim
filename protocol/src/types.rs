@@ -149,6 +149,50 @@ impl NpcKind {
     }
 }
 
+/// How an NPC outwardly carries itself: the observer-facing classification of
+/// its committed Action, deliberately coarser than the Action itself (see
+/// `design/glossary.md`). The server maps its per-tick Decision onto one of
+/// these; the client poses the NPC from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Demeanor {
+    Calm,
+    Feeding,
+    Aggressive,
+    Fleeing,
+}
+
+impl Demeanor {
+    /// Every Demeanor — what the showcase enumerates to display them all. The
+    /// guard match below breaks this const's compile when a variant is added,
+    /// so the list cannot silently fall behind the enum.
+    pub const ALL: [Self; 4] = {
+        let all =
+            [Demeanor::Calm, Demeanor::Feeding, Demeanor::Aggressive, Demeanor::Fleeing];
+        match all[0] {
+            Demeanor::Calm | Demeanor::Feeding | Demeanor::Aggressive | Demeanor::Fleeing => {}
+        }
+        all
+    };
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Demeanor::Calm => "calm",
+            Demeanor::Feeding => "feeding",
+            Demeanor::Aggressive => "aggressive",
+            Demeanor::Fleeing => "fleeing",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "calm" => Some(Demeanor::Calm),
+            "feeding" => Some(Demeanor::Feeding),
+            "aggressive" => Some(Demeanor::Aggressive),
+            "fleeing" => Some(Demeanor::Fleeing),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +211,13 @@ mod tests {
             assert_eq!(NpcKind::parse(k.as_str()), Some(k));
         }
         assert_eq!(NpcKind::parse("gibberish"), None);
+    }
+
+    #[test]
+    fn demeanor_wire_strings_roundtrip() {
+        for d in Demeanor::ALL {
+            assert_eq!(Demeanor::parse(d.as_str()), Some(d));
+        }
+        assert_eq!(Demeanor::parse("moody"), None);
     }
 }

@@ -112,3 +112,31 @@ fn frozen_scenario_shows_a_frozen_mirror_over_a_populated_scene() {
     // And every live scenario renders unfrozen.
     assert!(!state_of("overworld").frozen, "overworld is live");
 }
+
+/// The wildlife grid: every kind × every Demeanor × every Health band is
+/// present at once, so the manual pass judges all 24 combinations (the two
+/// pose axes are orthogonal — the grid displays it). Loops the ALL consts, so
+/// a new Demeanor or band fails here until the scene displays it.
+#[test]
+fn wildlife_scenario_displays_every_demeanor_band_combination() {
+    use client::pose::{health_band, HealthBand};
+    use protocol::types::Demeanor;
+
+    let rs = state_of("wildlife");
+    for k in NpcKind::ALL {
+        for d in Demeanor::ALL {
+            for b in HealthBand::ALL {
+                assert!(
+                    rs.npcs.values().any(|n| n.kind == k.as_str()
+                        && n.demeanor == d.as_str()
+                        && NpcKind::parse(&n.kind).map(|nk| health_band(n.hp, nk)) == Some(b)),
+                    "missing {:?} {:?} {:?}",
+                    k,
+                    d,
+                    b
+                );
+            }
+        }
+    }
+    assert!(rs.players.contains_key(&rs.own), "own player anchors the camera");
+}

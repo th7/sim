@@ -215,3 +215,35 @@ fn a_herd_flees_a_predator_together() {
     let after = herd_cx(&sim);
     assert!(after > before, "the herd should flee east, away from the wolf ({before} -> {after})");
 }
+
+/// The Demeanor of the first NPC of `kind`, as the snapshot wire carries it.
+fn wire_demeanor(sim: &Sim, kind: NpcKind) -> protocol::types::Demeanor {
+    sim.overworld()
+        .snapshot_states()
+        .into_values()
+        .find_map(|e| match e {
+            sim::wire::EntityWire::Npc { kind: k, demeanor, .. } if k == kind => Some(demeanor),
+            _ => None,
+        })
+        .expect("npc on the wire")
+}
+
+/// Demeanor is an authoritative snapshot fact: a fresh NPC reads Calm (it has
+/// committed to nothing yet); a hunting wolf reads Aggressive and the deer it
+/// chases reads Fleeing.
+#[test]
+fn snapshot_carries_the_npcs_demeanor() {
+    use protocol::types::Demeanor;
+    let mut sim = Sim::new();
+    sim.spawn_npc(NpcKind::Wolf, pos(8_000, 8_000), Drives { hunger: 0.8, ..Default::default() });
+    sim.spawn_npc(NpcKind::Deer, pos(8_800, 8_000), Drives::default());
+
+    assert_eq!(wire_demeanor(&sim, NpcKind::Wolf), Demeanor::Calm, "born calm");
+    assert_eq!(wire_demeanor(&sim, NpcKind::Deer), Demeanor::Calm, "born calm");
+
+    for _ in 0..5 {
+        sim.tick();
+    }
+    assert_eq!(wire_demeanor(&sim, NpcKind::Wolf), Demeanor::Aggressive, "hunting wolf");
+    assert_eq!(wire_demeanor(&sim, NpcKind::Deer), Demeanor::Fleeing, "hunted deer");
+}

@@ -61,7 +61,15 @@ pub enum EntityWire {
     Node { kind: ResourceKind, x: i64, y: i64, depleted: bool },
     Structure { kind: StructureKind, owner: String, hp: i64, x: i64, y: i64 },
     Portal { kind: PortalKind, direction: PortalDirection, x: i64, y: i64 },
-    Npc { kind: crate::motivation::NpcKind, hp: i64, x: i64, y: i64, vx: f64, vy: f64 },
+    Npc {
+        kind: crate::motivation::NpcKind,
+        hp: i64,
+        x: i64,
+        y: i64,
+        vx: f64,
+        vy: f64,
+        demeanor: protocol::types::Demeanor,
+    },
     Carcass { meat: i64, x: i64, y: i64 },
 }
 
@@ -125,13 +133,24 @@ pub fn entity_states(rw: &RealmWorld) -> BTreeMap<WireId, EntityWire> {
             EntityWire::Portal { kind: p.kind, direction: p.direction, x: pos.x, y: pos.y },
         );
     }
-    for (_e, (pos, vel, npc, h, wid)) in
-        world.query::<(&Position, Option<&Velocity>, &Npc, &Health, &WireId)>().iter()
+    for (_e, (pos, vel, npc, h, decision, wid)) in world
+        .query::<(
+            &Position,
+            Option<&Velocity>,
+            &Npc,
+            &Health,
+            Option<&crate::components::NpcDecision>,
+            &WireId,
+        )>()
+        .iter()
     {
         let (vx, vy) = vel.map_or((0.0, 0.0), |v| (v.vx, v.vy));
+        // A fresh NPC has committed to nothing yet — it reads Calm.
+        let demeanor =
+            decision.map_or(protocol::types::Demeanor::Calm, |d| d.0.demeanor());
         out.insert(
             wid.clone(),
-            EntityWire::Npc { kind: npc.kind, hp: h.hp, x: pos.x, y: pos.y, vx, vy },
+            EntityWire::Npc { kind: npc.kind, hp: h.hp, x: pos.x, y: pos.y, vx, vy, demeanor },
         );
     }
     for (_e, (pos, c, wid)) in world.query::<(&Position, &Carcass, &WireId)>().iter() {
@@ -187,7 +206,7 @@ pub fn chunk_snapshot(
                     },
                 );
             }
-            EntityWire::Npc { kind, hp, x, y, vx, vy } => {
+            EntityWire::Npc { kind, hp, x, y, vx, vy, demeanor } => {
                 snap.npcs.insert(
                     wid.0.clone(),
                     NpcWire {
@@ -197,6 +216,7 @@ pub fn chunk_snapshot(
                         hp: *hp,
                         vx: *vx,
                         vy: *vy,
+                        demeanor: demeanor.as_str().to_string(),
                     },
                 );
             }

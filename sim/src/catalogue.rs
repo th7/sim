@@ -4,8 +4,9 @@
 use crate::components::{Item, StructureKind};
 
 /// Footprints live in `simcore` so the client's Mirror derives the authority's
-/// exact obstacle set from kind + position; re-exported for server paths.
-pub use simcore::catalogue::{resource_footprint, structure_footprint};
+/// exact obstacle set from kind + position; NPC max-hp lives there so the
+/// client bands Health from `(hp, kind)`. Re-exported for server paths.
+pub use simcore::catalogue::{npc_max_hp, resource_footprint, structure_footprint};
 
 /// Build cost of a structure, as `(item, count)` stacks deducted on placement.
 pub fn cost(kind: StructureKind) -> &'static [(Item, u32)] {
@@ -42,15 +43,6 @@ mod tests {
             .map(|(_, qty)| *qty)
             .sum();
         assert_eq!(wood, crate::consts::WALL_COST);
-    }
-}
-
-/// Starting / maximum HP of an NPC.
-pub fn npc_max_hp(kind: crate::motivation::NpcKind) -> i64 {
-    use crate::motivation::NpcKind;
-    match kind {
-        NpcKind::Wolf => 80,
-        NpcKind::Deer => 50,
     }
 }
 

@@ -182,7 +182,9 @@ writes flow through it. *Design promise:* the world remembers (persisted state s
 restart), and the system **never silently loses or corrupts state** — under overload it stalls
 (see **Backpressure**) rather than dropping writes or crashing. Its internal mechanism (the
 pending-writes buffer, flush cadence, hydration merge) is engineer-owned — see `docs/adr/`.
-_Avoid:_ Repo, persistence layer, cache, store. Don't say "actor" in domain language.
+_Avoid:_ Repo, persistence layer, cache, store. Don't say "actor" in the actor-model
+(concurrency) sense in domain language; informally "actor" means a Player-or-NPC — an
+entity that feeds an **Intent** per tick.
 
 **Backpressure** — The system's overload-protection promise: when the **Datastore** cannot
 keep up, affected **Players** *freeze* (their inputs stall) rather than the system losing their
@@ -242,6 +244,22 @@ pick-up, attack, flee. Owned by no Need or chain: the same Action can serve diff
 wolf fighting *for* food, not *for* safety).
 _Avoid:_ Verb (a Verb is a Player-initiated server command — harvest/build/damage; an Action is
 an NPC-Plan primitive, even where the two resolve to the same effect), skill, ability.
+
+**Demeanor** — How an **NPC** outwardly carries itself: the observer-facing classification
+of its committed **Action**, one of **Calm**, **Feeding**, **Aggressive**, or **Fleeing**.
+A projection made *for* observers, deliberately coarser than the Action itself — each
+Demeanor changes what a watching **Player** should do; nothing finer is actionable. Authored
+by the **Island** (never speculated by the **Mirror**).
+_Avoid:_ Activity, behavior, state (all collide with the Action/Goal/Plan family), mood
+(mood suggests the inner Pressure; Demeanor is the outward read).
+
+**Health** — How wounded a damageable **NPC** is, from unhurt to dead; reaching zero kills
+the animal and leaves a **Carcass**. Observers never read an exact number: a watching
+**Player** sees Health only as one of three bands — **Unhurt**, **Wounded**, **Critical**.
+**Players** have no Health in v1 — Players don't die.
+_Avoid:_ Condition (vague — Health is the only condition an NPC has), hit points (the
+mechanism's unit, not the concept), health bar (a display mechanism we deliberately don't
+use).
 
 ---
 
@@ -340,6 +358,9 @@ _Avoid:_ Drift (implies error), lag (the thing Lead compensates for), prediction
   (a depleted, high-Disturbance Region spawns hungry, aggressive animals; a healthy one, placid).
 - A killed animal leaves a **Carcass**: **Players** harvest it for meat/hide, **NPCs** eat from
   it, rival predators contest it.
+- Every **NPC** presents two independent observer-facing axes: a **Demeanor** (the outward
+  read of its committed **Action**) and a banded **Health**. Both are authoritative facts
+  from the **Island** — the **Mirror** never speculates either.
 - The client runs one **Mirror** of its Player's **View window**. The Mirror speculates ahead
   of authoritative state by at most its **Lead** bound, decides no interaction, and yields to
   the **Island**'s authority on every divergence.

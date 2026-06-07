@@ -109,6 +109,21 @@ pub enum Decision {
     Graze,
 }
 
+impl Decision {
+    /// The observer-facing Demeanor this Decision presents (the wire's coarse
+    /// read of the committed Action — see `design/glossary.md`). Exhaustive on
+    /// purpose: a new Decision variant must deliberately pick its bucket.
+    pub fn demeanor(self) -> protocol::types::Demeanor {
+        use protocol::types::Demeanor;
+        match self {
+            Decision::Idle | Decision::Wander | Decision::Approach(_) => Demeanor::Calm,
+            Decision::Eat(..) | Decision::Graze => Demeanor::Feeding,
+            Decision::Attack(..) => Demeanor::Aggressive,
+            Decision::Flee(_) => Demeanor::Fleeing,
+        }
+    }
+}
+
 /// Tunable Motivation parameters. Per-kind via [`Params::for_kind`].
 #[derive(Clone, Copy, Debug)]
 pub struct Params {
@@ -392,6 +407,27 @@ mod tests {
         let before = d.hunger;
         decide(NpcKind::Wolf, &perc, &mut d, &params, DT);
         assert!(d.hunger > before, "hunger should rise each tick");
+    }
+
+    /// The observer-facing read of each committed Action: charging and
+    /// fight-to-hold are both Aggressive, both feeding forms read as Feeding,
+    /// and everything non-threatening (including walking toward food) is Calm.
+    #[test]
+    fn every_decision_classifies_to_its_demeanor() {
+        use protocol::types::Demeanor;
+        let p = P2::new(0, 0);
+        let cases = [
+            (Decision::Idle, Demeanor::Calm),
+            (Decision::Wander, Demeanor::Calm),
+            (Decision::Approach(p), Demeanor::Calm),
+            (Decision::Eat(1, p), Demeanor::Feeding),
+            (Decision::Graze, Demeanor::Feeding),
+            (Decision::Attack(1, p), Demeanor::Aggressive),
+            (Decision::Flee(p), Demeanor::Fleeing),
+        ];
+        for (decision, want) in cases {
+            assert_eq!(decision.demeanor(), want, "{decision:?}");
+        }
     }
 
     #[test]

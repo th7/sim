@@ -36,7 +36,7 @@ fn diverges_under_jitter_and_reconverges_exactly_at_rest() {
     // The wire, with jitter: frames the server hasn't received yet, keyed by
     // the tick they arrive on.
     let mut in_flight: Vec<(u64, u32, f64, f64)> = Vec::new(); // (arrives_at, seq, dx, dy)
-    let mut deliver = |sim: &mut Sim, in_flight: &mut Vec<(u64, u32, f64, f64)>| {
+    let deliver = |sim: &mut Sim, in_flight: &mut Vec<(u64, u32, f64, f64)>| {
         let now = sim.tick_count();
         in_flight.retain(|&(at, seq, dx, dy)| {
             if at <= now {

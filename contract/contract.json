@@ -306,6 +306,9 @@
             "additionalProperties": {
               "additionalProperties": false,
               "properties": {
+                "demeanor": {
+                  "type": "string"
+                },
                 "hp": {
                   "type": "integer"
                 },
@@ -331,7 +334,8 @@
                 "y",
                 "hp",
                 "vx",
-                "vy"
+                "vy",
+                "demeanor"
               ],
               "type": "object"
             },

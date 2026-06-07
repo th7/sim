@@ -381,7 +381,15 @@ mod tests {
         snap.players.insert("bob".into(), PlayerWire { x: 10_000, y: 8_000, vx: 4_000.0, vy: 0.0 });
         snap.npcs.insert(
             "npc:wolf:1".into(),
-            NpcWire { kind: "wolf".into(), x: 12_000, y: 8_000, hp: 80, vx: -2_000.0, vy: 0.0 },
+            NpcWire {
+                kind: "wolf".into(),
+                x: 12_000,
+                y: 8_000,
+                hp: 80,
+                vx: -2_000.0,
+                vy: 0.0,
+                ..NpcWire::default()
+            },
         );
         m.on_snapshot(cc(0, 0), &snap);
 
