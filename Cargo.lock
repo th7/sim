@@ -282,6 +282,7 @@ dependencies = [
  "protocol",
  "serde_json",
  "sim",
+ "simcore",
  "three-d",
  "tokio",
  "tokio-tungstenite",
