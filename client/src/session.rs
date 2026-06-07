@@ -135,6 +135,11 @@ impl Session {
     ) {
         *shared.lock().unwrap() = self.render_state();
         let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
+        // The input-frame cadence: Intent is perishable server-side, so a held
+        // key is renewed with one frame per tick (and a release sends its one
+        // zero-frame). Idle ticks emit nothing.
+        let mut input_tick =
+            tokio::time::interval(Duration::from_millis(protocol::consts::TICK_MS));
         loop {
             tokio::select! {
                 frame = self.conn.recv() => match frame {
@@ -157,6 +162,10 @@ impl Session {
                     }
                     None => break,
                 },
+                _ = input_tick.tick() => {
+                    let cmds = self.model.input_frame();
+                    self.execute(cmds).await.ok();
+                }
                 _ = heartbeat.tick() => { self.conn.heartbeat().await.ok(); }
             }
             *shared.lock().unwrap() = self.render_state();
@@ -166,6 +175,8 @@ impl Session {
     // --- input ---
 
     pub async fn movement(&mut self, n: bool, s: bool, e: bool, w: bool) -> Result<(), String> {
+        // State-only: frames go out on the pump/tick cadence, exactly one per
+        // tick — so a brief tap moves exactly one tick's distance.
         let cmds = self.model.set_movement(n, s, e, w);
         self.execute(cmds).await
     }
@@ -222,12 +233,28 @@ impl Session {
             return true;
         }
         let deadline = Instant::now() + timeout;
+        let tick = Duration::from_millis(protocol::consts::TICK_MS);
+        // Renew at pump entry: callers that pump in short bursts (≤ one tick)
+        // would otherwise never reach the renewal point and the held Intent
+        // would perish mid-walk.
+        let mut next_frame = Instant::now();
         loop {
-            let remaining = match deadline.checked_duration_since(Instant::now()) {
-                Some(r) if !r.is_zero() => r,
-                _ => return pred(&self.model),
-            };
-            match tokio::time::timeout(remaining, self.conn.recv()).await {
+            let now = Instant::now();
+            if now >= deadline {
+                return pred(&self.model);
+            }
+            // Renew the movement input frame on the tick cadence — Intent is
+            // perishable server-side; a live session keeps renewing it.
+            if now >= next_frame {
+                let cmds = self.model.input_frame();
+                self.execute(cmds).await.ok();
+                next_frame = Instant::now() + tick;
+            }
+            let wait = deadline
+                .min(next_frame)
+                .saturating_duration_since(now)
+                .max(Duration::from_millis(1));
+            match tokio::time::timeout(wait, self.conn.recv()).await {
                 Ok(Some(m)) => {
                     self.dispatch(m).await.ok();
                     if pred(&self.model) {
@@ -235,7 +262,7 @@ impl Session {
                     }
                 }
                 Ok(None) => return pred(&self.model), // socket closed
-                Err(_) => return pred(&self.model),   // timed out
+                Err(_) => {} // cadence wake-up; the loop re-checks deadline/frames
             }
         }
     }

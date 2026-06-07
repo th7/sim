@@ -46,6 +46,29 @@ fn url(port: u16) -> String {
 const T: Duration = Duration::from_secs(10);
 
 /// Is the instance's `out_of_instance` return portal currently in view?
+/// Fine-position with single-tick taps: hold a direction for exactly one input
+/// frame (one tick = 200 sub-units), stop, settle, observe — until `pred`.
+/// The closed-loop way a player nudges into place; robust to frame timing.
+async fn nudge_until(
+    alice: &mut Session,
+    (n, s, e, w): (bool, bool, bool, bool),
+    pred: impl Fn(&ClientModel) -> bool,
+) -> bool {
+    for _ in 0..20 {
+        if pred(alice.model()) {
+            return true;
+        }
+        alice.movement(n, s, e, w).await.unwrap();
+        // One frame goes out at pump entry; 40ms is under the renewal tick, so
+        // exactly one — one tick of movement.
+        alice.pump_for(Duration::from_millis(40)).await;
+        alice.movement(false, false, false, false).await.unwrap();
+        // The zero-frame goes out at the next pump entry; settle and observe.
+        alice.pump_for(Duration::from_millis(240)).await;
+    }
+    pred(alice.model())
+}
+
 fn return_portal_visible(m: &ClientModel) -> bool {
     m.portals().values().any(|p| p.direction == "out_of_instance")
 }
@@ -447,23 +470,31 @@ async fn click_builds_a_wall_in_the_cell_directly_next_to_the_cluster() {
 
     // Walk NW (north past the cluster, then a hair west) so alice's body sits
     // off the cell-grid axis the wall's AABB is on. From here she can click the
-    // adjacent cell without her own body blocking the placement.
-    alice.movement(true, false, false, false).await.unwrap();
+    // adjacent cell without her own body blocking the placement. Fine-position
+    // with single-tick taps (input frames are consumed one per tick, so a tap
+    // is exactly 200 sub-units): the placement window next to the cell is only
+    // about one tick wide, so open-loop walking would overshoot it.
     assert!(
-        alice
-            .pump_until(T, |m| m.player_pos("alice").map(|p| p.y <= 6_500).unwrap_or(false))
-            .await,
-        "walks north past the cluster"
+        nudge_until(&mut alice, (true, false, false, false), |m| {
+            m.player_pos("alice").map(|p| p.y <= 6_500).unwrap_or(false)
+        })
+        .await,
+        "taps north past the cluster"
     );
-    alice.movement(false, false, false, true).await.unwrap();
     assert!(
-        alice
-            .pump_until(T, |m| m.player_pos("alice").map(|p| p.x <= 7_700).unwrap_or(false))
-            .await,
-        "steps west off the cell-grid axis"
+        nudge_until(&mut alice, (false, false, false, true), |m| {
+            m.player_pos("alice")
+                .map(|p| {
+                    // The placement precondition itself: body clear of the
+                    // target cell's AABB, click target within interact range.
+                    let (dx, dy) = (8_500 - p.x, 6_500 - p.y);
+                    p.x <= 7_700 && dx * dx + dy * dy <= 1_000_000
+                })
+                .unwrap_or(false)
+        })
+        .await,
+        "taps west into placement range of the adjacent cell"
     );
-    alice.movement(false, false, false, false).await.unwrap();
-    alice.pump_for(Duration::from_millis(300)).await;
 
     // Click the cell at world (8.5, 6.5) — its centre is (8500, 6500), exactly
     // one cell pitch (1000 sub-units, one wall-width centre-to-centre) north of

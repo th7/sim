@@ -88,6 +88,9 @@ pub struct Sim {
     action_queues: BTreeMap<String, VecDeque<Action>>,
     /// Per-player queued movement input frames, consumed one per tick.
     move_queues: BTreeMap<String, VecDeque<MoveFrame>>,
+    /// Per-player ticks since the last consumed frame. Intent is perishable:
+    /// past [`crate::consts::INTENT_GRACE_TICKS`] it expires to zero.
+    move_starved: BTreeMap<String, u64>,
     /// Per-player last-consumed movement seq, acked to the client's Mirror.
     last_move_seq: BTreeMap<String, u32>,
     next_instance: u64,
@@ -162,6 +165,7 @@ impl Sim {
             pending: Vec::new(),
             action_queues: BTreeMap::new(),
             move_queues: BTreeMap::new(),
+            move_starved: BTreeMap::new(),
             last_move_seq: BTreeMap::new(),
             next_instance: 1,
             pool: None,
@@ -372,6 +376,7 @@ impl Sim {
     pub fn disconnect(&mut self, username: &str) {
         self.return_to.remove(username);
         self.move_queues.remove(username);
+        self.move_starved.remove(username);
         self.last_move_seq.remove(username);
         if let Some(realm) = self.player_realm.remove(username) {
             // Leave-flush the player's final Overworld position before removal.
@@ -413,16 +418,34 @@ impl Sim {
 
     /// Tick-start consumption: exactly one queued movement frame per player
     /// becomes that player's Intent for this tick; its seq is recorded for the
-    /// ack. An empty queue leaves the current Intent standing.
+    /// ack. Intent is perishable: an empty queue leaves the current Intent
+    /// standing for [`crate::consts::INTENT_GRACE_TICKS`] ticks (absorbing
+    /// jitter), then expires it to zero — a stalled or vanished session's
+    /// player stands still rather than walking on stale Intent.
     fn consume_move_frames(&mut self) {
-        let popped: Vec<(String, MoveFrame)> = self
-            .move_queues
-            .iter_mut()
-            .filter_map(|(u, q)| q.pop_front().map(|f| (u.clone(), f)))
-            .collect();
-        for (username, frame) in popped {
+        let mut consumed: Vec<(String, MoveFrame)> = Vec::new();
+        let mut expired: Vec<String> = Vec::new();
+        for (u, q) in self.move_queues.iter_mut() {
+            match q.pop_front() {
+                Some(f) => {
+                    self.move_starved.insert(u.clone(), 0);
+                    consumed.push((u.clone(), f));
+                }
+                None => {
+                    let starved = self.move_starved.entry(u.clone()).or_insert(0);
+                    *starved += 1;
+                    if *starved == crate::consts::INTENT_GRACE_TICKS + 1 {
+                        expired.push(u.clone());
+                    }
+                }
+            }
+        }
+        for (username, frame) in consumed {
             self.set_intent(&username, frame.dx, frame.dy);
             self.last_move_seq.insert(username, frame.seq);
+        }
+        for username in expired {
+            self.set_intent(&username, 0.0, 0.0);
         }
     }
 

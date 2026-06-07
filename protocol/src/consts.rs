@@ -26,3 +26,7 @@ pub const IDLE_TIMEOUT_MS: u64 = 5_000;
 /// Wood cost to build a wall — the single source for the server catalogue and
 /// the client's build-affordability gate.
 pub const WALL_COST: u32 = 5;
+/// Intent is perishable: when a player's input frames stop arriving, the last
+/// Intent holds for this many ticks (absorbing network jitter), then expires
+/// to zero — the player stands still rather than walking on stale Intent.
+pub const INTENT_GRACE_TICKS: u64 = 3;

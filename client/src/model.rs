@@ -52,6 +52,9 @@ pub struct ClientModel {
     inventory: BTreeMap<String, u32>,
     dev: DevState,
     last_intent: (f64, f64),
+    /// The intent carried by the last sent input frame (None before the first
+    /// frame) — decides whether a release still owes its final zero-frame.
+    last_sent_intent: Option<(f64, f64)>,
     /// Seq of the last sent movement input frame (the server acks the last
     /// consumed seq back; the Mirror replays everything after it).
     move_seq: u32,
@@ -72,6 +75,7 @@ impl ClientModel {
             inventory: BTreeMap::new(),
             dev: DevState::default(),
             last_intent: (0.0, 0.0),
+            last_sent_intent: None,
             move_seq: 0,
             last_error: None,
         };
@@ -122,23 +126,33 @@ impl ClientModel {
 
     // --- user input ---
 
-    /// Set the WASD key state; emits a `move` only when the normalized intent
-    /// changes (matching the old client's de-duped push). `dy` is south−north,
-    /// `dx` is east−west, to match the server's axis convention.
+    /// Set the WASD key state. State-only: frames go out via [`Self::input_frame`]
+    /// on the tick cadence — Intent is perishable server-side, so holding a key
+    /// means *renewing* it, not announcing it once. `dy` is south−north, `dx` is
+    /// east−west, to match the server's axis convention.
     pub fn set_movement(&mut self, north: bool, south: bool, east: bool, west: bool) -> Vec<Cmd> {
         let dx = (east as i32 - west as i32) as f64;
         let dy = (south as i32 - north as i32) as f64;
         let len = (dx * dx + dy * dy).sqrt();
-        let intent = if len == 0.0 { (0.0, 0.0) } else { (dx / len, dy / len) };
-        if intent == self.last_intent {
+        self.last_intent = if len == 0.0 { (0.0, 0.0) } else { (dx / len, dy / len) };
+        Vec::new()
+    }
+
+    /// Emit this tick's movement input frame, if the session owes one: a frame
+    /// per tick while the intent is nonzero (renewing the perishable Intent),
+    /// plus one final zero-frame on release. Silence while idle.
+    pub fn input_frame(&mut self) -> Vec<Cmd> {
+        let moving = self.last_intent != (0.0, 0.0);
+        let releasing = !moving && self.last_sent_intent.is_some_and(|s| s != (0.0, 0.0));
+        if !moving && !releasing {
             return Vec::new();
         }
-        self.last_intent = intent;
+        self.last_sent_intent = Some(self.last_intent);
         self.move_seq += 1;
         vec![Cmd::Send(Outbound::Move(MovePayload {
             seq: self.move_seq,
-            dx: intent.0,
-            dy: intent.1,
+            dx: self.last_intent.0,
+            dy: self.last_intent.1,
         }))]
     }
 
@@ -393,24 +407,33 @@ mod tests {
         assert_eq!(m.inventory().get("wood"), Some(&3));
     }
 
+    /// Intent is perishable server-side: a held key *renews* it with one frame
+    /// per tick; release owes exactly one zero-frame; idle is silence.
     #[test]
-    fn movement_intent_normalizes_and_dedupes() {
+    fn movement_frames_renew_per_tick_and_release_once() {
         let (mut m, _) = ClientModel::new("alice", cc(0, 0));
-        // East only → (1,0), one Move.
-        let c1 = m.set_movement(false, false, true, false);
-        assert_eq!(c1, vec![Cmd::Send(Outbound::Move(MovePayload { seq: 1, dx: 1.0, dy: 0.0 }))]);
-        // Same keys again → no command (de-duped).
-        assert!(m.set_movement(false, false, true, false).is_empty());
-        // Diagonal SE → normalized.
-        let c2 = m.set_movement(false, true, true, false);
-        if let Cmd::Send(Outbound::Move(MovePayload { dx, dy, .. })) = &c2[0] {
+        // Idle → silence.
+        assert!(m.input_frame().is_empty());
+        // East held → one frame per tick, seqs increasing.
+        assert!(m.set_movement(false, false, true, false).is_empty(), "set_movement is state-only");
+        let f1 = m.input_frame();
+        assert_eq!(f1, vec![Cmd::Send(Outbound::Move(MovePayload { seq: 1, dx: 1.0, dy: 0.0 }))]);
+        let f2 = m.input_frame();
+        assert_eq!(f2, vec![Cmd::Send(Outbound::Move(MovePayload { seq: 2, dx: 1.0, dy: 0.0 }))]);
+        // Diagonal SE → the next frame carries the normalized intent.
+        m.set_movement(false, true, true, false);
+        if let Cmd::Send(Outbound::Move(MovePayload { dx, dy, .. })) = &m.input_frame()[0] {
             assert!((dx - 0.70710678).abs() < 1e-6 && (dy - 0.70710678).abs() < 1e-6);
         } else {
             panic!("expected a Move");
         }
-        // Release all → (0,0); each frame carries the next seq.
-        let c3 = m.set_movement(false, false, false, false);
-        assert_eq!(c3, vec![Cmd::Send(Outbound::Move(MovePayload { seq: 3, dx: 0.0, dy: 0.0 }))]);
+        // Release → exactly one zero-frame, then silence.
+        m.set_movement(false, false, false, false);
+        assert_eq!(
+            m.input_frame(),
+            vec![Cmd::Send(Outbound::Move(MovePayload { seq: 4, dx: 0.0, dy: 0.0 }))]
+        );
+        assert!(m.input_frame().is_empty(), "the zero-frame is owed once");
     }
 
     fn model_with_player_at(x: i64, y: i64) -> ClientModel {

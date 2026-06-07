@@ -305,6 +305,38 @@ mod tests {
         assert_eq!((p.x, p.y), (8_200, 8_000), "frame 2 stops the player");
     }
 
+    /// Intent is perishable: it must be continuously renewed by a live session.
+    /// When frames stop, the last Intent holds for a short grace (absorbing
+    /// jitter), then expires to zero — a stalled or vanished client's player
+    /// stands still instead of walking on stale Intent forever.
+    #[test]
+    fn intent_perishes_after_grace_when_frames_stop() {
+        use crate::consts::INTENT_GRACE_TICKS;
+        let mut sim = Sim::new();
+        sim.connect_at("alice", crate::components::Position { x: 8_000, y: 8_000 }, Default::default());
+        sim.enqueue_move("alice", 1, 1.0, 0.0);
+        sim.tick(); // consumes the frame: one tick east = 200
+        assert_eq!(sim.overworld().position_of("alice").unwrap().x, 8_200);
+        // Frames stop. The Intent holds through the grace window…
+        for _ in 0..INTENT_GRACE_TICKS {
+            sim.tick();
+        }
+        let held = 8_200 + 200 * INTENT_GRACE_TICKS as i64;
+        assert_eq!(
+            sim.overworld().position_of("alice").unwrap().x,
+            held,
+            "the last Intent holds through the grace window"
+        );
+        // …then perishes: the player stands still.
+        sim.tick();
+        sim.tick();
+        assert_eq!(
+            sim.overworld().position_of("alice").unwrap().x,
+            held,
+            "expired Intent stops the player"
+        );
+    }
+
     /// At broadcast ticks the server acks the last-consumed input seq together
     /// with the tick it is current as of — the anchor the Mirror replays from.
     #[test]
