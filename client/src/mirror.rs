@@ -123,6 +123,13 @@ impl Mirror {
         }
     }
 
+    /// Return to the born state: no baseline, no speculation, nothing carried
+    /// over. Called on relocation and Instance entry/exit — every reset is the
+    /// same reset, and the next realm speculates only from its own authority.
+    pub fn reset(&mut self) {
+        *self = Mirror::new(&self.username);
+    }
+
     /// Advance the Mirror one tick: consume the next unacked frame (or hold
     /// the current Intent — the client only goes silent when idle, and idle
     /// always follows its zero-frame) and integrate. Inert while frozen.
@@ -336,6 +343,31 @@ mod tests {
         let before = m.position_of("alice").unwrap();
         m.tick();
         assert_ne!(m.position_of("alice").unwrap(), before, "speculation resumes");
+    }
+
+    /// Relocation (and Instance entry/exit) returns the Mirror to its born
+    /// state: no baseline, no speculation, nothing carried over — the old
+    /// realm's world must not animate into the new one.
+    #[test]
+    fn reset_returns_to_born_frozen() {
+        let mut m = seeded(10, 8_000, 8_000);
+        m.push_input(1, 1.0, 0.0);
+        m.tick();
+        assert!(!m.frozen());
+
+        m.reset();
+        assert!(m.frozen(), "reset → born frozen");
+        assert_eq!(m.position_of("alice"), None, "no state survives the reset");
+        m.push_input(2, 1.0, 0.0);
+        m.tick();
+        assert_eq!(m.position_of("alice"), None, "still inert until authority speaks");
+
+        // The new realm's first snapshot seeds a fresh baseline.
+        let mut snap = ChunkSnapshot { tick: 3, ..ChunkSnapshot::default() };
+        snap.players.insert("alice".into(), PlayerWire { x: 24_000, y: 24_000, vx: 0.0, vy: 0.0 });
+        m.on_snapshot(cc(1, 1), &snap);
+        assert!(!m.frozen());
+        assert_eq!(m.position_of("alice"), Some((24_000, 24_000)));
     }
 
     /// Every other actor advances by its last-known Intent (the velocity the
