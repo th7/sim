@@ -316,7 +316,7 @@ mod tests {
 
     fn snap_with_player(name: &str, x: i64, y: i64) -> ChunkSnapshot {
         let mut s = ChunkSnapshot::default();
-        s.players.insert(name.into(), PlayerWire { x, y });
+        s.players.insert(name.into(), PlayerWire { x, y, ..PlayerWire::default() });
         s
     }
 
@@ -336,8 +336,8 @@ mod tests {
         m.on_snapshot(cc(1, 0), snap_with_player("bob", 20_000, 8_000));
         let players = m.players();
         assert_eq!(players.len(), 2);
-        assert_eq!(m.player_pos("alice"), Some(PlayerWire { x: 8_000, y: 8_000 }));
-        assert_eq!(m.player_pos("bob"), Some(PlayerWire { x: 20_000, y: 8_000 }));
+        assert_eq!(m.player_pos("alice"), Some(PlayerWire { x: 8_000, y: 8_000, ..PlayerWire::default() }));
+        assert_eq!(m.player_pos("bob"), Some(PlayerWire { x: 20_000, y: 8_000, ..PlayerWire::default() }));
         assert_eq!(m.view_count(), 2);
     }
 
@@ -416,7 +416,7 @@ mod tests {
         let mut snap = snap_with_player("alice", 8_000, 8_000);
         snap.npcs.insert(
             "npc:wolf:3".into(),
-            NpcWire { kind: "wolf".into(), x: 8_200, y: 8_100, hp: 80 },
+            NpcWire { kind: "wolf".into(), x: 8_200, y: 8_100, hp: 80, ..NpcWire::default() },
         );
         snap.carcasses.insert("carcass:9".into(), CarcassWire { x: 8_300, y: 8_300, meat: 3 });
         m.on_snapshot(cc(0, 0), snap);
@@ -429,7 +429,10 @@ mod tests {
     fn click_damages_an_npc() {
         let mut m = model_with_player_at(8_000, 8_000);
         let mut snap = snap_with_player("alice", 8_000, 8_000);
-        snap.npcs.insert("npc:deer:5".into(), NpcWire { kind: "deer".into(), x: 8_200, y: 8_000, hp: 50 });
+        snap.npcs.insert(
+            "npc:deer:5".into(),
+            NpcWire { kind: "deer".into(), x: 8_200, y: 8_000, hp: 50, ..NpcWire::default() },
+        );
         m.on_snapshot(cc(0, 0), snap);
         // Click on the deer at world (8.2, 8.0) → a damage verb at its position.
         let cmds = m.click(8.2, 8.0);

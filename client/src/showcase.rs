@@ -86,7 +86,13 @@ fn overworld(t_ms: f64) -> RenderState {
     for (i, k) in NpcKind::ALL.into_iter().enumerate() {
         snap.npcs.insert(
             format!("npc:{}", k.as_str()),
-            NpcWire { kind: k.as_str().into(), x: 2_000 + 2_000 * i as i64, y: 8_000, hp: 10 },
+            NpcWire {
+                kind: k.as_str().into(),
+                x: 2_000 + 2_000 * i as i64,
+                y: 8_000,
+                hp: 10,
+                ..NpcWire::default()
+            },
         );
     }
 
@@ -94,16 +100,16 @@ fn overworld(t_ms: f64) -> RenderState {
     // (single-byte names: 97..=102 ≡ 1,2,3,4,5,0 mod 6).
     for (i, name) in ["a", "b", "c", "d", "e", "f"].into_iter().enumerate() {
         snap.players
-            .insert(name.into(), PlayerWire { x: 2_000 + 2_000 * i as i64, y: 10_000 });
+            .insert(name.into(), PlayerWire { x: 2_000 + 2_000 * i as i64, y: 10_000, ..PlayerWire::default() });
     }
     // The showcase's own player anchors the camera at the scene centre.
-    snap.players.insert("showcase".into(), PlayerWire { x: 8_000, y: 6_000 });
+    snap.players.insert("showcase".into(), PlayerWire { x: 8_000, y: 6_000, ..PlayerWire::default() });
     // The pacer walks a triangle wave below the grid, exercising the lerp.
     let phase = (t_ms % PACE_PERIOD_MS) / PACE_PERIOD_MS;
     let tri = (phase * 2.0 - 1.0).abs(); // 1 → 0 → 1 over the period
     snap.players.insert(
         "pacer".into(),
-        PlayerWire { x: 4_000 + ((1.0 - tri) * 8_000.0) as i64, y: 12_000 },
+        PlayerWire { x: 4_000 + ((1.0 - tri) * 8_000.0) as i64, y: 12_000, ..PlayerWire::default() },
     );
 
     model.on_snapshot(ChunkCoord::new(0, 0), snap);
@@ -152,7 +158,7 @@ fn instance(_t_ms: f64) -> RenderState {
     });
 
     let mut snap = ChunkSnapshot::default();
-    snap.players.insert("showcase".into(), PlayerWire { x: 8_000, y: 8_000 });
+    snap.players.insert("showcase".into(), PlayerWire { x: 8_000, y: 8_000, ..PlayerWire::default() });
     // The way back out.
     snap.portals.insert(
         "portal:return".into(),

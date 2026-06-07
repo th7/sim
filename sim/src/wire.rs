@@ -49,20 +49,20 @@ pub fn action_rejected_payload(verb: &str, x: i64, y: i64, reason: &str) -> Valu
 
 /// The observable state of one entity, keyed on the wire by its [`WireId`].
 /// Equality drives changed-only delta diffing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EntityWire {
-    Player { x: i64, y: i64 },
+    Player { x: i64, y: i64, vx: f64, vy: f64 },
     Node { kind: ResourceKind, x: i64, y: i64, depleted: bool },
     Structure { kind: StructureKind, owner: String, hp: i64, x: i64, y: i64 },
     Portal { kind: PortalKind, direction: PortalDirection, x: i64, y: i64 },
-    Npc { kind: crate::motivation::NpcKind, hp: i64, x: i64, y: i64 },
+    Npc { kind: crate::motivation::NpcKind, hp: i64, x: i64, y: i64, vx: f64, vy: f64 },
     Carcass { meat: i64, x: i64, y: i64 },
 }
 
 impl EntityWire {
     pub fn position(&self) -> (i64, i64) {
         match *self {
-            EntityWire::Player { x, y }
+            EntityWire::Player { x, y, .. }
             | EntityWire::Node { x, y, .. }
             | EntityWire::Structure { x, y, .. }
             | EntityWire::Portal { x, y, .. }
@@ -82,8 +82,11 @@ pub fn entity_states(rw: &RealmWorld) -> BTreeMap<WireId, EntityWire> {
     let mut out = BTreeMap::new();
     let world = &rw.world;
 
-    for (_e, (pos, _pc, wid)) in world.query::<(&Position, &PlayerControlled, &WireId)>().iter() {
-        out.insert(wid.clone(), EntityWire::Player { x: pos.x, y: pos.y });
+    for (_e, (pos, vel, _pc, wid)) in
+        world.query::<(&Position, Option<&Velocity>, &PlayerControlled, &WireId)>().iter()
+    {
+        let (vx, vy) = vel.map_or((0.0, 0.0), |v| (v.vx, v.vy));
+        out.insert(wid.clone(), EntityWire::Player { x: pos.x, y: pos.y, vx, vy });
     }
     for (e, (pos, g, wid)) in world.query::<(&Position, &Gatherable, &WireId)>().iter() {
         let _ = e;
@@ -116,10 +119,13 @@ pub fn entity_states(rw: &RealmWorld) -> BTreeMap<WireId, EntityWire> {
             EntityWire::Portal { kind: p.kind, direction: p.direction, x: pos.x, y: pos.y },
         );
     }
-    for (_e, (pos, npc, h, wid)) in world.query::<(&Position, &Npc, &Health, &WireId)>().iter() {
+    for (_e, (pos, vel, npc, h, wid)) in
+        world.query::<(&Position, Option<&Velocity>, &Npc, &Health, &WireId)>().iter()
+    {
+        let (vx, vy) = vel.map_or((0.0, 0.0), |v| (v.vx, v.vy));
         out.insert(
             wid.clone(),
-            EntityWire::Npc { kind: npc.kind, hp: h.hp, x: pos.x, y: pos.y },
+            EntityWire::Npc { kind: npc.kind, hp: h.hp, x: pos.x, y: pos.y, vx, vy },
         );
     }
     for (_e, (pos, c, wid)) in world.query::<(&Position, &Carcass, &WireId)>().iter() {
@@ -142,8 +148,9 @@ pub fn chunk_snapshot(
             continue;
         }
         match state {
-            EntityWire::Player { x, y } => {
-                snap.players.insert(wid.0.clone(), PlayerWire { x: *x, y: *y });
+            EntityWire::Player { x, y, vx, vy } => {
+                snap.players
+                    .insert(wid.0.clone(), PlayerWire { x: *x, y: *y, vx: *vx, vy: *vy });
             }
             EntityWire::Node { kind, x, y, depleted } => {
                 snap.resource_nodes.insert(
@@ -174,10 +181,17 @@ pub fn chunk_snapshot(
                     },
                 );
             }
-            EntityWire::Npc { kind, hp, x, y } => {
+            EntityWire::Npc { kind, hp, x, y, vx, vy } => {
                 snap.npcs.insert(
                     wid.0.clone(),
-                    NpcWire { kind: kind.as_str().to_string(), x: *x, y: *y, hp: *hp },
+                    NpcWire {
+                        kind: kind.as_str().to_string(),
+                        x: *x,
+                        y: *y,
+                        hp: *hp,
+                        vx: *vx,
+                        vy: *vy,
+                    },
                 );
             }
             EntityWire::Carcass { meat, x, y } => {

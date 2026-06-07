@@ -120,10 +120,16 @@ fn self_payload() -> Value {
 }
 
 fn snapshot_payload() -> Value {
-    let players = map_of(object(&[("x", integer()), ("y", integer())], &["x", "y"]));
+    let players = map_of(object(
+        &[("x", integer()), ("y", integer()), ("vx", number()), ("vy", number())],
+        &["x", "y", "vx", "vy"],
+    ));
     let npcs = map_of(object(
-        &[("type", string()), ("x", integer()), ("y", integer()), ("hp", integer())],
-        &["type", "x", "y", "hp"],
+        &[
+            ("type", string()), ("x", integer()), ("y", integer()), ("hp", integer()),
+            ("vx", number()), ("vy", number()),
+        ],
+        &["type", "x", "y", "hp", "vx", "vy"],
     ));
     let carcasses = map_of(object(
         &[("x", integer()), ("y", integer()), ("meat", integer())],

@@ -8,10 +8,17 @@ use std::collections::BTreeMap;
 
 // --- Outbound: server → client (the `snapshot` event, per chunk topic) ---
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 pub struct PlayerWire {
     pub x: i64,
     pub y: i64,
+    /// Current velocity (sub-units/sec) — the actor's Intent in the
+    /// integrator's units, integrated by the client's Mirror between
+    /// authoritative snapshots.
+    #[serde(default)]
+    pub vx: f64,
+    #[serde(default)]
+    pub vy: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,13 +49,18 @@ pub struct PortalWire {
     pub y: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct NpcWire {
     #[serde(rename = "type")]
     pub kind: String,
     pub x: i64,
     pub y: i64,
     pub hp: i64,
+    /// Current velocity (sub-units/sec) — see [`PlayerWire::vx`].
+    #[serde(default)]
+    pub vx: f64,
+    #[serde(default)]
+    pub vy: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -60,7 +72,7 @@ pub struct CarcassWire {
 
 /// The full `snapshot` payload for a single chunk. `npcs`/`carcasses` default to
 /// empty so older payloads still parse.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ChunkSnapshot {
     /// The server tick this snapshot is the state of — the authoritative
     /// baseline the client's Mirror overrides at.
@@ -210,7 +222,10 @@ mod tests {
     #[test]
     fn snapshot_round_trips() {
         let mut snap = ChunkSnapshot::default();
-        snap.players.insert("alice".into(), PlayerWire { x: 8000, y: 8000 });
+        snap.players.insert(
+            "alice".into(),
+            PlayerWire { x: 8000, y: 8000, vx: 4000.0, vy: 0.0 },
+        );
         snap.resource_nodes.insert(
             "tree:8000:8000".into(),
             NodeWire { kind: "tree".into(), x: 8000, y: 8000, depleted: false },

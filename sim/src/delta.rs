@@ -19,7 +19,7 @@ use crate::wire::EntityWire;
 use std::collections::BTreeMap;
 
 /// What changed in one chunk since the last publish.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChunkDelta {
     /// Entities to insert-or-replace, with their full current state.
     pub upserts: BTreeMap<WireId, EntityWire>,
@@ -107,7 +107,7 @@ mod tests {
     }
 
     fn player(x: i64, y: i64) -> EntityWire {
-        EntityWire::Player { x, y }
+        EntityWire::Player { x, y, vx: 0.0, vy: 0.0 }
     }
 
     #[test]

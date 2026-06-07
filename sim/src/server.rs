@@ -271,6 +271,22 @@ mod tests {
         assert_eq!(snap.payload["tick"], 3, "snapshot is stamped with the tick it captures");
     }
 
+    /// The Mirror integrates every actor it sees by that actor's last-known
+    /// Intent — so snapshots carry each actor's velocity (its Intent in the
+    /// integrator's units), exactly as the server will integrate it.
+    #[test]
+    fn snapshot_carries_per_actor_velocity() {
+        let mut sim = Sim::new();
+        sim.connect_at("alice", crate::components::Position { x: 8_000, y: 8_000 }, Default::default());
+        sim.set_intent("alice", 1.0, 0.0);
+        let mut conn = ConnState::default();
+        let out = route(&mut sim, &mut conn, &join("chunk:0:0", json!({"username":"alice"})));
+        let snap = out.pushes.iter().find(|p| p.event == "snapshot").expect("snapshot push");
+        let alice = &snap.payload["players"]["alice"];
+        assert_eq!(alice["vx"], 4_000.0, "intent (1,0) scaled by the shared speed");
+        assert_eq!(alice["vy"], 0.0);
+    }
+
     #[test]
     fn chunk_join_pushes_snapshot() {
         let mut sim = Sim::new();
