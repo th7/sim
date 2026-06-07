@@ -36,10 +36,13 @@ fn wood(sim: &Sim, who: &str) -> u32 {
 // match for the old immediate verbs (no tick, so "two clicks, no tick between"
 // still holds). Players send these as intents over the wire; that path (enqueue
 // + tick + async outcome) is pinned in `overload_backpressure` and the sim suite.
-fn harvest(sim: &mut Sim, who: &str, x: i64, y: i64) -> Result<(), VerbError> {
+fn harvest(sim: &mut Sim, who: &str, target: &str) -> Result<(), VerbError> {
     let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
     let clock = sim.clock_ms();
-    sim.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.harvest(who, x, y, clock).map(|_| ())
+    sim.realm_world_mut(realm)
+        .ok_or(VerbError::NoChunk)?
+        .harvest(who, &WireId(target.into()), clock)
+        .map(|_| ())
 }
 fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) -> Result<(), VerbError> {
     let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
@@ -97,7 +100,7 @@ mod connect_and_resume {
     fn returning_player_resumes_position_and_inventory() {
         let mut sim = Sim::new();
         sim.connect_at("ada", at(8_000, 8_000), Inventory::default());
-        harvest(&mut sim, "ada", 8_000, 8_000).unwrap(); // wood 1
+        harvest(&mut sim, "ada", "tree:8000:8000").unwrap(); // wood 1
         walk_until(&mut sim, "ada", 1.0, 0.0, 5, |_| false);
         let saved = sim.position("ada").unwrap();
 
@@ -169,7 +172,7 @@ mod continuous_movement {
         let mut sim = Sim::new();
         // Deplete the centre tree (the harvester is grandfathered through it).
         sim.connect_at("h", at(8_000, 8_000), Inventory::default());
-        harvest(&mut sim, "h", 8_000, 8_000).unwrap();
+        harvest(&mut sim, "h", "tree:8000:8000").unwrap();
         // A fresh Player who never overlapped it is still stopped by its Footprint.
         sim.connect_at("p", at(6_000, 8_000), Inventory::default());
         walk_until(&mut sim, "p", 1.0, 0.0, 100, |_| false);
@@ -272,7 +275,7 @@ mod overload_backpressure {
         sim.connect_at("c", at(16_000, 16_000), Inventory::default());
 
         // A resolved harvest leaves buffered writes — the backlog to drain.
-        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
         sim.tick();
         assert!(sim.datastore().pending_len() > 0, "a write backlog exists");
 
@@ -280,7 +283,7 @@ mod overload_backpressure {
         for who in group {
             sim.set_intent(who, 1.0, 0.0);
         }
-        sim.enqueue_action("a", Action::Harvest { x: 8_500, y: 8_500 });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) });
 
         let before: Vec<Position> = group.iter().map(|w| sim.position(w).unwrap()).collect();
         let inv_a_before = sim.inventory_of("a").unwrap();
@@ -345,12 +348,19 @@ mod instances {
             Err(VerbError::NoBuildInInstance),
             "an Instance hosts no Structures"
         );
-        // No Resource nodes: a harvest in range finds nothing to gather.
+        // No Resource nodes on the wire, and a harvest finds nothing to gather:
+        // entity-directed verbs resolve by identity, and no Gatherable identity
+        // exists in an Instance.
+        let realm = sim.realm_of("p").unwrap();
+        let no_gatherables = entity_states(sim.realm_world_mut(realm).unwrap())
+            .values()
+            .all(|s| !matches!(s, EntityWire::Node { .. } | EntityWire::Carcass { .. }));
+        assert!(no_gatherables, "an Instance hosts no Resource nodes");
         let p = sim.position("p").unwrap();
         assert_eq!(
-            harvest(&mut sim, "p", p.x, p.y),
+            harvest(&mut sim, "p", &format!("tree:{}:{}", p.x, p.y)),
             Err(VerbError::NoTarget),
-            "an Instance hosts no Resource nodes"
+            "a harvest in an Instance finds nothing to gather"
         );
     }
 
@@ -386,7 +396,7 @@ mod harvest_resource_node {
         sim.connect_at("p", at(8_000, 8_000), Inventory::default());
         // Harvest the whole centre cluster → 5 wood; every Footprint stays solid.
         for (dx, dy) in [(0, 0), (500, 500), (500, -500), (-500, 500), (-500, -500)] {
-            harvest(&mut sim, "p", 8_000 + dx, 8_000 + dy).unwrap();
+            harvest(&mut sim, "p", &format!("tree:{}:{}", 8_000 + dx, 8_000 + dy)).unwrap();
         }
         assert_eq!(wood(&sim, "p"), 5);
         // Building on the depleted centre node is still Footprint-blocked, exactly
@@ -483,13 +493,17 @@ mod harvest_carcass {
         damage(&mut sim, "alice", 8_300, 8_000).unwrap();
         damage(&mut sim, "alice", 8_300, 8_000).unwrap();
         assert!(!has_npc(&sim, NpcKind::Deer), "the deer is dead, leaving a Carcass");
+        let carcass = entity_states(sim.overworld())
+            .into_iter()
+            .find_map(|(wid, s)| matches!(s, EntityWire::Carcass { .. }).then_some(wid))
+            .expect("the dead deer leaves a Carcass");
 
         // CARCASS_PERISH_MS = 60_000 → 1200 ticks at 50 ms. Let it rot.
         for _ in 0..1_300 {
             sim.tick();
         }
         assert!(
-            harvest(&mut sim, "alice", 8_300, 8_000).is_err(),
+            harvest(&mut sim, "alice", &carcass.0).is_err(),
             "a left Carcass perishes and can no longer be harvested"
         );
     }

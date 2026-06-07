@@ -20,7 +20,7 @@ pub fn contract() -> Value {
             // an `action_rejected` push.
             intent("build", build_payload()),
             intent("damage", xy_payload()),
-            intent("harvest", xy_payload()),
+            intent("harvest", entity_verb_payload()),
             // `join` errors are channel-join reasons (not VerbError), kept as literals.
             join_message(),
             move_message(),
@@ -82,15 +82,24 @@ fn xy_payload() -> Value {
     object(&[("x", integer()), ("y", integer())], &["x", "y"])
 }
 
+/// An entity-directed verb: names its Target's WireId and the movement input
+/// seq at press time (press-frame own position).
+fn entity_verb_payload() -> Value {
+    object(&[("target", string()), ("seq", integer())], &["target", "seq"])
+}
+
 fn action_rejected_payload() -> Value {
+    // Aimed-at is a cell (`x`/`y`, placement verbs) or a Target WireId
+    // (`target`, entity-directed verbs); `verb` + `reason` are always present.
     object(
         &[
             ("verb", enum_str(&["harvest", "build", "damage"])),
             ("x", integer()),
             ("y", integer()),
+            ("target", string()),
             ("reason", action_reasons()),
         ],
-        &["verb", "x", "y", "reason"],
+        &["verb", "reason"],
     )
 }
 

@@ -52,6 +52,18 @@ ecological role).
 
 ---
 
+## Time & resolution
+
+**Tick** — The atomic unit of simulated time; all world change happens *in* some named
+tick. _Design promise:_ a tick's outcome is a **pure function of the locked Intents** it
+was given — simultaneity inside a tick is resolved by a fixed neutral law (Verbs before
+movement, deterministic order), **never by network arrival order**; replaying the Intent
+log reproduces history bit-identically. Facts of a tick may *resolve and emit eagerly*
+(before every input has arrived) when no missing input could affect them — eagerness is
+scheduling, never semantics — and **an emitted fact is final**: authority never revises
+what it has published.
+_Avoid:_ Frame (a client render concept), step, cycle.
+
 ## Presence & authority
 
 **Player** — A human participant, identified by a chosen username; also the in-world entity
@@ -86,11 +98,38 @@ _Avoid:_ Navigator (implies steering movement), coordinator/manager (too generic
 start, read to integrate movement and resolve interactions. A **Player**'s Intent comes from
 their session; an **NPC**'s comes from its **Motivation**. This is the single seam both kinds
 of actor share.
-_Design promise:_ Intent is *perishable* — it must be continuously renewed by its source. A
-**Motivation** renews natively every tick; a session renews for as long as it is live, and
-when its renewals stop, the Intent expires (after a short grace) and the Player stands still.
-A stalled or vanished session never leaves a Player acting on stale Intent.
+_Design promise:_ every Intent is **bound to the named Tick it applies to** and locks
+exactly once (idempotent against retransmission, never revisable). Intent is also
+*perishable* — it must be continuously renewed by its source. A **Motivation** renews
+natively every tick; a session renews for as long as it is live, and when its renewals
+stop, the Intent expires (after a short grace) to an empty lock and the Player stands
+still. A stalled or vanished session never leaves a Player acting on stale Intent — and
+never holds the world's resolution hostage beyond that grace.
 _Avoid:_ Input, command, keypress.
+
+**Verb** — A **Player**-initiated world-changing command — *harvest*, *build*, *damage* —
+resolved by the Player's **Island** inside the tick, fire-and-forget: outcomes arrive
+asynchronously as world deltas or a rejection. The Player counterpart of an NPC-Plan
+**Action**, even where the two resolve to the same effect.
+_Design promise:_ an entity-directed Verb acts on the **Target**'s *identity*, never on a
+remembered place, and resolves at the Tick the Player pressed in. Its *eligibility* (range)
+is judged in the **press frame** — the Player's own exact position against the Target's
+**Lawful render** — so what the screen lawfully showed in range, the Island honors. The
+forgiveness is *continuous-only*: liveness, depletion, yields, and existence are always
+judged in the authoritative present (a stale screen never resurrects or double-pays), and
+effects always land at the resolve Tick — eligibility is forgiven, time is not.
+_Avoid:_ Action (an NPC-Plan primitive), command, ability, skill.
+
+**Target** — The one world entity a **Player** has designated to receive their next
+entity-directed **Verb**. Targetable: **Gatherables**, **Structures**, **NPCs**. Not
+targetable: **Players** (no PvP in v1), **Portals** (entry is by overlap, not Verb).
+*Build* is placement at a cell, not entity-directed, so it never involves a Target.
+_Design promise:_ a Target is *sticky observation* — it persists until the Player explicitly
+clears it, designates another, or the entity ceases to be visible (despawn, leaving the
+**View window**, a world transition). Distance never clears it, and a depleted **Resource
+node** stays targeted; range and state gate the *Verb*, not the Target.
+_Avoid:_ Selection (HUD-flavored), focus, lock; Goal's avoided alias "target" (NPC-internal)
+is unrelated.
 
 ---
 
@@ -289,6 +328,21 @@ of entities (**Players**, **Resource nodes**, **Structures**, **Portals**, **NPC
 UI element.
 _Avoid:_ Widget, control (imply HUD-only); component (web connotation).
 
+**Verb button** — The single context-sensitive **UI element** through which a **Player**
+issues entity-directed **Verbs**: it acts on the current **Target**, and which Verb it
+issues follows from what the Target *is* (a **Gatherable** → *harvest*; a **Structure** or
+**NPC** → *damage*). Inert when no Target exists.
+_Design promise:_ its readiness hint is *truthful by construction* — it reads the **Lawful
+render**, the same frame the **Island** judges in, so a lit button is refused only for
+discrete staleness (the thing no client can know).
+_Avoid:_ Action button (Action is an NPC-Plan primitive), interact key, hotkey.
+
+**Target marker** — The diegetic in-world annotation showing which entity is the current
+**Target** — and the *only* Target display: there is deliberately no HUD target frame, no
+name plate, no health readout. **Demeanor** and banded **Health** stay readable from the
+entity itself; the marker adds only "this one."
+_Avoid:_ Target frame, unit frame, nameplate (the mechanisms we deliberately don't use).
+
 **Showcase** — The client utility that displays every **UI element** in every
 appearance-affecting state, for manual visual verification on a real display.
 _Design promise:_ completeness — a new kind of drawable thing cannot be added without the
@@ -314,6 +368,24 @@ not the thing).
 measured in ticks. Deliberate, not error: a healthy connection always carries some Lead.
 Bounded by construction — at the bound the Mirror freezes until authority catches up.
 _Avoid:_ Drift (implies error), lag (the thing Lead compensates for), prediction window.
+
+**Frontier** — A session's continuously-asserted statement of the last authoritative
+**Tick** it has incorporated — asserted on every input frame, not per action, so it is a
+*standing persona*, never a per-press claim.
+_Design promise:_ the Frontier is **monotone** (never retreats), **never-future** (naming
+an undelivered tick is proof of cheating, not error), and **Lead-bounded** (a session
+asserting staleness must also freeze its own inputs, exactly as an honestly lagged
+**Mirror** would — pretending to have lag costs what lag costs). Feigned staleness within
+those laws is indistinguishable from honest lag *by design*, and bounded by the same
+constant.
+_Avoid:_ Ack (transport flavor), client tick, last-seen.
+
+**Lawful render** — What the **Mirror** algorithm *necessarily displayed* given a session's
+**Frontier**: the authoritative state at the Frontier, speculated forward by the asserted
+**Lead** under the shared integrator. Lawful because the authority can recompute it
+bit-for-bit from data it itself delivered — no client-supplied geometry is ever trusted.
+The frame in which an entity-directed **Verb**'s eligibility is judged.
+_Avoid:_ Client view (unverifiable), claimed render, screenshot.
 
 ---
 

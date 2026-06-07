@@ -124,7 +124,7 @@ async fn movement_moves_the_player() {
 }
 
 #[tokio::test]
-async fn harvest_yields_wood() {
+async fn click_targets_the_tree_and_the_verb_button_harvests_it() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
     // Wait for the chunk snapshot carrying the centre tree.
@@ -132,11 +132,18 @@ async fn harvest_yields_wood() {
         alice.pump_until(T, |m| m.nodes().contains_key("tree:8000:8000")).await,
         "the centre tree should be visible"
     );
-    // Alice spawns on the centre tree; click it.
+    // Clicking the tree designates it the Target — and issues no Verb.
     alice.click(8.0, 8.0).await.unwrap();
+    assert_eq!(alice.model().target(), Some("tree:8000:8000"));
+    assert!(
+        !alice.pump_until(Duration::from_millis(500), |m| !m.inventory().is_empty()).await,
+        "clicking selects only — nothing harvested before the Verb button is pressed"
+    );
+    // The Verb button issues the harvest at the Target's identity.
+    alice.press_verb().await.unwrap();
     assert!(
         alice.pump_until(T, |m| m.inventory().get("wood").copied().unwrap_or(0) >= 1).await,
-        "harvesting the tree should yield wood (via the `self` event)"
+        "pressing the Verb button should harvest the targeted tree"
     );
 }
 
@@ -185,7 +192,7 @@ async fn gather_build_and_destroy_a_wall() {
     // Chop all five (alice spawns within interact range of the cluster) → 5 wood.
     let (cx, cy) = (8_000_i64, 8_000_i64);
     for (dx, dy) in [(500, 500), (500, -500), (-500, 500), (-500, -500), (0, 0)] {
-        alice.send_harvest(cx + dx, cy + dy).await.unwrap();
+        alice.send_harvest(&format!("tree:{}:{}", cx + dx, cy + dy)).await.unwrap();
         alice.pump_for(Duration::from_millis(150)).await;
     }
     assert!(
@@ -402,7 +409,7 @@ async fn building_on_the_depleted_cluster_is_rejected() {
     // Harvest the five trees clustered at chunk centre → 5 wood. They become
     // `depleted: true` but their Footprint stays solid at (±500, ±500).
     for (dx, dy) in [(500, 500), (500, -500), (-500, 500), (-500, -500), (0, 0)] {
-        alice.send_harvest(8_000 + dx, 8_000 + dy).await.unwrap();
+        alice.send_harvest(&format!("tree:{}:{}", 8_000 + dx, 8_000 + dy)).await.unwrap();
         alice.pump_for(Duration::from_millis(150)).await;
     }
     let centre_trees = [(8_000, 8_000), (7_500, 7_500), (7_500, 8_500), (8_500, 7_500), (8_500, 8_500)];
@@ -454,7 +461,7 @@ async fn click_builds_a_wall_in_the_cell_directly_next_to_the_cluster() {
 
     let centre_trees = [(8_000, 8_000), (7_500, 7_500), (7_500, 8_500), (8_500, 7_500), (8_500, 8_500)];
     for (x, y) in centre_trees {
-        alice.send_harvest(x, y).await.unwrap();
+        alice.send_harvest(&format!("tree:{x}:{y}")).await.unwrap();
         alice.pump_for(Duration::from_millis(150)).await;
     }
     assert!(
@@ -509,18 +516,22 @@ async fn click_builds_a_wall_in_the_cell_directly_next_to_the_cluster() {
     assert_eq!((wall.kind.as_str(), wall.hp), ("wall", 100));
 }
 
-/// When the server rejects a verb, the reason is observable on the client model
-/// (which the view will show in the HUD), rather than failing silently like
-/// before. Setup mirrors `building_on_the_depleted_cluster_is_rejected`.
+/// When the Island rejects a Verb, the reason is observable on the client model
+/// (which the view will show in the HUD), rather than failing silently. The
+/// press always sends — a depleted Target is the Island's to judge — and the
+/// async `action_rejected` lands in `last_error`. (The old build-on-depleted
+/// path died with the click heuristic: clicking a depleted tree now targets it,
+/// so no wood can be wasted on its cell; the server-side footprint rule itself
+/// stays pinned in the sim suite.)
 #[tokio::test]
-async fn a_rejected_build_surfaces_footprint_blocked_in_last_error() {
+async fn a_rejected_press_surfaces_the_islands_reason_in_last_error() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
     assert!(alice.pump_until(T, |m| m.nodes().len() >= 5).await);
 
     let centre_trees = [(8_000, 8_000), (7_500, 7_500), (7_500, 8_500), (8_500, 7_500), (8_500, 8_500)];
     for (x, y) in centre_trees {
-        alice.send_harvest(x, y).await.unwrap();
+        alice.send_harvest(&format!("tree:{x}:{y}")).await.unwrap();
         alice.pump_for(Duration::from_millis(150)).await;
     }
     assert!(
@@ -536,15 +547,18 @@ async fn a_rejected_build_surfaces_footprint_blocked_in_last_error() {
 
     assert!(alice.model().last_error().is_none(), "no errors before any verb");
 
-    // Click on a depleted-tree cell: server rejects with footprint_blocked.
+    // Target a depleted tree and press: the client sends anyway (state is the
+    // Island's to judge) and the Island answers `depleted`, asynchronously.
     alice.click(8.5, 8.5).await.unwrap();
+    assert_eq!(alice.model().target(), Some("tree:8500:8500"));
+    alice.press_verb().await.unwrap();
     assert!(
-        alice.pump_until(T, |m| m.last_error() == Some("footprint_blocked")).await,
-        "the server's footprint_blocked reason becomes visible to the client"
+        alice.pump_until(T, |m| m.last_error() == Some("depleted")).await,
+        "the Island's rejection reason becomes visible to the client"
     );
     // The view reads from RenderState, not directly from the model: the reason
     // has to be wired through for the HUD to show it.
-    assert_eq!(alice.render_state().last_error.as_deref(), Some("footprint_blocked"));
+    assert_eq!(alice.render_state().last_error.as_deref(), Some("depleted"));
 }
 
 /// With wildlife enabled, a connected client sees NPCs materialize in its view —

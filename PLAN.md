@@ -33,8 +33,32 @@ replaced by the `action_rejected` event. Design + decision record: `design/backp
 
 ## Candidate next increments
 
+Design + decision record for the next three: `design/targeting-and-wysiwyg.md`; terms in
+`design/glossary.md` (Tick, Verb, Target, Frontier, Lawful render, Verb button, Target marker).
+
+1. **Targeting + the Verb button** (+ seq-pinned Verbs, shipped together). Click selects a
+   Target (click-priority heuristic dies; build stays click-on-ground for now); `E` +
+   contextual HUD button issues the entity-directed Verb by WireId; diegetic Target marker
+   (no target frame); Escape clears. Verbs carry the input seq and resolve at that named
+   tick. Wire: harvest/damage lose `{x,y}`, gain target WireId + seq → contract regen, both
+   sides. Server repair in scope: `build` gets the `in_range` check its siblings have
+   (today it's client-gated only — hostile clients can build cross-chunk). Showcase gains
+   the marker (per targetable kind) and the button (inert/lit/dimmed × verb labels).
+2. **Lawful-render judging.** Frontier asserted on every input frame (monotone,
+   never-future, delivered-tick-checked, `M − frontier ≤ LEAD_BOUND`); ~10-tick
+   position/intent ring server-side; entity-directed Verb range judged in the press frame
+   (own exact position vs Target's lawful render, shared-integrator recompute).
+   Continuous-only forgiveness; effects at resolve tick. Revisit-at-PvP flag.
+3. **Preemptive resolution.** Eager per-fact resolve/emit under could-affect shadows;
+   emittable ⇔ Resolved; finalization internal; tick-state discard at successor-finalize
+   (the judging ring is separate retention). Pure scheduling — semantics provably
+   unchanged, so the existing test pyramid should pass untouched except for emission
+   timing.
+
 - Held story scenarios will arrive once the designer answers the PO's gaps (multi-member Party
   Instance entry; the one-authority / never-under-merge observable). Add their proving tests then.
+- New stories needed from the PO for increment 1 (targeting, the Verb button, rejection
+  honesty) — the 14 existing `.feature` files predate select-then-act.
 
 ## Landed: parallel tick + lossless crash on a tick panic
 

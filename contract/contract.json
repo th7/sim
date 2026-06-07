@@ -55,16 +55,16 @@
       "payload": {
         "additionalProperties": false,
         "properties": {
-          "x": {
+          "seq": {
             "type": "integer"
           },
-          "y": {
-            "type": "integer"
+          "target": {
+            "type": "string"
           }
         },
         "required": [
-          "x",
-          "y"
+          "target",
+          "seq"
         ],
         "type": "object"
       },
@@ -167,6 +167,9 @@
             ],
             "type": "string"
           },
+          "target": {
+            "type": "string"
+          },
           "verb": {
             "enum": [
               "harvest",
@@ -184,8 +187,6 @@
         },
         "required": [
           "verb",
-          "x",
-          "y",
           "reason"
         ],
         "type": "object"

@@ -1013,26 +1013,30 @@ impl RealmWorld {
 
     // --- Verbs (mirroring GameCore.Chunk's with-chains in order) ---
 
-    /// Harvest the tree at `(tx, ty)`. Adds one yield to the player's inventory
-    /// and depletes the node (respawns after [`RESPAWN_MS`]). Returns the new
-    /// inventory on success. Check order: no_player → too_far → no_target/depleted.
+    /// Harvest the Gatherable named by `target` — a Resource node (deplete,
+    /// respawn after [`RESPAWN_MS`]) or a Carcass (consume). Entity-directed:
+    /// the Verb acts on the Target's identity, judged here against authoritative
+    /// position. Returns the new inventory on success. Check order: no_player →
+    /// no_target → too_far → no_target/depleted.
     pub fn harvest(
         &mut self,
         username: &str,
-        tx: i64,
-        ty: i64,
+        target: &WireId,
         clock_ms: u64,
     ) -> Result<Inventory, VerbError> {
         let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(VerbError::NoPlayer)?;
+        let node = self.wire_index.get(target).copied().ok_or(VerbError::NoTarget)?;
+        let (tx, ty) = self
+            .world
+            .get::<&Position>(node)
+            .map(|p| (p.x, p.y))
+            .map_err(|_| VerbError::NoTarget)?;
         if !in_range(px, py, tx, ty) {
             return Err(VerbError::TooFar);
         }
-        let node_wid = WireId(format!("tree:{tx}:{ty}"));
-        let node = match self.wire_index.get(&node_wid).copied() {
-            Some(n) => n,
-            // No tree there → try a Carcass at the click (player hunting economy).
-            None => return self.harvest_carcass(username, tx, ty),
-        };
+        if self.world.get::<&Carcass>(node).is_ok() {
+            return self.harvest_carcass(username, node);
+        }
 
         let (kind, item) = {
             match self.world.get::<&Gatherable>(node) {
@@ -1074,12 +1078,9 @@ impl RealmWorld {
         Ok(self.inventory_of(username).unwrap_or_default())
     }
 
-    /// Harvest the Carcass at the click into meat + hide Items. Reuses the
-    /// harvest verb's range gate (already applied by the caller).
-    fn harvest_carcass(&mut self, username: &str, tx: i64, ty: i64) -> Result<Inventory, VerbError> {
-        let ce = self
-            .nearest_carcass_within(tx, ty, crate::consts::INTERACT_RANGE_SQ)
-            .ok_or(VerbError::NoTarget)?;
+    /// Harvest the targeted Carcass into meat + hide Items. Reuses the harvest
+    /// verb's range gate (already applied by the caller).
+    fn harvest_carcass(&mut self, username: &str, ce: Entity) -> Result<Inventory, VerbError> {
         let meat = self.world.get::<&Carcass>(ce).map(|c| c.meat).unwrap_or(0);
         let player_e = *self.username_index.get(username).ok_or(VerbError::NoPlayer)?;
         {
@@ -1232,18 +1233,6 @@ impl RealmWorld {
         let target = P2::new(x, y);
         self.world
             .query::<(&Position, &Npc)>()
-            .iter()
-            .map(|(e, (p, _))| (e, dist_sq(P2::new(p.x, p.y), target)))
-            .filter(|(_, d)| *d <= range_sq)
-            .min_by_key(|(_, d)| *d)
-            .map(|(e, _)| e)
-    }
-
-    /// Nearest Carcass entity within `range_sq` of `(x, y)`.
-    fn nearest_carcass_within(&self, x: i64, y: i64, range_sq: i64) -> Option<Entity> {
-        let target = P2::new(x, y);
-        self.world
-            .query::<(&Position, &Carcass)>()
             .iter()
             .map(|(e, (p, _))| (e, dist_sq(P2::new(p.x, p.y), target)))
             .filter(|(_, d)| *d <= range_sq)

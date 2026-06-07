@@ -5,6 +5,7 @@
 use sim::components::{Inventory, Item, Position};
 use sim::motivation::{Drives, NpcKind};
 use sim::sim::{Action, Sim};
+use sim::wire::{entity_states, EntityWire};
 
 fn pos(x: i64, y: i64) -> Position {
     Position { x, y }
@@ -91,8 +92,12 @@ fn player_kills_deer_into_carcass_then_harvests_meat_and_hide() {
     sim.tick();
     assert!(!has_npc(&sim, NpcKind::Deer), "deer should be dead");
 
-    // The Carcass it left is harvestable into meat + hide.
-    sim.enqueue_action("alice", Action::Harvest { x: 8_300, y: 8_000 });
+    // The Carcass it left is harvestable into meat + hide — by its identity.
+    let carcass = entity_states(sim.overworld())
+        .into_iter()
+        .find_map(|(wid, s)| matches!(s, EntityWire::Carcass { .. }).then_some(wid))
+        .expect("the dead deer leaves a Carcass");
+    sim.enqueue_action("alice", Action::Harvest { target: carcass });
     sim.tick();
     let inv = sim.inventory_of("alice").unwrap();
     assert_eq!(inv.items.get(&Item::Meat).copied(), Some(3));

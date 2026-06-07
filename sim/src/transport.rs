@@ -107,12 +107,12 @@ fn spawn_tick_loop(shared: Arc<Shared>) {
                         let f = push(&topic, "relocated", relocated_payload(realm, coord));
                         (topic, f)
                     }
-                    OutboundEvent::ActionRejected { username, verb, x, y, reason } => {
+                    OutboundEvent::ActionRejected { username, verb, at, reason } => {
                         let topic = format!("player:{username}");
                         let f = push(
                             &topic,
                             "action_rejected",
-                            action_rejected_payload(verb, x, y, reason),
+                            action_rejected_payload(verb, &at, reason),
                         );
                         (topic, f)
                     }

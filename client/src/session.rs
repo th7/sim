@@ -190,6 +190,18 @@ impl Session {
         self.execute(cmds).await
     }
 
+    /// The Verb button (`E` / the HUD button): issue the entity-directed Verb
+    /// the current Target implies.
+    pub async fn press_verb(&mut self) -> Result<(), String> {
+        let cmds = self.model.press_verb();
+        self.execute(cmds).await
+    }
+
+    /// Clear the Target (the Escape key).
+    pub fn escape(&mut self) {
+        self.model.escape();
+    }
+
     /// Turn the dev overlay on/off (joins or leaves `dev:stats`).
     pub async fn set_dev(&mut self, on: bool) -> Result<(), String> {
         let cmds = self.model.set_dev(on);
@@ -204,8 +216,10 @@ impl Session {
     // (e.g. a wall just clear of the player's body) where cell-snapping the
     // click would land it out of range.
 
-    pub async fn send_harvest(&mut self, x: i64, y: i64) -> Result<(), String> {
-        self.push_verb("harvest", json!({ "x": x, "y": y })).await
+    /// Entity-directed: harvest names its Target's WireId (`seq` 0 — these raw
+    /// hooks bypass the model, so there is no press tick to pin).
+    pub async fn send_harvest(&mut self, target: &str) -> Result<(), String> {
+        self.push_verb("harvest", json!({ "target": target, "seq": 0 })).await
     }
 
     pub async fn send_build(&mut self, kind: &str, x: i64, y: i64) -> Result<(), String> {

@@ -82,10 +82,11 @@ async fn full_session_over_the_wire() {
     let hb = recv_until(&mut ws, |m| m.event == "phx_reply" && m.reference.as_deref() == Some("hb1")).await;
     assert_eq!(hb.payload["status"], "ok");
 
-    // Harvest the centre tree. A verb is a fire-and-forget intent (no reply,
-    // like `move`); the outcome arrives as a `self` push with wood:1 after the
-    // resolving tick.
-    send(&mut ws, "1", "10", "player:alice", "harvest", serde_json::json!({"x":8000,"y":8000})).await;
+    // Harvest the centre tree — entity-directed, by its WireId. A verb is a
+    // fire-and-forget intent (no reply, like `move`); the outcome arrives as a
+    // `self` push with wood:1 after the resolving tick.
+    send(&mut ws, "1", "10", "player:alice", "harvest",
+        serde_json::json!({"target":"tree:8000:8000","seq":0})).await;
     let inv = recv_until(&mut ws, |m| m.event == "self" && m.payload["inventory"]["wood"] == 1).await;
     assert_eq!(inv.payload["inventory"]["wood"], 1);
 

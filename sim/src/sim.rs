@@ -7,7 +7,7 @@
 //! prove the cluster model: movement, crossings, merges, splits, and the
 //! never-under-merge invariant.
 
-use crate::components::{Inventory, Position, PortalDirection, StructureKind};
+use crate::components::{Inventory, Position, PortalDirection, StructureKind, WireId};
 use crate::consts::{FLUSH_MS, TICK_MS};
 use crate::motivation::{Drives, NpcKind};
 use crate::datastore::{Datastore, DurableStore, MemStore, Mode, PersistEvent, PlayerRecord, Thresholds};
@@ -28,29 +28,39 @@ pub enum OutboundEvent {
     /// A queued action could not be carried out — either dropped at the door
     /// (`queue_full`) or rejected by the verb at tick-time (`too_far`, …). The
     /// single async outcome channel for action failures.
-    ActionRejected { username: String, verb: &'static str, x: i64, y: i64, reason: &'static str },
+    ActionRejected { username: String, verb: &'static str, at: RejectedAt, reason: &'static str },
     /// The player's last-consumed movement input seq as of `tick` (the `ack`
     /// wire event) — the anchor the client's Mirror replays unacked frames on.
     MoveAck { username: String, seq: u32, tick: u64 },
 }
 
+/// What a rejected action was aimed at — a world cell for placement verbs, a
+/// Target's WireId for entity-directed verbs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RejectedAt {
+    Cell { x: i64, y: i64 },
+    Entity(WireId),
+}
+
 /// A queued, fire-and-forget player action intent. Enqueued on receipt and
 /// resolved in the tick (never on receipt) — the unified intent model, so an
-/// overload freeze is simply "skip the tick".
+/// overload freeze is simply "skip the tick". Entity-directed verbs (harvest)
+/// name their Target's [`WireId`]; placement (build) stays cell-addressed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
-    Harvest { x: i64, y: i64 },
+    Harvest { target: WireId },
     Build { kind: StructureKind, x: i64, y: i64 },
     Damage { x: i64, y: i64 },
 }
 
 impl Action {
-    /// The wire verb name and target cell — used to attribute an outcome event.
-    fn verb_target(&self) -> (&'static str, i64, i64) {
-        match *self {
-            Action::Harvest { x, y } => ("harvest", x, y),
-            Action::Build { x, y, .. } => ("build", x, y),
-            Action::Damage { x, y } => ("damage", x, y),
+    /// The wire verb name and what it was aimed at — used to attribute an
+    /// outcome event.
+    fn attribution(&self) -> (&'static str, RejectedAt) {
+        match self {
+            Action::Harvest { target } => ("harvest", RejectedAt::Entity(target.clone())),
+            Action::Build { x, y, .. } => ("build", RejectedAt::Cell { x: *x, y: *y }),
+            Action::Damage { x, y } => ("damage", RejectedAt::Cell { x: *x, y: *y }),
         }
     }
 }
@@ -638,12 +648,11 @@ impl Sim {
         let queue = self.action_queues.entry(username.to_string()).or_default();
         if queue.len() >= ACTION_QUEUE_CAP {
             // Reject the newest; the committed queue is honoured first.
-            let (verb, x, y) = action.verb_target();
+            let (verb, at) = action.attribution();
             self.pending.push(OutboundEvent::ActionRejected {
                 username: username.to_string(),
                 verb,
-                x,
-                y,
+                at,
                 reason: "queue_full",
             });
             return;
@@ -662,9 +671,9 @@ impl Sim {
             let Some(realm) = self.realm_of(&username) else { continue };
             for action in actions {
                 let Some(rw) = self.realm_world_mut(realm) else { continue };
-                let (verb, x, y) = action.verb_target();
+                let (verb, at) = action.attribution();
                 let outcome = match action {
-                    Action::Harvest { x, y } => rw.harvest(&username, x, y, clock).map(Some),
+                    Action::Harvest { target } => rw.harvest(&username, &target, clock).map(Some),
                     Action::Build { kind, x, y } => rw.build(&username, kind, x, y).map(Some),
                     Action::Damage { x, y } => {
                         rw.damage(&username, x, y, clock).map(|_| None::<Inventory>)
@@ -679,8 +688,7 @@ impl Sim {
                     Err(e) => self.pending.push(OutboundEvent::ActionRejected {
                         username: username.clone(),
                         verb,
-                        x,
-                        y,
+                        at,
                         reason: e.as_str(),
                     }),
                 }
@@ -886,7 +894,7 @@ mod tests {
     fn enqueued_action_resolves_on_the_next_tick_not_on_receipt() {
         let mut sim = Sim::new();
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
 
         // Not resolved on receipt — inventory unchanged.
         assert_eq!(
@@ -919,11 +927,11 @@ mod tests {
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
 
         for _ in 0..ACTION_QUEUE_CAP {
-            sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+            sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
         }
         assert_eq!(queue_full_events(&sim.drain_events()), 0, "the first cap intents are accepted");
 
-        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
         assert_eq!(
             queue_full_events(&sim.drain_events()),
             1,
@@ -940,7 +948,8 @@ mod tests {
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
         let _ = sim.drain_events(); // clear connect-time events
 
-        sim.enqueue_action("a", Action::Harvest { x: 80_000, y: 80_000 }); // far away
+        // The neighbour chunk's centre tree — real, hydrated, far out of range.
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:24000:8000".into()) });
         sim.tick();
 
         let rejected: Vec<_> = sim
@@ -953,8 +962,7 @@ mod tests {
             vec![OutboundEvent::ActionRejected {
                 username: "a".to_string(),
                 verb: "harvest",
-                x: 80_000,
-                y: 80_000,
+                at: RejectedAt::Entity(WireId("tree:24000:8000".into())),
                 reason: "too_far",
             }],
             "an out-of-range harvest is reported async as too_far"
@@ -992,8 +1000,8 @@ mod tests {
     fn all_queued_actions_drain_in_one_tick() {
         let mut sim = Sim::new();
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
-        sim.enqueue_action("a", Action::Harvest { x: 8_500, y: 8_500 });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) });
 
         sim.tick();
 
@@ -1034,13 +1042,13 @@ mod tests {
 
         // A resolved harvest leaves pending writes in the buffer (un-flushed:
         // the DB-flush cadence hasn't elapsed) — our overload to drain.
-        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
         sim.tick();
         assert!(sim.datastore().pending_len() > 0, "buffered writes to drain");
         assert_eq!(sim.inventory_of("a").unwrap().items.get(&Item::Wood).copied(), Some(1));
 
         // Queue another intent and start moving, then trip the overload.
-        sim.enqueue_action("a", Action::Harvest { x: 8_500, y: 8_500 });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) });
         sim.set_intent("a", 1.0, 0.0);
         sim.set_persist_thresholds(Thresholds { n_high: 1, n_low: 1 });
         assert_eq!(sim.datastore().mode(), Mode::Backpressured, "overload engaged");
@@ -1075,7 +1083,7 @@ mod tests {
     fn guard_flushes_durable_state_then_reports_the_panic() {
         let mut sim = Sim::new();
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
         sim.tick(); // resolve the harvest → a pending durable write
         assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
 
@@ -1102,7 +1110,7 @@ mod tests {
         let mut sim = Sim::new();
         sim.enable_pool(2);
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { x: 8_000, y: 8_000 });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
         sim.tick(); // resolve the harvest → a pending durable write
         assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
 

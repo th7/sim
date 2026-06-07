@@ -23,10 +23,13 @@ fn with_wood(n: u32) -> Inventory {
 // natural layer for the error-reason assertions below. (Players send these as
 // fire-and-forget intents over the wire; that path — enqueue + tick + async
 // outcome — is covered by the sim/stories suites.)
-fn harvest(sim: &mut Sim, who: &str, x: i64, y: i64) -> Result<(), VerbError> {
+fn harvest(sim: &mut Sim, who: &str, target: &str) -> Result<(), VerbError> {
     let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
     let clock = sim.clock_ms();
-    sim.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.harvest(who, x, y, clock).map(|_| ())
+    sim.realm_world_mut(realm)
+        .ok_or(VerbError::NoChunk)?
+        .harvest(who, &WireId(target.into()), clock)
+        .map(|_| ())
 }
 fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) -> Result<(), VerbError> {
     let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
@@ -44,7 +47,7 @@ fn harvest_yields_wood_and_depletes_then_respawns() {
     // Spawn on the center tree at (8000,8000) in chunk (0,0).
     sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
 
-    assert_eq!(harvest(&mut sim, "alice", 8_000, 8_000), Ok(()));
+    assert_eq!(harvest(&mut sim, "alice", "tree:8000:8000"), Ok(()));
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&1));
 
     // Node is now depleted.
@@ -54,13 +57,13 @@ fn harvest_yields_wood_and_depletes_then_respawns() {
         other => panic!("expected depleted node, got {other:?}"),
     }
     // Re-harvesting a depleted node fails.
-    assert_eq!(harvest(&mut sim, "alice", 8_000, 8_000), Err(VerbError::Depleted));
+    assert_eq!(harvest(&mut sim, "alice", "tree:8000:8000"), Err(VerbError::Depleted));
 
     // After RESPAWN_MS (30s = 600 ticks) it is gatherable again.
     for _ in 0..600 {
         sim.tick();
     }
-    assert_eq!(harvest(&mut sim, "alice", 8_000, 8_000), Ok(()));
+    assert_eq!(harvest(&mut sim, "alice", "tree:8000:8000"), Ok(()));
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&2));
 }
 
@@ -69,12 +72,12 @@ fn harvest_errors() {
     let mut sim = Sim::new();
     sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
 
-    // Far-away target → too_far (checked before target existence).
-    assert_eq!(harvest(&mut sim, "alice", 50_000, 50_000), Err(VerbError::TooFar));
-    // In-range empty cell → no_target.
-    assert_eq!(harvest(&mut sim, "alice", 8_010, 8_010), Err(VerbError::NoTarget));
+    // A real but far-away target (the neighbour chunk's centre tree) → too_far.
+    assert_eq!(harvest(&mut sim, "alice", "tree:24000:8000"), Err(VerbError::TooFar));
+    // An identity that names nothing → no_target.
+    assert_eq!(harvest(&mut sim, "alice", "tree:8010:8010"), Err(VerbError::NoTarget));
     // Unknown player → no_player.
-    assert_eq!(harvest(&mut sim, "ghost", 0, 0), Err(VerbError::NoPlayer));
+    assert_eq!(harvest(&mut sim, "ghost", "tree:8000:8000"), Err(VerbError::NoPlayer));
 }
 
 #[test]
@@ -234,7 +237,7 @@ fn a_wall_can_be_built_next_to_the_depleted_cluster() {
 
     // Harvest the cluster → 5 wood; all five footprints remain solid.
     for (dx, dy) in [(500, 500), (500, -500), (-500, 500), (-500, -500), (0, 0)] {
-        harvest(&mut sim, "alice", 8_000 + dx, 8_000 + dy).unwrap();
+        harvest(&mut sim, "alice", &format!("tree:{}:{}", 8_000 + dx, 8_000 + dy)).unwrap();
     }
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&5));
 

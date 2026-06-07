@@ -41,10 +41,18 @@ pub fn relocated_payload(realm: Realm, coord: ChunkCoord) -> Value {
 }
 
 /// The `action_rejected` push: a queued action could not be carried out, with the
-/// originating verb + target cell (to correlate it to the player's input) and the
-/// reason (`queue_full` or a tick-time verb error).
-pub fn action_rejected_payload(verb: &str, x: i64, y: i64, reason: &str) -> Value {
-    json!({ "verb": verb, "x": x, "y": y, "reason": reason })
+/// originating verb + what it was aimed at (a cell for placement verbs, the
+/// Target's WireId for entity-directed verbs — to correlate it to the player's
+/// input) and the reason (`queue_full` or a tick-time verb error).
+pub fn action_rejected_payload(verb: &str, at: &crate::sim::RejectedAt, reason: &str) -> Value {
+    match at {
+        crate::sim::RejectedAt::Cell { x, y } => {
+            json!({ "verb": verb, "x": x, "y": y, "reason": reason })
+        }
+        crate::sim::RejectedAt::Entity(wid) => {
+            json!({ "verb": verb, "target": wid.0, "reason": reason })
+        }
+    }
 }
 
 /// The `ack` push: the last-consumed movement input seq as of `tick` — the

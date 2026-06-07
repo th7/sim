@@ -60,6 +60,11 @@ pub struct ClientModel {
     /// consumed seq back; the Mirror replays everything after it).
     move_seq: u32,
     last_error: Option<String>,
+    /// The current Target: the one entity designated to receive the next
+    /// entity-directed Verb (its WireId). Sticky observation — see the Target
+    /// glossary entry; set by clicking a targetable entity, cleared explicitly
+    /// or when the entity ceases to be visible.
+    target: Option<String>,
     /// The speculative simulation of the View window (see `crate::mirror`).
     /// Owns the rendered positions; the per-chunk snaps remain the merge of
     /// authoritative *facts* (entities, depletion, inventory side of view).
@@ -83,6 +88,7 @@ impl ClientModel {
             last_sent_intent: None,
             move_seq: 0,
             last_error: None,
+            target: None,
             mirror: Mirror::new(username),
         };
         let cmds = want.into_iter().map(Cmd::Subscribe).collect();
@@ -183,47 +189,64 @@ impl ClientModel {
         vec![Cmd::Send(Outbound::Move(MovePayload { seq: self.move_seq, dx, dy }))]
     }
 
-    /// A click at world-unit `(wx, wy)`: harvest a live tree there, else damage a
-    /// structure there, else build a wall on the empty cell if affordable and in
-    /// range. Mirrors the old `handleWorldClick`. Issuing any verb clears the
-    /// stale `last_error` — the user is retrying, the next phx_reply will say
-    /// whether it worked.
+    /// A click at world-unit `(wx, wy)`: if a targetable entity (Resource node
+    /// — live *or* depleted — Structure, NPC, or Carcass) is at the click,
+    /// designate it the Target and do nothing else. Otherwise the click keeps
+    /// its build meaning: place a wall on the empty cell if affordable and in
+    /// range. Clicking elsewhere never clears the Target — [`Self::escape`]
+    /// does.
     pub fn click(&mut self, wx: f64, wy: f64) -> Vec<Cmd> {
-        let cmds = self.decide_click(wx, wy);
+        let tol = SUB_UNITS_PER_UNIT / 2; // 0.5 world units, in sub-units
+        let cx = (wx * SUB_UNITS_PER_UNIT as f64).round() as i64;
+        let cy = (wy * SUB_UNITS_PER_UNIT as f64).round() as i64;
+        if let Some(wid) = self.targetable_at(cx, cy, tol) {
+            self.target = Some(wid);
+            return Vec::new();
+        }
+        let cmds = self.build_click(wx, wy);
         if cmds.iter().any(|c| matches!(c, Cmd::Send(_))) {
+            // Issuing a verb clears the stale `last_error` — the user is
+            // retrying; the outcome arrives async.
             self.last_error = None;
         }
         cmds
     }
 
-    fn decide_click(&self, wx: f64, wy: f64) -> Vec<Cmd> {
+    /// The targetable entity at the click, if any: the WireId of a Resource
+    /// node, Structure, NPC, or Carcass whose rendered position is within
+    /// `tol`. Players and Portals are not targetable.
+    fn targetable_at(&self, cx: i64, cy: i64, tol: i64) -> Option<String> {
+        let hit = |x: i64, y: i64| (x - cx).abs() < tol && (y - cy).abs() < tol;
+        for (wid, node) in self.nodes() {
+            if hit(node.x, node.y) {
+                return Some(wid);
+            }
+        }
+        for (wid, s) in self.structures() {
+            if hit(s.x, s.y) {
+                return Some(wid);
+            }
+        }
+        for (wid, npc) in self.npcs() {
+            if hit(npc.x, npc.y) {
+                return Some(wid);
+            }
+        }
+        for (wid, c) in self.carcasses() {
+            if hit(c.x, c.y) {
+                return Some(wid);
+            }
+        }
+        None
+    }
+
+    /// The click-to-build path: place a wall on the clicked empty cell if
+    /// affordable and in range (a client-side UX gate; the server stays
+    /// authoritative).
+    fn build_click(&self, wx: f64, wy: f64) -> Vec<Cmd> {
         let Some(me) = self.player_pos(&self.username) else {
             return Vec::new();
         };
-        let tol = SUB_UNITS_PER_UNIT / 2; // 0.5 world units, in sub-units
-        let cx = (wx * SUB_UNITS_PER_UNIT as f64).round() as i64;
-        let cy = (wy * SUB_UNITS_PER_UNIT as f64).round() as i64;
-
-        // 1) live tree at the click?
-        for node in self.nodes().values() {
-            if !node.depleted && (node.x - cx).abs() < tol && (node.y - cy).abs() < tol {
-                return vec![Cmd::Send(Outbound::Harvest(HarvestPayload { x: node.x, y: node.y }))];
-            }
-        }
-        // 2) structure at the click?
-        for s in self.structures().values() {
-            if (s.x - cx).abs() < tol && (s.y - cy).abs() < tol {
-                return vec![Cmd::Send(Outbound::Damage(DamagePayload { x: s.x, y: s.y }))];
-            }
-        }
-        // 3) NPC (deer/wolf) at the click? Damage it — the server's damage verb
-        //    resolves to the nearest NPC within range of the sent point.
-        for npc in self.npcs().values() {
-            if (npc.x - cx).abs() < tol && (npc.y - cy).abs() < tol {
-                return vec![Cmd::Send(Outbound::Damage(DamagePayload { x: npc.x, y: npc.y }))];
-            }
-        }
-        // 4) build on the empty cell, if we can afford it and it's in range.
         if self.inventory.get("wood").copied().unwrap_or(0) < WALL_COST {
             return Vec::new();
         }
@@ -240,6 +263,39 @@ impl ClientModel {
             x: cell_x,
             y: cell_y,
         }))]
+    }
+
+    /// Clear the Target (the Escape key). The only explicit clear — clicking
+    /// elsewhere deliberately leaves the Target alone.
+    pub fn escape(&mut self) {
+        self.target = None;
+    }
+
+    /// The current Target's WireId, if any.
+    pub fn target(&self) -> Option<&str> {
+        self.target.as_deref()
+    }
+
+    /// The Verb button: issue the entity-directed Verb the current Target
+    /// implies — a Gatherable (Resource node or Carcass) → harvest. Inert
+    /// without a Target. With one, it always sends: eligibility (range, state)
+    /// is the Island's to judge, and a refusal arrives async as
+    /// `action_rejected` — the client never suppresses a press on speculated
+    /// data.
+    pub fn press_verb(&mut self) -> Vec<Cmd> {
+        let Some(wid) = self.target.clone() else {
+            return Vec::new();
+        };
+        let is_gatherable =
+            self.nodes().contains_key(&wid) || self.carcasses().contains_key(&wid);
+        if is_gatherable {
+            self.last_error = None;
+            return vec![Cmd::Send(Outbound::Harvest(HarvestPayload {
+                target: wid,
+                seq: self.move_seq,
+            }))];
+        }
+        Vec::new()
     }
 
     // --- observable state (the view + tests read these) ---
@@ -567,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn click_damages_an_npc() {
+    fn click_targets_an_npc_and_sends_nothing() {
         let mut m = model_with_player_at(8_000, 8_000);
         let mut snap = snap_with_player("alice", 8_000, 8_000);
         snap.npcs.insert(
@@ -575,13 +631,13 @@ mod tests {
             NpcWire { kind: "deer".into(), x: 8_200, y: 8_000, hp: 50, ..NpcWire::default() },
         );
         m.on_snapshot(cc(0, 0), snap);
-        // Click on the deer at world (8.2, 8.0) → a damage verb at its position.
-        let cmds = m.click(8.2, 8.0);
-        assert_eq!(cmds, vec![Cmd::Send(Outbound::Damage(DamagePayload { x: 8_200, y: 8_000 }))]);
+        // Click on the deer at world (8.2, 8.0) → it becomes the Target, only.
+        assert!(m.click(8.2, 8.0).is_empty(), "clicking selects only");
+        assert_eq!(m.target(), Some("npc:deer:5"));
     }
 
     #[test]
-    fn click_harvests_a_live_tree() {
+    fn click_targets_a_tree_and_the_verb_button_harvests_by_identity() {
         let mut m = model_with_player_at(8_000, 8_000);
         let mut snap = snap_with_player("alice", 8_000, 8_000);
         snap.resource_nodes.insert(
@@ -589,13 +645,25 @@ mod tests {
             NodeWire { kind: "tree".into(), x: 8_000, y: 8_000, depleted: false },
         );
         m.on_snapshot(cc(0, 0), snap);
-        // Click at world (8,8) — the tree.
-        let cmds = m.click(8.0, 8.0);
-        assert_eq!(cmds, vec![Cmd::Send(Outbound::Harvest(HarvestPayload { x: 8_000, y: 8_000 }))]);
+        // Click at world (8,8) — the tree becomes the Target; nothing is sent.
+        assert!(m.click(8.0, 8.0).is_empty(), "clicking selects only");
+        assert_eq!(m.target(), Some("tree:8000:8000"));
+        // The Verb button issues the harvest at the Target's identity.
+        let cmds = m.press_verb();
+        assert_eq!(
+            cmds,
+            vec![Cmd::Send(Outbound::Harvest(HarvestPayload {
+                target: "tree:8000:8000".into(),
+                seq: 0,
+            }))]
+        );
     }
 
     #[test]
-    fn click_ignores_a_depleted_tree() {
+    fn a_depleted_tree_is_targetable_and_the_press_still_sends() {
+        // Always-send: state (depleted) is the Island's to judge — the client
+        // never suppresses a press on its own facts. And the depleted-tree
+        // click no longer falls through toward build (the old wasted-wood bug).
         let mut m = model_with_player_at(8_000, 8_000);
         let mut snap = snap_with_player("alice", 8_000, 8_000);
         snap.resource_nodes.insert(
@@ -603,12 +671,20 @@ mod tests {
             NodeWire { kind: "tree".into(), x: 8_000, y: 8_000, depleted: true },
         );
         m.on_snapshot(cc(0, 0), snap);
-        // Depleted tree → no harvest; empty inventory → no build either.
-        assert!(m.click(8.0, 8.0).is_empty());
+        m.on_self(SelfPayload {
+            inventory: BTreeMap::from([("wood".to_string(), WALL_COST)]),
+        });
+        let cmds = m.click(8.0, 8.0);
+        assert!(cmds.is_empty(), "targets the depleted tree; never builds on it");
+        assert_eq!(m.target(), Some("tree:8000:8000"));
+        assert!(
+            matches!(&m.press_verb()[..], [Cmd::Send(Outbound::Harvest(_))]),
+            "the press sends; the Island answers `depleted`"
+        );
     }
 
     #[test]
-    fn click_damages_a_structure() {
+    fn click_targets_a_structure_and_sends_nothing() {
         let mut m = model_with_player_at(3_000, 3_000);
         let mut snap = snap_with_player("alice", 3_000, 3_000);
         snap.structures.insert(
@@ -616,8 +692,24 @@ mod tests {
             StructureWire { kind: "wall".into(), x: 3_500, y: 3_000, hp: 100, owner: "bob".into() },
         );
         m.on_snapshot(cc(0, 0), snap);
-        let cmds = m.click(3.5, 3.0);
-        assert_eq!(cmds, vec![Cmd::Send(Outbound::Damage(DamagePayload { x: 3_500, y: 3_000 }))]);
+        assert!(m.click(3.5, 3.0).is_empty(), "clicking selects only");
+        assert_eq!(m.target(), Some("structure:3500:3000"));
+    }
+
+    #[test]
+    fn escape_clears_the_target_and_the_button_goes_inert() {
+        let mut m = model_with_player_at(8_000, 8_000);
+        let mut snap = snap_with_player("alice", 8_000, 8_000);
+        snap.resource_nodes.insert(
+            "tree:8000:8000".into(),
+            NodeWire { kind: "tree".into(), x: 8_000, y: 8_000, depleted: false },
+        );
+        m.on_snapshot(cc(0, 0), snap);
+        m.click(8.0, 8.0);
+        assert_eq!(m.target(), Some("tree:8000:8000"));
+        m.escape();
+        assert_eq!(m.target(), None);
+        assert!(m.press_verb().is_empty(), "no Target → the Verb button is inert");
     }
 
     #[test]

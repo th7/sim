@@ -8,7 +8,7 @@
 //! `chunk:<x>:<y>`, `instance:<id>:chunk:<x>:<y>`, `dev:stats`, and the
 //! `phoenix` heartbeat.
 
-use crate::components::StructureKind;
+use crate::components::{StructureKind, WireId};
 use crate::geometry::ChunkCoord;
 use crate::ids::Realm;
 use crate::phx::{push, PhxMessage};
@@ -99,7 +99,13 @@ pub fn route(sim: &mut Sim, conn: &mut ConnState, msg: &PhxMessage) -> Outcome {
         // arrives later through the broadcast channel. Malformed frames are
         // dropped silently, as `move` drops a missing dx/dy.
         "harvest" => {
-            enqueue_xy(sim, conn, msg, |x, y| Action::Harvest { x, y });
+            // Entity-directed: the payload names the Target's WireId.
+            if let (Some(user), Some(target)) = (
+                conn.username.clone(),
+                msg.payload.get("target").and_then(|v| v.as_str()),
+            ) {
+                sim.enqueue_action(&user, Action::Harvest { target: WireId(target.to_string()) });
+            }
             Outcome::default()
         }
         "damage" => {
@@ -400,7 +406,7 @@ mod tests {
             reference: Some("9".into()),
             topic: "player:alice".into(),
             event: "harvest".into(),
-            payload: json!({"x":8000,"y":8000}),
+            payload: json!({"target":"tree:8000:8000","seq":0}),
         };
         let out = route(&mut sim, &mut conn, &msg);
         // Fire-and-forget: no synchronous reply, and nothing resolved yet.
