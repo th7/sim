@@ -80,6 +80,11 @@ pub struct Drives {
     pub hunger_pressure: f64,
     /// Accumulated safety Pressure, 0..cap.
     pub safety_pressure: f64,
+    /// In a graze bout: the committed Decision last tick was Graze. Bout
+    /// hysteresis — a started bout continues past the idle threshold until
+    /// properly sated ([`Params::graze_sated`]), so grazing happens in
+    /// sustained bouts rather than threshold-edge nibbles.
+    pub grazing: bool,
 }
 
 impl Drives {
@@ -151,6 +156,9 @@ pub struct Params {
     pub eat_range_sq: i64,
     /// Grass level below which a deer cannot graze and must seek.
     pub graze_floor: f64,
+    /// Hunger at which a graze bout ends as sated. Above the per-tick
+    /// metabolism gain, or a bout at hunger 0 would never close.
+    pub graze_sated: f64,
     /// Need scores below this count as "no active need".
     pub idle_eps: f64,
     /// Range² beyond which a calm animal steers toward its herd centroid
@@ -174,6 +182,7 @@ impl Params {
                 social_range_sq: 5_000 * 5_000,
                 eat_range_sq: 600 * 600,
                 graze_floor: 0.0,
+                graze_sated: 0.0, // wolves don't graze
                 idle_eps: 0.05,
                 herd_comfort_sq: 0, // wolves don't herd (they pack-hunt instead)
             },
@@ -183,13 +192,14 @@ impl Params {
                 safety_tau_s: 8.0,
                 pressure_cap: 1.0,
                 speed: 3_800.0,
-                calm_speed: 3_800.0, // deer stay quick on their feet even calm
+                calm_speed: 1_900.0, // a deer ambles at half its spring
                 hunger_bias: 1.0,
                 safety_bias: 1.5,
                 perception_range_sq: 1_000 * 1_000,
                 social_range_sq: 5_000 * 5_000,
                 eat_range_sq: 600 * 600,
                 graze_floor: 0.05,
+                graze_sated: 0.01,
                 idle_eps: 0.05,
                 herd_comfort_sq: 2_000 * 2_000,
             },
@@ -279,9 +289,14 @@ pub fn decide(
     let safety_score = threat_act * safety_bias * (1.0 + drives.safety_pressure);
 
     let safety_active = safety_score > params.idle_eps && threat_act > 0.0;
-    let hunger_active = hunger_score > params.idle_eps;
+    // Graze-bout hysteresis: a bout that has begun continues past the idle
+    // threshold until properly sated, so grazing happens in sustained bouts
+    // rather than threshold-edge nibbles. Safety still interrupts — it wins
+    // arbitration before hunger plans at all.
+    let bout_continues = drives.grazing && drives.hunger > params.graze_sated;
+    let hunger_active = hunger_score > params.idle_eps || bout_continues;
 
-    let decision = if safety_active && safety_score >= hunger_score {
+    let mut decision = if safety_active && safety_score >= hunger_score {
         plan_safety(perc)
     } else if hunger_active {
         plan_hunger(kind, perc, params)
@@ -299,10 +314,14 @@ pub fn decide(
     if params.herd_comfort_sq > 0 && !cohesion_blocked {
         if let Some(c) = herd_centroid(perc) {
             if dist_sq(perc.self_pos, c) > params.herd_comfort_sq {
-                return Decision::Approach(c);
+                decision = Decision::Approach(c);
             }
         }
     }
+
+    // The bout flag commits from the *final* Decision: anything that displaces
+    // Graze — a threat, herd cohesion — ends the bout.
+    drives.grazing = matches!(decision, Decision::Graze);
     decision
 }
 
@@ -495,7 +514,7 @@ mod tests {
     fn starving_wolf_fights_to_hold_contested_carcass() {
         // High hunger pressure lifts hunger past safety: it attacks the contester.
         let (params, _) = wolf();
-        let mut d = Drives { hunger: 1.0, hunger_pressure: 1.0, safety_pressure: 0.0 };
+        let mut d = Drives { hunger: 1.0, hunger_pressure: 1.0, ..Default::default() };
         let mut perc = Perception::at(P2::new(0, 0));
         perc.food = vec![Sensed { id: 5, pos: P2::new(150, 0) }];
         perc.rivals = vec![Sensed { id: 9, pos: P2::new(200, 0) }];
@@ -507,7 +526,7 @@ mod tests {
     fn calm_wolf_flees_threat_abandoning_food() {
         // Same situation, low hunger pressure: safety wins, it flees.
         let (params, _) = wolf();
-        let mut d = Drives { hunger: 0.5, hunger_pressure: 0.0, safety_pressure: 0.0 };
+        let mut d = Drives { hunger: 0.5, ..Default::default() };
         let mut perc = Perception::at(P2::new(0, 0));
         perc.food = vec![Sensed { id: 5, pos: P2::new(150, 0) }];
         perc.threats = vec![Sensed { id: 9, pos: P2::new(200, 0) }];

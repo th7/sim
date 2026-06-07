@@ -236,7 +236,7 @@ pub fn initial_drives(kind: NpcKind, levels: &Levels) -> Drives {
             Drives {
                 hunger: (0.3 + 0.6 * scarcity).clamp(0.0, 1.0),
                 hunger_pressure: (0.8 * scarcity).clamp(0.0, 1.0),
-                safety_pressure: 0.0,
+                ..Drives::default()
             }
         }
         NpcKind::Deer => {
@@ -245,6 +245,7 @@ pub fn initial_drives(kind: NpcKind, levels: &Levels) -> Drives {
                 hunger: (0.2 + 0.6 * scarcity).clamp(0.0, 1.0),
                 hunger_pressure: (0.6 * scarcity).clamp(0.0, 1.0),
                 safety_pressure: (0.5 * levels.wolf).clamp(0.0, 1.0),
+                ..Drives::default()
             }
         }
     }

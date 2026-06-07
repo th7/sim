@@ -42,10 +42,11 @@ const NPC_ACT_COOLDOWN_MS: u64 = 500;
 const CARCASS_PERISH_MS: u64 = 60_000;
 /// Hunger removed per unit of meat eaten.
 const EAT_FEED: f64 = 0.4;
-/// Hunger removed per graze action. Smaller than a meat meal: grazing sates in
-/// nibbles, so a deer alternates short grazing bouts with wandering as its
-/// hunger falls below the idle threshold and metabolism lifts it back.
-const GRAZE_FEED: f64 = 0.1;
+/// Hunger removed per graze action. Small nibbles: with the graze-bout
+/// hysteresis (`Drives::grazing`) a bout runs from the hunger threshold down
+/// to sated over several actions, so each graze is a sustained stretch and the
+/// deer wanders between bouts as metabolism lifts hunger back.
+const GRAZE_FEED: f64 = 0.02;
 /// How long a fleeing deer stays alarmed (panic contagion window).
 const ALARM_MS: u64 = 1_200;
 

@@ -310,3 +310,64 @@ fn deer_alternates_grazing_bouts_with_wandering() {
         .count();
     assert!(bouts >= 2, "grazing should recur after wandering (got {bouts} bout starts)");
 }
+
+/// A calm deer ambles; a hunted one springs. Same lope/charge contrast the
+/// wolf has, observable on the wire.
+#[test]
+fn calm_deer_wanders_slower_than_it_flees() {
+    // A lone, sated deer on grass-poor ground: nothing urgent → Calm wander.
+    let mut calm = Sim::new();
+    calm.spawn_npc(NpcKind::Deer, pos(8_000, 8_000), Drives::default());
+    calm.tick();
+    let amble = wire_speed(&calm, NpcKind::Deer);
+    assert!(amble > 0.0, "a wandering deer moves");
+
+    // The same deer with a wolf on it → Fleeing at full spring.
+    let mut hunted = Sim::new();
+    hunted.spawn_npc(NpcKind::Deer, pos(8_800, 8_000), Drives::default());
+    hunted.spawn_npc(NpcKind::Wolf, pos(8_000, 8_000), Drives { hunger: 0.8, ..Default::default() });
+    hunted.tick();
+    let spring = wire_speed(&hunted, NpcKind::Deer);
+
+    assert!(
+        amble * 1.5 < spring,
+        "a calm deer should amble well below its flee speed ({amble} vs {spring})"
+    );
+}
+
+/// A graze bout, once begun, persists until the deer is properly sated — not
+/// just until hunger dips back under the start threshold (which would make
+/// every recurring bout a single threshold-edge nibble). Recurring bouts —
+/// those started by metabolism at the threshold, not by the seeded hunger —
+/// must each span a sustained stretch of Feeding.
+#[test]
+fn graze_bouts_persist_until_sated() {
+    use protocol::types::Demeanor;
+    let mut sim = Sim::new();
+    sim.spawn_npc(NpcKind::Deer, pos(8_000, 8_000), Drives { hunger: 0.1, ..Default::default() });
+
+    let mut seq = Vec::new();
+    for _ in 0..400 {
+        sim.tick();
+        seq.push(wire_demeanor(&sim, NpcKind::Deer));
+    }
+
+    // Completed Feeding runs after the first wander (a trailing, still-open
+    // bout at the window edge is dropped — only finished bouts are judged).
+    let first_calm = seq.iter().position(|d| *d == Demeanor::Calm).expect("the deer wanders");
+    let mut runs: Vec<usize> = Vec::new();
+    let mut run = 0;
+    for d in &seq[first_calm..] {
+        if *d == Demeanor::Feeding {
+            run += 1;
+        } else if run > 0 {
+            runs.push(run);
+            run = 0;
+        }
+    }
+    assert!(!runs.is_empty(), "grazing recurs after wandering");
+    assert!(
+        runs.iter().all(|r| *r >= 20),
+        "every recurring bout should sate the deer (~1s+), got runs of {runs:?} ticks"
+    );
+}
