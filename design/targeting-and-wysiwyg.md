@@ -94,6 +94,29 @@ that was never simulated cannot have been delivered); per-session
 delivered-tick tracking is transport bookkeeping deferred until it buys
 something observable.
 
+3. **Preemptive resolution (ladder step 4) implemented as its observable
+   promises, not as shadow-scheduling machinery.** Implementation-time
+   finding: the could-affect-shadow machine's *driver* — resolution waiting on
+   missing intents — does not exist in this architecture. Intent is perishable
+   and the tick never stalls (grace absorbs missing frames); the only fact
+   that ever waits is a seq-pinned Verb, whose pin *is* its could-affect
+   dependency, already minimal. Shadows become load-bearing only under the
+   parked lockstep trio (tick-named intent *locking* with gated emission).
+   Options: (a) build the trio now to give shadows a driver (contradicts the
+   parked decision — anti-backdating pays only under PvP), (b) build the
+   shadow scheduler anyway, dormant (dead machinery, untestable behavior),
+   (c) implement and pin the step's *observable* promises and re-attach the
+   shadow machine to the trio's revisit trigger (this choice). What is pinned:
+   **schedule-confluence** (`outcomes_are_invariant_to_intent_arrival_schedule`
+   — the same logical inputs under different arrival timings produce a
+   bit-identical world; this would fail under arrival-judged semantics),
+   **emittable ⇔ resolved** (outcome events and snapshots already emit only
+   computed-final facts; nothing provisional has ever crossed the wire), and
+   **bounded retention** (`the_judging_ring_never_outgrows_the_lead_window` —
+   the judging ring is the only per-tick history and is Lead-bounded;
+   determinism makes anything older recomputable from the intent log).
+   When the trio lands, the shadow scheduler slots under it unchanged.
+
 ## Rejected / parked
 
 - **Arrival-order resolution** (within or across ticks) — rejected. Determinism degrades

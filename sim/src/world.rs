@@ -1325,3 +1325,33 @@ pub fn instance_bounds() -> Bounds {
 pub fn chunk_of(x: i64, y: i64) -> ChunkCoord {
     coord_for(x, y)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::Inventory;
+    use crate::motivation::Drives;
+
+    /// Retention is bounded by construction: the lawful-render judging ring is
+    /// the only per-tick history the realm keeps, and it never grows past the
+    /// Lead window (+2 slack). A tick's state is otherwise discarded the
+    /// moment its successor lands — determinism makes anything older
+    /// recomputable from the intent log, so discarding loses nothing.
+    #[test]
+    fn the_judging_ring_never_outgrows_the_lead_window() {
+        let mut rw = RealmWorld::new(Realm::Overworld, None);
+        rw.spawn_player("a", Position { x: 8_000, y: 12_000 }, Inventory::default());
+        rw.spawn_npc(NpcKind::Wolf, Position { x: 8_900, y: 12_000 }, Drives::default());
+        for t in 1..200u64 {
+            rw.tick(crate::consts::TICK_MS, t * crate::consts::TICK_MS);
+            assert!(
+                rw.npc_history.len() <= crate::consts::LEAD_BOUND_TICKS as usize + 2,
+                "ring stays bounded (len {} at tick {t})",
+                rw.npc_history.len()
+            );
+        }
+        // And it records what judging needs: the newest entry names the wolf.
+        let (_, newest) = rw.npc_history.back().expect("ring populated");
+        assert_eq!(newest.len(), 1, "one NPC recorded per tick");
+    }
+}

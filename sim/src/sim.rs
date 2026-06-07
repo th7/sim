@@ -1030,6 +1030,46 @@ mod tests {
             .expect("an NPC is on the wire")
     }
 
+    /// Confluence: a tick's outcome is a pure function of the locked intents —
+    /// *when* an intent arrives (relative to other ticks, within its pin
+    /// window) is scheduling, never semantics. The same logical inputs, three
+    /// different arrival schedules, one bit-identical world.
+    #[test]
+    fn outcomes_are_invariant_to_intent_arrival_schedule() {
+        // The approach scenario from the seq-pinning test, delivered three ways.
+        let run = |deliver_verb_after_n_ticks: usize| {
+            let mut sim = Sim::new();
+            sim.connect_at("a", Position { x: 9_431, y: 8_000 }, Inventory::default());
+            for seq in 1..=4u32 {
+                sim.enqueue_move("a", seq, -1.0, 0.0);
+            }
+            let verb = || Action::Harvest { target: WireId("tree:8000:8000".into()) };
+            if deliver_verb_after_n_ticks == 0 {
+                sim.enqueue_action("a", verb(), 4, 0);
+            }
+            for t in 1..=6usize {
+                if t == deliver_verb_after_n_ticks {
+                    sim.enqueue_action("a", verb(), 4, 0);
+                }
+                sim.tick();
+            }
+            let _ = sim.drain_events();
+            (sim.position("a").unwrap(), sim.inventory_of("a").unwrap().items.clone())
+        };
+        // Before any frame; after 1 tick; after 3 ticks (frames 1–3 already
+        // integrated) — all before the pin's resolve tick.
+        let a = run(0);
+        let b = run(1);
+        let c = run(3);
+        assert_eq!(a, b, "arrival schedule is invisible (0 vs 1)");
+        assert_eq!(b, c, "arrival schedule is invisible (1 vs 3)");
+        assert_eq!(
+            a.1.get(&crate::components::Item::Wood),
+            Some(&1),
+            "and the verb landed"
+        );
+    }
+
     /// Lawful-render judging: an entity-directed verb's range eligibility is
     /// judged in the press frame — the target's position as the asserting
     /// client lawfully displayed it (ring state at its Frontier, integrated

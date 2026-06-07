@@ -31,34 +31,42 @@ replaced by the `action_rejected` event. Design + decision record: `design/backp
 > behaviour-gap thread (`messages/engineer-to-product_owner-backpressure-not-wired.md`); per-cluster
 > backpressure (only the overloaded Island freezes) remains deferred as v2.
 
+## Landed: targeting, the Verb button, and WYSIWYG judging
+
+All four increments of `design/targeting-and-wysiwyg.md` are in (terms in
+`design/glossary.md`: Tick, Verb, Target, Frontier, Lawful render, Verb button, Target
+marker). Click selects a Target (the click-priority heuristic died with its wasted-wood
+flaw; click hit-testing is nearest-within-tolerance); `E`/the HUD button is the one issuer
+of entity-directed Verbs (Gatherable→harvest, Structure/NPC→damage, by WireId); the
+diegetic Target marker is the only Target display; Escape clears; despawn/View-exit/
+relocation clear, distance and depletion never do. Verbs are seq-pinned (judged at the
+press frame's own position — `a_verb_is_judged_at_its_press_frame_position_not_at_arrival`,
+plus the moment-it-lights e2e) and Frontier-asserting (range judged against the Target's
+lawful render OR the authoritative present; never-future/monotone/Lead-window clamps —
+`a_press_is_judged_against_the_targets_lawful_render`,
+`frontier_claims_are_clamped_to_the_lead_window`). `build` gained the server-side
+`in_range` law. Schedule-confluence and bounded retention are pinned
+(`outcomes_are_invariant_to_intent_arrival_schedule`,
+`the_judging_ring_never_outgrows_the_lead_window`). Wire: harvest/damage are
+`{target, seq, frontier?}`, build gained `seq`; `action_rejected` attributes entity verbs
+by target id; contract regenerated. The e2e layer covers the tracer (click→target→press→
+wood), the hunt loop (kill by identity → Carcass retarget → meat+hide), rejection
+surfacing, and the moving press.
+
+> Engineering deviations from the grilled design (frontier-on-verbs, either-frame
+> eligibility, preemptive resolution as pinned-promises-not-machinery) are documented with
+> options + rationale in `design/targeting-and-wysiwyg.md` — flagged for designer/PO review.
+
 ## Candidate next increments
 
-Design + decision record for the next three: `design/targeting-and-wysiwyg.md`; terms in
-`design/glossary.md` (Tick, Verb, Target, Frontier, Lawful render, Verb button, Target marker).
-
-1. **Targeting + the Verb button** (+ seq-pinned Verbs, shipped together). Click selects a
-   Target (click-priority heuristic dies; build stays click-on-ground for now); `E` +
-   contextual HUD button issues the entity-directed Verb by WireId; diegetic Target marker
-   (no target frame); Escape clears. Verbs carry the input seq and resolve at that named
-   tick. Wire: harvest/damage lose `{x,y}`, gain target WireId + seq → contract regen, both
-   sides. Server repair in scope: `build` gets the `in_range` check its siblings have
-   (today it's client-gated only — hostile clients can build cross-chunk). Showcase gains
-   the marker (per targetable kind) and the button (inert/lit/dimmed × verb labels).
-2. **Lawful-render judging.** Frontier asserted on every input frame (monotone,
-   never-future, delivered-tick-checked, `M − frontier ≤ LEAD_BOUND`); ~10-tick
-   position/intent ring server-side; entity-directed Verb range judged in the press frame
-   (own exact position vs Target's lawful render, shared-integrator recompute).
-   Continuous-only forgiveness; effects at resolve tick. Revisit-at-PvP flag.
-3. **Preemptive resolution.** Eager per-fact resolve/emit under could-affect shadows;
-   emittable ⇔ Resolved; finalization internal; tick-state discard at successor-finalize
-   (the judging ring is separate retention). Pure scheduling — semantics provably
-   unchanged, so the existing test pyramid should pass untouched except for emission
-   timing.
-
+- **PO: new `.feature` stories for targeting** (select-then-act, the Verb button, rejection
+  honesty, lawful-render judging) — the 14 existing stories predate the feature; the sim
+  tests above are ready citations.
 - Held story scenarios will arrive once the designer answers the PO's gaps (multi-member Party
   Instance entry; the one-authority / never-under-merge observable). Add their proving tests then.
-- New stories needed from the PO for increment 1 (targeting, the Verb button, rejection
-  honesty) — the 14 existing `.feature` files predate select-then-act.
+- Parked with revisit triggers (see the design doc): the lockstep trio (anti-backdating;
+  trigger = PvP) — the could-affect shadow scheduler slots under it when it lands — and
+  async Island clocks (pacing; trigger = straggler pain).
 
 ## Landed: parallel tick + lossless crash on a tick panic
 
