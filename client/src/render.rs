@@ -15,9 +15,11 @@ use three_d::*;
 
 /// World units per chunk edge (matches the server's `CHUNK_SIZE`).
 pub const CHUNK_SIZE: f32 = 16.0;
-/// Snapshots arrive at ~10 Hz; lerp toward each new target over this window so
-/// motion stays smooth without client-side prediction (mirrors the old client).
-const SNAPSHOT_INTERVAL_MS: f64 = 100.0;
+/// Positions are the Mirror's speculation, advancing at the 20 Hz client tick;
+/// lerp toward each new target over one tick so motion stays smooth between
+/// ticks. The same blend absorbs override corrections — state snaps exactly,
+/// rendering glides.
+const SNAPSHOT_INTERVAL_MS: f64 = 50.0;
 /// Keep rendering a player this long after they vanish from snapshots, so a
 /// chunk-boundary crossing (briefly in no snapshot) doesn't blink the cube out.
 const PLAYER_REMOVE_GRACE_MS: f64 = 400.0;
@@ -246,6 +248,17 @@ impl View {
                     EWindow::new("dev")
                         .anchor(Align2::RIGHT_TOP, [-8.0, 8.0])
                         .show(ctx, |ui| dev_panel(ui, rs));
+                }
+                // The Mirror is frozen (connecting, relocating, or at its Lead
+                // bound): say so — a stall must read as "connection", never as
+                // a broken game or silently stale state.
+                if rs.frozen {
+                    EWindow::new("frozen").anchor(Align2::CENTER_TOP, [0.0, 8.0]).show(
+                        ctx,
+                        |ui| {
+                            ui.label("⏸ waiting for the server…");
+                        },
+                    );
                 }
                 extra_ui(ctx);
             },

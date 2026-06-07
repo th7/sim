@@ -97,4 +97,18 @@ fn instance_scenario_shows_the_instance_realm_with_an_empty_inventory() {
     assert!(rs.inventory.is_empty(), "empty inventory");
     assert!(rs.last_error.is_none(), "no error line");
     assert!(rs.players.contains_key(&rs.own), "own player anchors the camera");
+    assert!(!rs.frozen, "a live scene is not frozen");
+}
+
+/// The frozen-Mirror state: authority has gone quiet, the Mirror has hit its
+/// Lead bound, and the view says so — entities still drawn, signal shown —
+/// instead of silently animating stale speculation.
+#[test]
+fn frozen_scenario_shows_a_frozen_mirror_over_a_populated_scene() {
+    let rs = state_of("frozen");
+    assert!(rs.frozen, "the Mirror is frozen at its Lead bound");
+    assert!(rs.players.contains_key(&rs.own), "the world is still drawn, just frozen");
+    assert!(!rs.nodes.is_empty(), "entities remain visible under the freeze signal");
+    // And every live scenario renders unfrozen.
+    assert!(!state_of("overworld").frozen, "overworld is live");
 }

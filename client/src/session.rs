@@ -32,6 +32,9 @@ pub struct RenderState {
     pub inventory: BTreeMap<String, u32>,
     pub stats: Option<StatsPayload>,
     pub last_error: Option<String>,
+    /// The Mirror is frozen (born, at its Lead bound, or reset): the view
+    /// shows a connection signal instead of silently stale state.
+    pub frozen: bool,
 }
 
 impl RenderState {
@@ -52,6 +55,7 @@ impl RenderState {
             inventory: model.inventory().clone(),
             stats: model.stats().cloned(),
             last_error: model.last_error().map(str::to_string),
+            frozen: model.mirror_frozen(),
         }
     }
 }

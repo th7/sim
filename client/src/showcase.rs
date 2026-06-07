@@ -36,6 +36,7 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario { name: "overworld", build: overworld },
         Scenario { name: "instance", build: instance },
+        Scenario { name: "frozen", build: frozen },
     ]
 }
 
@@ -144,6 +145,29 @@ fn overworld(t_ms: f64) -> RenderState {
         .collect();
     model.on_stats(StatsPayload { active_chunks: 3, total_players: 7, total_npcs: 2, around });
 
+    RenderState::from_model(&model)
+}
+
+/// The frozen-Mirror state: authority has gone quiet and the Mirror has hit
+/// its Lead bound — the world is still drawn, the freeze signal shows.
+/// Entered through the real path: a seeded model whose Mirror ticks past
+/// LEAD_BOUND_TICKS with no further authoritative snapshots.
+fn frozen(_t_ms: f64) -> RenderState {
+    let (mut model, _) = ClientModel::new("showcase", ChunkCoord::new(0, 0));
+    let mut snap = ChunkSnapshot::default();
+    snap.resource_nodes.insert(
+        "tree:1".into(),
+        NodeWire { kind: ResourceKind::Tree.as_str().into(), x: 6_000, y: 8_000, depleted: false },
+    );
+    snap.players.insert(
+        "showcase".into(),
+        PlayerWire { x: 8_000, y: 8_000, ..PlayerWire::default() },
+    );
+    model.on_snapshot(ChunkCoord::new(0, 0), snap);
+    // Authority goes quiet; the Mirror runs to its Lead bound and freezes.
+    for _ in 0..protocol::consts::LEAD_BOUND_TICKS {
+        let _ = model.input_frame();
+    }
     RenderState::from_model(&model)
 }
 

@@ -31,6 +31,7 @@ fn main() {
         inventory: BTreeMap::new(),
         stats: None,
         last_error: None,
+        frozen: true, // born frozen — until the first authoritative snapshot
     }));
     let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<Input>();
 
