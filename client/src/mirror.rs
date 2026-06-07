@@ -64,6 +64,8 @@ pub struct Mirror {
     /// Per-player authoritative baseline (latest tick wins per actor — chunk
     /// snapshots broadcast independently and may straddle a tick).
     players: BTreeMap<String, AuthActor>,
+    /// Per-NPC authoritative baseline, keyed by wire id. Same rules.
+    npcs: BTreeMap<String, AuthActor>,
     /// Sent-but-unacked own input frames, in seq order. The replay tape.
     unacked: VecDeque<InputFrame>,
     /// How many of `unacked` the Mirror's own ticks have consumed so far.
@@ -82,6 +84,7 @@ impl Mirror {
             auth_tick: None,
             mirror_tick: 0,
             players: BTreeMap::new(),
+            npcs: BTreeMap::new(),
             unacked: VecDeque::new(),
             consumed: 0,
             own: None,
@@ -146,6 +149,15 @@ impl Mirror {
                 }
             }
         }
+        for (id, n) in &snap.npcs {
+            let next = AuthActor { x: n.x, y: n.y, vx: n.vx, vy: n.vy, tick: snap.tick };
+            match self.npcs.get(id) {
+                Some(prev) if prev.tick > snap.tick => {}
+                _ => {
+                    self.npcs.insert(id.clone(), next);
+                }
+            }
+        }
         self.obstacles.insert(coord, chunk_obstacles(snap));
         self.auth_tick = Some(self.auth_tick.unwrap_or(0).max(snap.tick));
         // The Mirror is never behind authority.
@@ -180,15 +192,33 @@ impl Mirror {
         self.own = Some(own);
     }
 
-    /// The Mirror's position for an actor: own player speculative, everyone
-    /// else their latest authoritative state.
+    /// The Mirror's position for a player: own player by frame replay,
+    /// everyone else by their last-known Intent.
     pub fn position_of(&self, name: &str) -> Option<(i64, i64)> {
         if name == self.username {
             if let Some(own) = self.own {
                 return Some((own.x, own.y));
             }
         }
-        self.players.get(name).map(|a| (a.x, a.y))
+        self.players.get(name).map(|a| self.speculate(a))
+    }
+
+    /// The Mirror's position for an NPC (by wire id), by its last-known Intent.
+    pub fn npc_position_of(&self, id: &str) -> Option<(i64, i64)> {
+        self.npcs.get(id).map(|a| self.speculate(a))
+    }
+
+    /// Advance an actor from its authoritative state to the Mirror's tick by
+    /// holding its last-known Intent — one integrator step per tick, exactly
+    /// as the server would integrate an unchanged Intent.
+    fn speculate(&self, a: &AuthActor) -> (i64, i64) {
+        let obstacles = self.all_obstacles();
+        let dt = TICK_MS as f64 / 1000.0;
+        let (mut x, mut y) = (a.x, a.y);
+        for _ in a.tick..self.mirror_tick {
+            (x, y) = step_actor(x, y, a.vx, a.vy, dt, &obstacles);
+        }
+        (x, y)
     }
 
     fn all_obstacles(&self) -> Vec<Obstacle> {
@@ -217,7 +247,7 @@ fn chunk_obstacles(snap: &ChunkSnapshot) -> Vec<Obstacle> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::wire::PlayerWire;
+    use protocol::wire::{NpcWire, PlayerWire};
 
     fn cc(x: i32, y: i32) -> ChunkCoord {
         ChunkCoord::new(x, y)
@@ -252,6 +282,38 @@ mod tests {
         snap.players.insert("alice".into(), PlayerWire { x, y, vx: 0.0, vy: 0.0 });
         m.on_snapshot(cc(0, 0), &snap);
         m
+    }
+
+    /// Every other actor advances by its last-known Intent (the velocity the
+    /// snapshot carried) — identical to the server until that actor changes
+    /// intent, corrected by the next override.
+    #[test]
+    fn integrates_others_from_their_last_known_intent() {
+        let mut m = Mirror::new("alice");
+        let mut snap = ChunkSnapshot { tick: 10, ..ChunkSnapshot::default() };
+        snap.players.insert("alice".into(), PlayerWire { x: 8_000, y: 8_000, vx: 0.0, vy: 0.0 });
+        snap.players.insert("bob".into(), PlayerWire { x: 10_000, y: 8_000, vx: 4_000.0, vy: 0.0 });
+        snap.npcs.insert(
+            "npc:wolf:1".into(),
+            NpcWire { kind: "wolf".into(), x: 12_000, y: 8_000, hp: 80, vx: -2_000.0, vy: 0.0 },
+        );
+        m.on_snapshot(cc(0, 0), &snap);
+
+        m.tick();
+        m.tick();
+        assert_eq!(m.position_of("bob"), Some((10_400, 8_000)), "bob walks his held intent");
+        assert_eq!(
+            m.npc_position_of("npc:wolf:1"),
+            Some((11_800, 8_000)),
+            "the wolf walks its last-known intent"
+        );
+
+        // A fresh override rebases speculation: at zero lead the authoritative
+        // position is shown as-is.
+        let mut snap = ChunkSnapshot { tick: 12, ..ChunkSnapshot::default() };
+        snap.players.insert("bob".into(), PlayerWire { x: 10_390, y: 8_000, vx: 4_000.0, vy: 0.0 });
+        m.on_snapshot(cc(0, 0), &snap);
+        assert_eq!(m.position_of("bob"), Some((10_390, 8_000)), "override wins at zero lead");
     }
 
     /// The Mirror's own player runs the server's exact frame semantics — one
