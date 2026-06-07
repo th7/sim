@@ -7,6 +7,7 @@
 
 pub mod conn;
 pub mod dev;
+pub mod mirror;
 pub mod model;
 pub mod render;
 pub mod session;
