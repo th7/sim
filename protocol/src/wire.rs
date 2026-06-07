@@ -199,6 +199,10 @@ pub struct AckPayload {
 pub struct HarvestPayload {
     pub target: String,
     pub seq: u32,
+    /// The session's Frontier at press: the last authoritative tick its
+    /// Mirror has incorporated — the basis of lawful-render judging.
+    #[serde(default)]
+    pub frontier: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -217,6 +221,9 @@ pub struct BuildPayload {
 pub struct DamagePayload {
     pub target: String,
     pub seq: u32,
+    /// See [`HarvestPayload::frontier`].
+    #[serde(default)]
+    pub frontier: u64,
 }
 
 /// Params the client sends when joining its `player:<username>` channel.
@@ -290,8 +297,9 @@ mod tests {
             serde_json::json!({ "type": "wall", "x": 3000, "y": 3000, "seq": 9 })
         );
         assert_eq!(
-            serde_json::to_value(HarvestPayload { target: "tree:1:2".into(), seq: 9 }).unwrap(),
-            serde_json::json!({ "target": "tree:1:2", "seq": 9 })
+            serde_json::to_value(HarvestPayload { target: "tree:1:2".into(), seq: 9, frontier: 3 })
+                .unwrap(),
+            serde_json::json!({ "target": "tree:1:2", "seq": 9, "frontier": 3 })
         );
         assert_eq!(
             serde_json::to_value(MovePayload { seq: 7, dx: 1.0, dy: 0.0 }).unwrap(),

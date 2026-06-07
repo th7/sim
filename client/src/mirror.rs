@@ -96,6 +96,12 @@ impl Mirror {
     /// frozen whole at the Lead bound — the Mirror never runs more than
     /// [`protocol::consts::LEAD_BOUND_TICKS`] past the last authoritative
     /// tick (the client-side face of Backpressure).
+    /// The last authoritative tick incorporated — the session's Frontier,
+    /// asserted on every entity-directed Verb (lawful-render judging basis).
+    pub fn auth_tick(&self) -> Option<u64> {
+        self.auth_tick
+    }
+
     pub fn frozen(&self) -> bool {
         match self.auth_tick {
             None => true,

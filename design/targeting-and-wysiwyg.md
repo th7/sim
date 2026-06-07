@@ -66,6 +66,34 @@ siblings have (client-only gate today → cross-chunk build is possible from a h
 client, and the unenforced reach inflates could-affect shadows to chunk scale). Fix ships
 with increment 1.
 
+## Engineering deviations (made at the engineer's discretion — review welcome)
+
+Two points where implementation deviated from the grilled design, each with the
+options weighed and the choice taken:
+
+1. **The Frontier rides entity-directed Verbs, not every input frame.** The
+   grill locked "frontier on every input frame; verbs carry nothing" — but the
+   protocol sends *no* input frames while idle (Intent renewal goes silent), so
+   a standing-only assertion goes stale exactly when a stationary player
+   presses. Options: (a) assert on idle keepalive frames (new traffic, changes
+   the idle-silence protocol), (b) assert per-Verb with per-player monotonicity
+   (this choice), (c) both. Choice (b): identical judging power; per-press
+   shopping stays impossible (the assertion is clamped monotone per player —
+   regressing claims clamp *up*), never-future and Lead-window clamps as
+   designed. Revisit if input-frame-cadence assertions are ever wanted for
+   analytics.
+2. **Eligibility is either-frame, not press-frame-only.** Judging *only* the
+   lawful render would reject a press whose target is authoritatively in range
+   but speculated out (the lunging wolf — the exact case the always-send rule
+   exists for). Eligible ⇔ in range in the press frame **or** the
+   authoritative present. Generosity stays bounded by the same Lead constant;
+   the deer's exploit ceiling is unchanged.
+
+Also one scope note: the never-future clamp is against the global tick (a tick
+that was never simulated cannot have been delivered); per-session
+delivered-tick tracking is transport bookkeeping deferred until it buys
+something observable.
+
 ## Rejected / parked
 
 - **Arrival-order resolution** (within or across ticks) — rejected. Determinism degrades

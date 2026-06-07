@@ -83,10 +83,15 @@ fn build_payload() -> Value {
     )
 }
 
-/// An entity-directed verb: names its Target's WireId and the movement input
-/// seq at press time (press-frame own position).
+/// An entity-directed verb: names its Target's WireId, the movement input seq
+/// at press time (press-frame own position), and the session's Frontier (the
+/// last authoritative tick incorporated — the lawful-render basis; optional,
+/// absent reads as no claim).
 fn entity_verb_payload() -> Value {
-    object(&[("target", string()), ("seq", integer())], &["target", "seq"])
+    object(
+        &[("target", string()), ("seq", integer()), ("frontier", integer())],
+        &["target", "seq"],
+    )
 }
 
 fn action_rejected_payload() -> Value {

@@ -98,7 +98,10 @@ pub struct Sim {
     /// receipt), each pinned to the movement seq at press time: an action
     /// waits until its seq's movement has integrated, so eligibility is judged
     /// at the exact position the pressing client displayed.
-    action_queues: BTreeMap<String, VecDeque<(Action, u32)>>,
+    action_queues: BTreeMap<String, VecDeque<(Action, u32, u64)>>,
+    /// Per-player highest Frontier asserted so far (monotone by law: a session
+    /// never un-sees an authoritative tick; a regressing claim is clamped up).
+    asserted_frontier: BTreeMap<String, u64>,
     /// Per-player queued movement input frames, consumed one per tick.
     move_queues: BTreeMap<String, VecDeque<MoveFrame>>,
     /// Per-player ticks since the last consumed frame. Intent is perishable:
@@ -180,6 +183,7 @@ impl Sim {
             move_queues: BTreeMap::new(),
             move_starved: BTreeMap::new(),
             last_move_seq: BTreeMap::new(),
+            asserted_frontier: BTreeMap::new(),
             next_instance: 1,
             pool: None,
             datastore: Datastore::new(Box::new(store)),
@@ -649,9 +653,18 @@ impl Sim {
     // the realm (`RealmWorld::{harvest,build,damage}`).
 
     /// Enqueue a player action intent (fire-and-forget), pinned to the
-    /// movement `seq` at press time. Resolved in the tick — at the tick after
-    /// `seq`'s movement has integrated — never on receipt.
-    pub fn enqueue_action(&mut self, username: &str, action: Action, seq: u32) {
+    /// movement `seq` at press time and carrying the session's asserted
+    /// `frontier` (the last authoritative tick it incorporated — the basis of
+    /// lawful-render judging). Hard checks at the door: **never-future** (a
+    /// claim past the present is clamped to it) and **monotone** (a session
+    /// never un-sees a tick; regressing claims are clamped up to the highest
+    /// asserted). Resolved in the tick — at the tick after `seq`'s movement
+    /// has integrated — never on receipt.
+    pub fn enqueue_action(&mut self, username: &str, action: Action, seq: u32, frontier: u64) {
+        let f = frontier.min(self.tick_count); // never-future
+        let stored = self.asserted_frontier.entry(username.to_string()).or_insert(0);
+        let f = f.max(*stored); // monotone
+        *stored = f;
         let queue = self.action_queues.entry(username.to_string()).or_default();
         if queue.len() >= ACTION_QUEUE_CAP {
             // Reject the newest; the committed queue is honoured first.
@@ -664,7 +677,7 @@ impl Sim {
             });
             return;
         }
-        queue.push_back((action, seq));
+        queue.push_back((action, seq, f));
     }
 
     /// Resolve queued action intents, in id (username) order, FIFO within an
@@ -690,18 +703,22 @@ impl Sim {
                 let frames_pending =
                     self.move_queues.get(&username).is_some_and(|q| !q.is_empty());
                 let Some(queue) = self.action_queues.get_mut(&username) else { break };
-                let Some(&(_, seq)) = queue.front() else { break };
+                let Some(&(_, seq, _)) = queue.front() else { break };
                 if seq > consumed && frames_pending {
                     break; // pinned to a frame still to integrate — wait, FIFO
                 }
-                let (action, _) = queue.pop_front().expect("front checked");
+                let (action, _, frontier) = queue.pop_front().expect("front checked");
+                // The Lead law: a press cannot reach further back than the
+                // Mirror could lawfully have been — clamp into the window.
+                let frontier =
+                    frontier.max(self.tick_count.saturating_sub(crate::consts::LEAD_BOUND_TICKS));
                 let Some(rw) = self.realm_world_mut(realm) else { continue };
                 let (verb, at) = action.attribution();
                 let outcome = match action {
                     Action::Harvest { target } => rw.harvest(&username, &target, clock).map(Some),
                     Action::Build { kind, x, y } => rw.build(&username, kind, x, y).map(Some),
                     Action::Damage { target } => {
-                        rw.damage(&username, &target, clock).map(|_| None::<Inventory>)
+                        rw.damage(&username, &target, clock, frontier).map(|_| None::<Inventory>)
                     }
                 };
                 match outcome {
@@ -922,7 +939,7 @@ mod tests {
     fn enqueued_action_resolves_on_the_next_tick_not_on_receipt() {
         let mut sim = Sim::new();
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
 
         // Not resolved on receipt — inventory unchanged.
         assert_eq!(
@@ -955,11 +972,11 @@ mod tests {
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
 
         for _ in 0..ACTION_QUEUE_CAP {
-            sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
+            sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
         }
         assert_eq!(queue_full_events(&sim.drain_events()), 0, "the first cap intents are accepted");
 
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
         assert_eq!(
             queue_full_events(&sim.drain_events()),
             1,
@@ -985,7 +1002,7 @@ mod tests {
             sim.enqueue_move("a", seq, -1.0, 0.0);
         }
         // The press, pinned to frame 4 — sent before any frame has resolved.
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 4);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 4, 0);
         let _ = sim.drain_events();
 
         for _ in 0..6 {
@@ -1003,6 +1020,116 @@ mod tests {
         );
     }
 
+    /// WireId of the first NPC on the wire.
+    fn first_npc_wid(sim: &Sim) -> WireId {
+        crate::wire::entity_states(sim.overworld())
+            .into_iter()
+            .find_map(|(wid, s)| {
+                matches!(s, crate::wire::EntityWire::Npc { .. }).then_some(wid)
+            })
+            .expect("an NPC is on the wire")
+    }
+
+    /// Lawful-render judging: an entity-directed verb's range eligibility is
+    /// judged in the press frame — the target's position as the asserting
+    /// client lawfully displayed it (ring state at its Frontier, integrated
+    /// forward by the last-known intent) — OR the authoritative present;
+    /// either frame in range makes the press eligible. Here: a calm wolf sits
+    /// in range; a first hit sends it fleeing out of authoritative range; a
+    /// press asserting the pre-flight Frontier (the screen still showed it
+    /// close) lands — while a press asserting a fresh Frontier is `too_far`.
+    #[test]
+    fn a_press_is_judged_against_the_targets_lawful_render() {
+        let mut sim = Sim::new();
+        // Clear of the tree cluster (y 12_000); wolf 0.9u east — in range,
+        // calm (low hunger, players are not wolf threats until provoked).
+        sim.connect_at("a", Position { x: 8_000, y: 12_000 }, Inventory::default());
+        sim.spawn_npc(
+            NpcKind::Wolf,
+            Position { x: 8_900, y: 12_000 },
+            Drives { hunger: 0.1, ..Default::default() },
+        );
+        let wolf = first_npc_wid(&sim);
+        // Two calm ticks so the ring records the wolf at rest at 8_900.
+        sim.tick();
+        sim.tick();
+        let calm_frontier = sim.tick_count();
+
+        // Provoke: one hit lands (wolf at 8_900, in range), and the wolf flees
+        // east at 210/tick.
+        sim.enqueue_action("a", Action::Damage { target: wolf.clone() }, 0, calm_frontier);
+        sim.tick();
+        // Let it run authoritatively out of range (> 1_000 from alice).
+        for _ in 0..3 {
+            sim.tick();
+        }
+        let _ = sim.drain_events();
+
+        // A press asserting the *calm* Frontier: the lawful render still has
+        // the wolf at 8_900 with zero intent → in range → the hit lands.
+        sim.enqueue_action("a", Action::Damage { target: wolf.clone() }, 0, calm_frontier);
+        sim.tick();
+        assert!(
+            !sim.drain_events().iter().any(|e| matches!(e, OutboundEvent::ActionRejected { .. })),
+            "the press the screen promised is honored (lawful render in range)"
+        );
+
+        // A press asserting a *fresh* Frontier: both frames agree it is gone.
+        let fresh = sim.tick_count();
+        sim.enqueue_action("a", Action::Damage { target: wolf }, 0, fresh);
+        sim.tick();
+        let rejected: Vec<_> = sim
+            .drain_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                OutboundEvent::ActionRejected { reason, .. } => Some(reason),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rejected, vec!["too_far"], "an honest fresh frame is out of range");
+    }
+
+    /// The Frontier's hard checks: never-future (clamped to the present) and
+    /// the Lead window (a press cannot reach further back than LEAD_BOUND
+    /// ticks). An ancient Frontier is clamped into the window, where the wolf
+    /// has already fled — so the stale-forever persona buys nothing.
+    #[test]
+    fn frontier_claims_are_clamped_to_the_lead_window() {
+        let mut sim = Sim::new();
+        sim.connect_at("a", Position { x: 8_000, y: 12_000 }, Inventory::default());
+        sim.spawn_npc(
+            NpcKind::Wolf,
+            Position { x: 8_900, y: 12_000 },
+            Drives { hunger: 0.1, ..Default::default() },
+        );
+        let wolf = first_npc_wid(&sim);
+        sim.tick();
+        sim.tick();
+        let calm_frontier = sim.tick_count();
+        sim.enqueue_action("a", Action::Damage { target: wolf.clone() }, 0, calm_frontier);
+        sim.tick();
+        // Flee until the calm frame falls out of the LEAD_BOUND window.
+        for _ in 0..(crate::consts::LEAD_BOUND_TICKS + 2) {
+            sim.tick();
+        }
+        let _ = sim.drain_events();
+
+        // Asserting the (now ancient) calm Frontier: clamped to the window's
+        // edge, where the wolf is long gone → too_far. Pretending to be
+        // staler than the Lead bound buys nothing.
+        sim.enqueue_action("a", Action::Damage { target: wolf }, 0, calm_frontier);
+        sim.tick();
+        let rejected: Vec<_> = sim
+            .drain_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                OutboundEvent::ActionRejected { reason, .. } => Some(reason),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rejected, vec!["too_far"], "the claim is clamped into the Lead window");
+    }
+
     /// A gameplay failure at tick-time (here: out of range) comes back as an
     /// async `ActionRejected` carrying the verb's reason — not a synchronous
     /// error, since resolution happens in the tick.
@@ -1013,7 +1140,7 @@ mod tests {
         let _ = sim.drain_events(); // clear connect-time events
 
         // The neighbour chunk's centre tree — real, hydrated, far out of range.
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:24000:8000".into()) }, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:24000:8000".into()) }, 0, 0);
         sim.tick();
 
         let rejected: Vec<_> = sim
@@ -1046,7 +1173,7 @@ mod tests {
         sim.connect_at("p", Position { x: 2_600, y: 3_000 }, inv);
         sim.set_intent("p", 1.0, 0.0); // heading east, into the wall's path
 
-        sim.enqueue_action("p", Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 }, 0);
+        sim.enqueue_action("p", Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 }, 0, 0);
         sim.tick();
 
         let x = sim.position("p").unwrap().x;
@@ -1064,8 +1191,8 @@ mod tests {
     fn all_queued_actions_drain_in_one_tick() {
         let mut sim = Sim::new();
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) }, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) }, 0, 0);
 
         sim.tick();
 
@@ -1106,13 +1233,13 @@ mod tests {
 
         // A resolved harvest leaves pending writes in the buffer (un-flushed:
         // the DB-flush cadence hasn't elapsed) — our overload to drain.
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
         sim.tick();
         assert!(sim.datastore().pending_len() > 0, "buffered writes to drain");
         assert_eq!(sim.inventory_of("a").unwrap().items.get(&Item::Wood).copied(), Some(1));
 
         // Queue another intent and start moving, then trip the overload.
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) }, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) }, 0, 0);
         sim.set_intent("a", 1.0, 0.0);
         sim.set_persist_thresholds(Thresholds { n_high: 1, n_low: 1 });
         assert_eq!(sim.datastore().mode(), Mode::Backpressured, "overload engaged");
@@ -1147,7 +1274,7 @@ mod tests {
     fn guard_flushes_durable_state_then_reports_the_panic() {
         let mut sim = Sim::new();
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
         sim.tick(); // resolve the harvest → a pending durable write
         assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
 
@@ -1174,7 +1301,7 @@ mod tests {
         let mut sim = Sim::new();
         sim.enable_pool(2);
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
         sim.tick(); // resolve the harvest → a pending durable write
         assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
 

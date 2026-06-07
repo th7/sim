@@ -40,7 +40,7 @@ fn damage(sim: &mut Sim, who: &str, target: &str) -> Result<(), VerbError> {
     let clock = sim.clock_ms();
     sim.realm_world_mut(realm)
         .ok_or(VerbError::NoChunk)?
-        .damage(who, &WireId(target.into()), clock)
+        .damage(who, &WireId(target.into()), clock, clock / sim::consts::TICK_MS)
         .map(|_| ())
 }
 

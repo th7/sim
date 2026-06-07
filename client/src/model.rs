@@ -357,10 +357,13 @@ impl ClientModel {
         let Some(wid) = self.target.clone() else {
             return Vec::new();
         };
+        // The press asserts the session's Frontier: the last authoritative
+        // tick the Mirror has incorporated — the lawful-render judging basis.
+        let frontier = self.mirror.auth_tick().unwrap_or(0);
         let out = if self.nodes().contains_key(&wid) || self.carcasses().contains_key(&wid) {
-            Outbound::Harvest(HarvestPayload { target: wid, seq: self.move_seq })
+            Outbound::Harvest(HarvestPayload { target: wid, seq: self.move_seq, frontier })
         } else if self.npcs().contains_key(&wid) || self.structures().contains_key(&wid) {
-            Outbound::Damage(DamagePayload { target: wid, seq: self.move_seq })
+            Outbound::Damage(DamagePayload { target: wid, seq: self.move_seq, frontier })
         } else {
             // The Target is no longer visible — nothing to act on.
             return Vec::new();
@@ -726,6 +729,7 @@ mod tests {
             vec![Cmd::Send(Outbound::Harvest(HarvestPayload {
                 target: "tree:8000:8000".into(),
                 seq: 0,
+                frontier: 0,
             }))]
         );
     }
@@ -767,7 +771,7 @@ mod tests {
         let cmds = m.press_verb();
         assert_eq!(
             cmds,
-            vec![Cmd::Send(Outbound::Damage(DamagePayload { target: "npc:deer:5".into(), seq: 0 }))]
+            vec![Cmd::Send(Outbound::Damage(DamagePayload { target: "npc:deer:5".into(), seq: 0, frontier: 0 }))]
         );
     }
 
@@ -787,6 +791,7 @@ mod tests {
             vec![Cmd::Send(Outbound::Damage(DamagePayload {
                 target: "structure:3500:3000".into(),
                 seq: 0,
+                frontier: 0,
             }))]
         );
     }

@@ -236,7 +236,7 @@ impl Session {
     /// Entity-directed: harvest names its Target's WireId (`seq` 0 — these raw
     /// hooks bypass the model, so there is no press tick to pin).
     pub async fn send_harvest(&mut self, target: &str) -> Result<(), String> {
-        self.push_verb("harvest", json!({ "target": target, "seq": 0 })).await
+        self.push_verb("harvest", json!({ "target": target, "seq": 0, "frontier": 0 })).await
     }
 
     pub async fn send_build(&mut self, kind: &str, x: i64, y: i64) -> Result<(), String> {
@@ -244,7 +244,7 @@ impl Session {
     }
 
     pub async fn send_damage(&mut self, target: &str) -> Result<(), String> {
-        self.push_verb("damage", json!({ "target": target, "seq": 0 })).await
+        self.push_verb("damage", json!({ "target": target, "seq": 0, "frontier": 0 })).await
     }
 
     async fn push_verb(&mut self, event: &str, payload: serde_json::Value) -> Result<(), String> {

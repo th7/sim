@@ -15,15 +15,15 @@ fn at(x: i64, y: i64) -> Position {
 // enqueue one and tick so the effect (and its durable write) lands, mirroring the
 // old immediate verbs for terse persistence setup.
 fn harvest(sim: &mut Sim, who: &str, target: &str) {
-    sim.enqueue_action(who, Action::Harvest { target: WireId(target.into()) }, 0);
+    sim.enqueue_action(who, Action::Harvest { target: WireId(target.into()) }, 0, 0);
     sim.tick();
 }
 fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) {
-    sim.enqueue_action(who, Action::Build { kind, x, y }, 0);
+    sim.enqueue_action(who, Action::Build { kind, x, y }, 0, 0);
     sim.tick();
 }
 fn damage(sim: &mut Sim, who: &str, target: &str) {
-    sim.enqueue_action(who, Action::Damage { target: WireId(target.into()) }, 0);
+    sim.enqueue_action(who, Action::Damage { target: WireId(target.into()) }, 0, 0);
     sim.tick();
 }
 

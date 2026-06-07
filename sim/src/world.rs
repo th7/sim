@@ -26,7 +26,7 @@ use crate::verbs::VerbError;
 use crate::worldgen;
 use protocol::wire::ChunkLifecycle;
 use hecs::{Entity, World};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Optional bounding rectangle (sub-units) the movement integrator clamps to.
 /// Instances are bounded to their 3×3 grid; the Overworld is unbounded.
@@ -114,6 +114,12 @@ pub struct RealmWorld {
     /// NPC deaths this step `(chunk, kind)` — drained by the Sim to deplete the
     /// Region's wildlife Disturbance. Only *deaths* deplete; dissolve does not.
     wild_kills: Vec<(ChunkCoord, NpcKind)>,
+    /// The lawful-render judging ring: end-of-tick NPC positions + intents for
+    /// the last LEAD_BOUND ticks, keyed by the tick index. What a session with
+    /// Frontier F lawfully displayed is reconstructible from the entry at F —
+    /// position integrated forward by the recorded intent (the same rule the
+    /// client's Mirror runs). Bounded; nothing static needs history.
+    npc_history: VecDeque<(u64, BTreeMap<WireId, (i64, i64, f64, f64)>)>,
 }
 
 impl RealmWorld {
@@ -133,6 +139,7 @@ impl RealmWorld {
             newly_loaded: Vec::new(),
             chunk_last_owned: BTreeMap::new(),
             wild_kills: Vec::new(),
+            npc_history: VecDeque::new(),
         }
     }
 
@@ -847,7 +854,44 @@ impl RealmWorld {
         }
         self.respawn_due(clock_ms);
         self.deactivate_idle_chunks(clock_ms);
+        self.record_npc_history(clock_ms);
         events
+    }
+
+    /// Record this tick's end-of-tick NPC state into the lawful-render ring —
+    /// the same facts a snapshot of this tick broadcasts, which is exactly
+    /// what a session asserting this tick as its Frontier displayed.
+    fn record_npc_history(&mut self, clock_ms: u64) {
+        let tick = clock_ms / crate::consts::TICK_MS;
+        let mut entry = BTreeMap::new();
+        for (_e, (pos, vel, wid, _)) in
+            self.world.query::<(&Position, &Velocity, &WireId, &Npc)>().iter()
+        {
+            entry.insert(wid.clone(), (pos.x, pos.y, vel.vx, vel.vy));
+        }
+        self.npc_history.push_back((tick, entry));
+        while self.npc_history.len() > crate::consts::LEAD_BOUND_TICKS as usize + 2 {
+            self.npc_history.pop_front();
+        }
+    }
+
+    /// The position of NPC `wid` as a session with Frontier `frontier` lawfully
+    /// displayed it at `resolve_tick`: the ring state at the Frontier (clamped
+    /// into the recorded window) integrated forward by its recorded intent —
+    /// the Mirror's own speculation rule, recomputed from authoritative data.
+    /// `None` when the ring has no entry for the NPC (newly spawned, or no
+    /// history yet) — the caller falls back to the authoritative present.
+    fn lawful_npc_pos(&self, wid: &WireId, frontier: u64, resolve_tick: u64) -> Option<(i64, i64)> {
+        let (tick, map) = self
+            .npc_history
+            .iter()
+            .filter(|(t, _)| *t <= frontier)
+            .next_back()
+            .or_else(|| self.npc_history.front())?;
+        let &(x, y, vx, vy) = map.get(wid)?;
+        let lead_s = resolve_tick.saturating_sub(*tick) as f64
+            * (crate::consts::TICK_MS as f64 / 1000.0);
+        Some((x + (vx * lead_s) as i64, y + (vy * lead_s) as i64))
     }
 
     /// Unload chunks no cluster has owned for at least IDLE_TIMEOUT_MS — the
@@ -1170,9 +1214,14 @@ impl RealmWorld {
     }
 
     /// Damage the Structure or NPC named by `target` by [`DAMAGE_PER_CLICK`].
-    /// Entity-directed: the Verb acts on the Target's identity, judged here
-    /// against authoritative position — naming a deer hits *that* deer, however
-    /// it has moved, never a nearer one. Destroys/kills at ≤0 HP. Players are
+    /// Entity-directed: the Verb acts on the Target's identity — naming a deer
+    /// hits *that* deer, however it has moved, never a nearer one. Range
+    /// eligibility for a moving target is judged in the **press frame**: the
+    /// target's lawful render at the asserting session's `frontier` *or* its
+    /// authoritative present — either in range makes the press eligible (the
+    /// screen's promise is honored; so is a lunge the screen hasn't shown
+    /// yet). The forgiveness is continuous-only: liveness is always judged
+    /// now, and effects land now. Destroys/kills at ≤0 HP. Players are
     /// invulnerable (not targetable). Check order: no_player → no_target →
     /// too_far. Returns the target's remaining HP (`None` if destroyed).
     pub fn damage(
@@ -1180,6 +1229,7 @@ impl RealmWorld {
         username: &str,
         target: &WireId,
         clock_ms: u64,
+        frontier: u64,
     ) -> Result<Option<i64>, VerbError> {
         let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(VerbError::NoPlayer)?;
         let e = self.wire_index.get(target).copied().ok_or(VerbError::NoTarget)?;
@@ -1188,7 +1238,13 @@ impl RealmWorld {
             .get::<&Position>(e)
             .map(|p| (p.x, p.y))
             .map_err(|_| VerbError::NoTarget)?;
-        if !in_range(px, py, x, y) {
+        let now_in_range = in_range(px, py, x, y);
+        let lawful_in_range = || {
+            let resolve_tick = clock_ms / crate::consts::TICK_MS;
+            self.lawful_npc_pos(target, frontier, resolve_tick)
+                .is_some_and(|(lx, ly)| in_range(px, py, lx, ly))
+        };
+        if !now_in_range && !lawful_in_range() {
             return Err(VerbError::TooFar);
         }
         if self.world.get::<&Structure>(e).is_ok() {

@@ -38,6 +38,9 @@
       "payload": {
         "additionalProperties": false,
         "properties": {
+          "frontier": {
+            "type": "integer"
+          },
           "seq": {
             "type": "integer"
           },
@@ -59,6 +62,9 @@
       "payload": {
         "additionalProperties": false,
         "properties": {
+          "frontier": {
+            "type": "integer"
+          },
           "seq": {
             "type": "integer"
           },

@@ -116,7 +116,7 @@ pub fn route(sim: &mut Sim, conn: &mut ConnState, msg: &PhxMessage) -> Outcome {
                 int(&msg.payload, "y"),
                 int(&msg.payload, "seq"),
             ) {
-                sim.enqueue_action(&user, Action::Build { kind, x, y }, seq as u32);
+                sim.enqueue_action(&user, Action::Build { kind, x, y }, seq as u32, 0);
             }
             Outcome::default()
         }
@@ -137,7 +137,11 @@ fn enqueue_entity_verb(
         msg.payload.get("target").and_then(|v| v.as_str()),
         int(&msg.payload, "seq"),
     ) {
-        sim.enqueue_action(&user, make(WireId(target.to_string())), seq as u32);
+        // The session's asserted Frontier — the basis of lawful-render
+        // judging. Absent (an older or minimal client) reads as 0: the claim
+        // clamps to the Lead window's edge, i.e. no extra forgiveness.
+        let frontier = int(&msg.payload, "frontier").unwrap_or(0) as u64;
+        sim.enqueue_action(&user, make(WireId(target.to_string())), seq as u32, frontier);
     }
 }
 

@@ -53,7 +53,7 @@ fn damage(sim: &mut Sim, who: &str, target: &str) -> Result<(), VerbError> {
     let clock = sim.clock_ms();
     sim.realm_world_mut(realm)
         .ok_or(VerbError::NoChunk)?
-        .damage(who, &WireId(target.into()), clock)
+        .damage(who, &WireId(target.into()), clock, clock / sim::consts::TICK_MS)
         .map(|_| ())
 }
 
@@ -286,7 +286,7 @@ mod overload_backpressure {
         sim.connect_at("c", at(16_000, 16_000), Inventory::default());
 
         // A resolved harvest leaves buffered writes — the backlog to drain.
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
         sim.tick();
         assert!(sim.datastore().pending_len() > 0, "a write backlog exists");
 
@@ -294,7 +294,7 @@ mod overload_backpressure {
         for who in group {
             sim.set_intent(who, 1.0, 0.0);
         }
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) }, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) }, 0, 0);
 
         let before: Vec<Position> = group.iter().map(|w| sim.position(w).unwrap()).collect();
         let inv_a_before = sim.inventory_of("a").unwrap();
