@@ -449,6 +449,12 @@ impl Sim {
         }
     }
 
+    /// The last movement seq consumed for a player — what the next ack will
+    /// carry. Exposed for wire-fidelity tests.
+    pub fn last_move_seq(&self, username: &str) -> Option<u32> {
+        self.last_move_seq.get(username).copied()
+    }
+
     /// At broadcast ticks, ack each player's last-consumed movement seq along
     /// with the tick it is current as of — the anchor the Mirror replays from.
     fn emit_move_acks(&mut self) {

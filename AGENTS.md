@@ -21,10 +21,15 @@ Distilled from the former `docs/adr/` — load-bearing; change them only deliber
   SIGTERM and anchors the clock so timers survive restart; recovery is re-home + re-hydrate; the blocking
   Postgres client stays off the Tokio workers. Act through your cluster, observe geography (changed-only
   deltas → a Session's View window).
-- **Native, server-authoritative client.** A `three-d`/egui Rust app renders snapshots with no
-  prediction; logic is a pure tested `ClientModel`. The shared `protocol` crate holds the wire structs
-  both sides serialize — the client carries none of the server's tokio/postgres/hecs. Positions are
-  sub-units (1 unit = 1000); see the wire-contract guideline above.
+- **Native client, server-authoritative, Mirror-predicted.** A `three-d`/egui Rust app; logic is a
+  pure tested `ClientModel` that owns a **Mirror** (`client/src/mirror.rs`, `design/glossary.md`): a
+  speculative simulation of the View window running the server's own integrator from the shared
+  `simcore` crate — own player by exact frame replay (bit-identical, pinned by
+  `client/tests/exactness.rs`), others by last-known Intent, whole-Mirror freeze at
+  `LEAD_BOUND_TICKS`. The `protocol` crate holds the wire structs both sides serialize; `simcore`
+  holds movement integration, collision, and the kind→Footprint catalogue — one implementation, two
+  consumers; the client carries none of the server's tokio/postgres/hecs. Positions are sub-units
+  (1 unit = 1000); see the wire-contract guideline above.
 - **Motivation is pure and RNG-free.** Pick the most-immediate actionable option at each level
   (chain → Goal → Plan → Intent); cross-need weighing happens only at goal arbitration — a static
   per-Need bias × a leaky, capped, sim-clock Pressure integral.
