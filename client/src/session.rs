@@ -8,7 +8,7 @@ use crate::conn::PhxConn;
 use crate::model::{ClientModel, Cmd, Outbound};
 use protocol::geometry::ChunkCoord;
 use protocol::wire::{
-    CarcassWire, ChunkSnapshot, NodeWire, NpcWire, PlayerWire, PortalWire, RealmWire,
+    AckPayload, CarcassWire, ChunkSnapshot, NodeWire, NpcWire, PlayerWire, PortalWire, RealmWire,
     RelocatedPayload, SelfPayload, StatsPayload, StructureWire,
 };
 use serde_json::json;
@@ -293,6 +293,11 @@ impl Session {
             "self" => {
                 if let Ok(p) = serde_json::from_value::<SelfPayload>(m.payload) {
                     self.model.on_self(p);
+                }
+            }
+            "ack" => {
+                if let Ok(p) = serde_json::from_value::<AckPayload>(m.payload) {
+                    self.model.on_ack(p);
                 }
             }
             "relocated" => {

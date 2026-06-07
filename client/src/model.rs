@@ -5,12 +5,13 @@
 //! old `window.__game`. Positions are sub-units (1 world unit = 1000).
 
 use crate::dev::DevState;
+use crate::mirror::Mirror;
 use protocol::consts::{INTERACT_RANGE_SQ, WALL_COST};
 use protocol::geometry::{coord_for, neighborhood, ChunkCoord, SUB_UNITS_PER_UNIT};
 use protocol::wire::{
-    BuildPayload, CarcassWire, ChunkSnapshot, DamagePayload, HarvestPayload, MovePayload, NodeWire,
-    NpcWire, PlayerWire, PortalWire, RealmWire, RelocatedPayload, SelfPayload, StatsPayload,
-    StructureWire,
+    AckPayload, BuildPayload, CarcassWire, ChunkSnapshot, DamagePayload, HarvestPayload,
+    MovePayload, NodeWire, NpcWire, PlayerWire, PortalWire, RealmWire, RelocatedPayload,
+    SelfPayload, StatsPayload, StructureWire,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -59,6 +60,10 @@ pub struct ClientModel {
     /// consumed seq back; the Mirror replays everything after it).
     move_seq: u32,
     last_error: Option<String>,
+    /// The speculative simulation of the View window (see `crate::mirror`).
+    /// Owns the rendered positions; the per-chunk snaps remain the merge of
+    /// authoritative *facts* (entities, depletion, inventory side of view).
+    mirror: Mirror,
 }
 
 impl ClientModel {
@@ -78,6 +83,7 @@ impl ClientModel {
             last_sent_intent: None,
             move_seq: 0,
             last_error: None,
+            mirror: Mirror::new(username),
         };
         let cmds = want.into_iter().map(Cmd::Subscribe).collect();
         (model, cmds)
@@ -88,8 +94,21 @@ impl ClientModel {
     /// Ingest a chunk snapshot; if the player's own position has crossed into a
     /// new chunk, pan the View window (returns the subscribe/unsubscribe diff).
     pub fn on_snapshot(&mut self, coord: ChunkCoord, snap: ChunkSnapshot) -> Vec<Cmd> {
+        self.mirror.on_snapshot(coord, &snap);
         self.snaps.insert(coord, snap);
         self.maybe_shift_window()
+    }
+
+    /// The server consumed our input frames through `seq` as of `tick` — the
+    /// Mirror's replay anchor.
+    pub fn on_ack(&mut self, payload: AckPayload) {
+        self.mirror.on_ack(payload.seq, payload.tick);
+    }
+
+    /// Whether the Mirror is frozen (born, at the Lead bound, or reset) — the
+    /// view shows this as a connection signal, not silently stale state.
+    pub fn mirror_frozen(&self) -> bool {
+        self.mirror.frozen()
     }
 
     pub fn on_self(&mut self, payload: SelfPayload) {
@@ -103,6 +122,8 @@ impl ClientModel {
         self.realm = payload.realm;
         self.window_center = ChunkCoord::new(payload.coord[0], payload.coord[1]);
         self.snaps.clear();
+        // Born frozen again: the new realm speculates only from its own authority.
+        self.mirror.reset();
         let want = window(self.window_center);
         self.subscribed = want.iter().copied().collect();
         cmds.extend(want.into_iter().map(Cmd::Subscribe));
@@ -138,22 +159,28 @@ impl ClientModel {
         Vec::new()
     }
 
-    /// Emit this tick's movement input frame, if the session owes one: a frame
-    /// per tick while the intent is nonzero (renewing the perishable Intent),
-    /// plus one final zero-frame on release. Silence while idle.
+    /// One client tick: emit this tick's movement input frame if the session
+    /// owes one (a frame per tick while the intent is nonzero, one final
+    /// zero-frame on release, silence while idle), feed it to the Mirror, and
+    /// advance the Mirror. While the Mirror is frozen, inputs stall — nothing
+    /// is sent and nothing speculates.
     pub fn input_frame(&mut self) -> Vec<Cmd> {
+        if self.mirror.frozen() {
+            self.mirror.tick(); // inert; keeps the call-shape uniform
+            return Vec::new();
+        }
         let moving = self.last_intent != (0.0, 0.0);
         let releasing = !moving && self.last_sent_intent.is_some_and(|s| s != (0.0, 0.0));
         if !moving && !releasing {
+            self.mirror.tick(); // idle ticks still advance everyone else
             return Vec::new();
         }
         self.last_sent_intent = Some(self.last_intent);
         self.move_seq += 1;
-        vec![Cmd::Send(Outbound::Move(MovePayload {
-            seq: self.move_seq,
-            dx: self.last_intent.0,
-            dy: self.last_intent.1,
-        }))]
+        let (dx, dy) = self.last_intent;
+        self.mirror.push_input(self.move_seq, dx, dy);
+        self.mirror.tick();
+        vec![Cmd::Send(Outbound::Move(MovePayload { seq: self.move_seq, dx, dy }))]
     }
 
     /// A click at world-unit `(wx, wy)`: harvest a live tree there, else damage a
@@ -243,12 +270,29 @@ impl ClientModel {
         self.window_center
     }
 
-    /// All players currently visible, merged across subscribed chunk snapshots.
+    /// All players currently visible: entity facts merged across subscribed
+    /// chunk snapshots, positions speculated by the Mirror. The own player is
+    /// present whenever the Mirror has it — independent of which chunk's
+    /// snapshot last listed us, so a boundary crossing can never blink us out.
     pub fn players(&self) -> BTreeMap<String, PlayerWire> {
         let mut out = BTreeMap::new();
         for snap in self.snaps.values() {
             for (name, p) in &snap.players {
                 out.insert(name.clone(), *p);
+            }
+        }
+        for (name, p) in out.iter_mut() {
+            if let Some((x, y)) = self.mirror.position_of(name) {
+                p.x = x;
+                p.y = y;
+            }
+        }
+        if !out.contains_key(&self.username) {
+            if let Some((x, y)) = self.mirror.position_of(&self.username) {
+                out.insert(
+                    self.username.clone(),
+                    PlayerWire { x, y, ..PlayerWire::default() },
+                );
             }
         }
         out
@@ -267,9 +311,17 @@ impl ClientModel {
     pub fn portals(&self) -> BTreeMap<String, PortalWire> {
         merge(&self.snaps, |s| &s.portals)
     }
-    /// All NPCs (wolves/deer) currently visible, merged across snapshots.
+    /// All NPCs (wolves/deer) currently visible: facts merged across
+    /// snapshots, positions speculated by the Mirror.
     pub fn npcs(&self) -> BTreeMap<String, NpcWire> {
-        merge(&self.snaps, |s| &s.npcs)
+        let mut out: BTreeMap<String, NpcWire> = merge(&self.snaps, |s| &s.npcs);
+        for (id, n) in out.iter_mut() {
+            if let Some((x, y)) = self.mirror.npc_position_of(id) {
+                n.x = x;
+                n.y = y;
+            }
+        }
+        out
     }
     /// All Carcasses currently visible, merged across snapshots.
     pub fn carcasses(&self) -> BTreeMap<String, CarcassWire> {
@@ -407,11 +459,39 @@ mod tests {
         assert_eq!(m.inventory().get("wood"), Some(&3));
     }
 
+    /// The model's own player is the Mirror's speculation: an input frame
+    /// advances the rendered position immediately, ahead of any server echo.
+    #[test]
+    fn own_position_is_the_mirrors_speculation() {
+        let (mut m, _) = ClientModel::new("alice", cc(0, 0));
+        m.on_snapshot(cc(0, 0), snap_with_player("alice", 8_000, 8_000));
+        m.set_movement(false, false, true, false);
+        m.input_frame(); // one client tick
+        let p = m.player_pos("alice").unwrap();
+        assert_eq!((p.x, p.y), (8_200, 8_000), "one tick east, locally, immediately");
+    }
+
+    /// Born frozen: until the first authoritative snapshot, inputs stall — no
+    /// frames are emitted. Relocation returns to the same state.
+    #[test]
+    fn inputs_stall_while_the_mirror_is_frozen() {
+        let (mut m, _) = ClientModel::new("alice", cc(0, 0));
+        m.set_movement(false, false, true, false);
+        assert!(m.input_frame().is_empty(), "born frozen — inputs stall");
+        m.on_snapshot(cc(0, 0), snap_with_player("alice", 8_000, 8_000));
+        assert!(!m.input_frame().is_empty(), "authority thaws the Mirror — frames flow");
+
+        // Relocation: born frozen again, inputs stall until the new realm speaks.
+        m.on_relocated(RelocatedPayload { realm: RealmWire::Instance { id: 7 }, coord: [1, 1] });
+        assert!(m.input_frame().is_empty(), "reset — inputs stall in the new realm");
+    }
+
     /// Intent is perishable server-side: a held key *renews* it with one frame
     /// per tick; release owes exactly one zero-frame; idle is silence.
     #[test]
     fn movement_frames_renew_per_tick_and_release_once() {
         let (mut m, _) = ClientModel::new("alice", cc(0, 0));
+        m.on_snapshot(cc(0, 0), snap_with_player("alice", 8_000, 8_000));
         // Idle → silence.
         assert!(m.input_frame().is_empty());
         // East held → one frame per tick, seqs increasing.
