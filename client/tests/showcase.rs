@@ -51,6 +51,21 @@ fn overworld_scenario_displays_every_ui_element_state() {
     assert!(!rs.inventory.is_empty(), "inventory items");
     assert!(rs.last_error.is_some(), "error line");
 
+    // Targeting: a Target marker on a visible entity, and a Ready Verb button.
+    let target = rs.target.as_deref().expect("a Target is displayed");
+    assert!(
+        rs.nodes.contains_key(target)
+            || rs.structures.contains_key(target)
+            || rs.npcs.contains_key(target)
+            || rs.carcasses.contains_key(target),
+        "the Target marker sits on a visible entity"
+    );
+    assert!(
+        matches!(rs.verb_button, client::model::VerbButton::Ready("harvest")),
+        "the Verb button is Ready over an in-range Gatherable, got {:?}",
+        rs.verb_button
+    );
+
     // Dev overlay: stats present and covering every chunk lifecycle, with a
     // countdown on the idle-armed chunk.
     let stats = rs.stats.as_ref().expect("dev stats present");
@@ -98,6 +113,26 @@ fn instance_scenario_shows_the_instance_realm_with_an_empty_inventory() {
     assert!(rs.last_error.is_none(), "no error line");
     assert!(rs.players.contains_key(&rs.own), "own player anchors the camera");
     assert!(!rs.frozen, "a live scene is not frozen");
+    // No Target here: the Verb button's Inert state is on display.
+    assert!(rs.target.is_none(), "no Target in the instance scenario");
+    assert!(
+        matches!(rs.verb_button, client::model::VerbButton::Inert),
+        "the Inert Verb button is displayed"
+    );
+}
+
+/// The Verb button's third state: a Target whose lawful render is out of
+/// interact range shows Dimmed (still pressable — the hint, not a gate).
+#[test]
+fn wildlife_scenario_displays_a_dimmed_verb_button_on_a_far_target() {
+    let rs = state_of("wildlife");
+    let target = rs.target.as_deref().expect("a Target is displayed");
+    assert!(rs.npcs.contains_key(target), "the wildlife Target is an NPC");
+    assert!(
+        matches!(rs.verb_button, client::model::VerbButton::Dimmed("damage")),
+        "the Dimmed Verb button is displayed, got {:?}",
+        rs.verb_button
+    );
 }
 
 /// The frozen-Mirror state: authority has gone quiet, the Mirror has hit its

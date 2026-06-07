@@ -32,6 +32,10 @@ pub struct RenderState {
     pub inventory: BTreeMap<String, u32>,
     pub stats: Option<StatsPayload>,
     pub last_error: Option<String>,
+    /// The current Target's WireId — the entity wearing the Target marker.
+    pub target: Option<String>,
+    /// The Verb button's display state (Inert / Ready / Dimmed).
+    pub verb_button: crate::model::VerbButton,
     /// The Mirror is frozen (born, at its Lead bound, or reset): the view
     /// shows a connection signal instead of silently stale state.
     pub frozen: bool,
@@ -55,6 +59,8 @@ impl RenderState {
             inventory: model.inventory().clone(),
             stats: model.stats().cloned(),
             last_error: model.last_error().map(str::to_string),
+            target: model.target().map(str::to_string),
+            verb_button: model.verb_button(),
             frozen: model.mirror_frozen(),
         }
     }
@@ -65,6 +71,10 @@ impl RenderState {
 pub enum Input {
     Movement { north: bool, south: bool, east: bool, west: bool },
     Click { wx: f64, wy: f64 },
+    /// The Verb button (`E` or the HUD button): act on the current Target.
+    PressVerb,
+    /// Escape: clear the Target.
+    Escape,
     ToggleDev,
 }
 
@@ -158,6 +168,13 @@ impl Session {
                     Some(Input::Click { wx, wy }) => {
                         let cmds = self.model.click(wx, wy);
                         self.execute(cmds).await.ok();
+                    }
+                    Some(Input::PressVerb) => {
+                        let cmds = self.model.press_verb();
+                        self.execute(cmds).await.ok();
+                    }
+                    Some(Input::Escape) => {
+                        self.model.escape();
                     }
                     Some(Input::ToggleDev) => {
                         let on = !self.model.dev_enabled();

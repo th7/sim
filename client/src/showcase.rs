@@ -57,6 +57,11 @@ fn overworld(t_ms: f64) -> RenderState {
         "tree:depleted".into(),
         NodeWire { kind: tree.into(), x: 4_000, y: 2_000, depleted: true },
     );
+    // In reach of the own player at (8000, 6000): the Target-marker bearer.
+    snap.resource_nodes.insert(
+        "tree:targeted".into(),
+        NodeWire { kind: tree.into(), x: 8_800, y: 6_000, depleted: false },
+    );
 
     // Row 2 — a wall and a carcass.
     snap.structures.insert(
@@ -115,6 +120,10 @@ fn overworld(t_ms: f64) -> RenderState {
     );
 
     model.on_snapshot(ChunkCoord::new(0, 0), snap);
+
+    // Targeting: the in-range tree wears the Target marker and the Verb
+    // button reads Ready("harvest").
+    model.click(8.8, 6.0);
 
     // HUD: a populated inventory and a sample rejection line.
     model.on_self(SelfPayload {
@@ -190,6 +199,9 @@ fn wildlife(_t_ms: f64) -> RenderState {
     // The showcase's own player anchors the camera at the grid centre.
     snap.players.insert("showcase".into(), PlayerWire { x: 6_500, y: 7_000, ..PlayerWire::default() });
     model.on_snapshot(ChunkCoord::new(0, 0), snap);
+    // Target a far grid animal: the Verb button's Dimmed state on display
+    // (out of lawful-rendered range — a press would still send).
+    model.click(2.0, 1.5);
     RenderState::from_model(&model)
 }
 

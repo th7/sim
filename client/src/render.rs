@@ -117,6 +117,8 @@ impl View {
 
     /// Build and draw one frame from `rs`. `extra_ui` lets the caller add its
     /// own egui windows (the showcase legend); the game passes `|_| {}`.
+    /// Returns whether the HUD Verb button was clicked this frame (the game
+    /// turns that into the same input the `E` key sends).
     pub fn frame(
         &mut self,
         context: &Context,
@@ -124,7 +126,7 @@ impl View {
         rs: &RenderState,
         dev_view: bool,
         mut extra_ui: impl FnMut(&three_d::egui::Context),
-    ) {
+    ) -> bool {
         let now = frame_input.accumulated_time;
 
         // --- player interpolation + removal grace ---
@@ -260,6 +262,13 @@ impl View {
             objects.push(box_at(context, w(c.x), 0.12, w(c.y), 0.6, 0.24, 0.5, rgb(0x8e3b2e)));
         }
 
+        // The Target marker: a flat amber disc under the targeted entity, at
+        // its rendered position — the *only* Target display (deliberately no
+        // HUD target frame; Demeanor/Health stay readable from the entity).
+        if let Some((tx, ty)) = rs.target.as_deref().and_then(|wid| target_pos(rs, wid)) {
+            objects.push(cylinder_at(context, w(tx), 0.0, w(ty), 0.5, 0.03, rgb(0xffd54f)));
+        }
+
         // Dev chunk-lifecycle overlay (transparent, drawn after opaque geometry).
         if let Some(stats) = &rs.stats {
             dev_overlay(context, stats, &mut objects);
@@ -273,6 +282,7 @@ impl View {
         self.camera.set_view(self.cam_target + cam_offset(), self.cam_target, vec3(0.0, 1.0, 0.0));
 
         // HUD: inventory always; dev panel (user/realm/pos/chunk/view/active/total) with dev mode.
+        let mut verb_pressed = false;
         self.gui.update(
             &mut frame_input.events,
             frame_input.accumulated_time,
@@ -300,6 +310,30 @@ impl View {
                         .anchor(Align2::RIGHT_TOP, [-8.0, 8.0])
                         .show(ctx, |ui| dev_panel(ui, rs));
                 }
+                // The Verb button: the one issuer of entity-directed Verbs
+                // (with the `E` key). Its state is the model's truthful hint:
+                // inert without a Target, dimmed when the lawful render says
+                // out of range — dimmed still sends; the Island judges.
+                EWindow::new("verb").anchor(Align2::CENTER_BOTTOM, [0.0, -8.0]).show(ctx, |ui| {
+                    use crate::model::VerbButton;
+                    let clicked = match rs.verb_button {
+                        VerbButton::Inert => {
+                            ui.add_enabled(false, three_d::egui::Button::new("—"));
+                            false
+                        }
+                        VerbButton::Ready(verb) => {
+                            ui.button(format!("{verb} (E)")).clicked()
+                        }
+                        VerbButton::Dimmed(verb) => ui
+                            .button(
+                                three_d::egui::RichText::new(format!("{verb} (E)")).weak(),
+                            )
+                            .clicked(),
+                    };
+                    if clicked {
+                        verb_pressed = true;
+                    }
+                });
                 // The Mirror is frozen (connecting, relocating, or at its Lead
                 // bound): say so — a stall must read as "connection", never as
                 // a broken game or silently stale state.
@@ -326,7 +360,22 @@ impl View {
             .render(&self.camera, objects.iter(), &[&self.sun, &self.ambient])
             .write(|| self.gui.render())
             .unwrap();
+        verb_pressed
     }
+}
+
+/// The Target's rendered position, looked up across the targetable maps.
+fn target_pos(rs: &RenderState, wid: &str) -> Option<(i64, i64)> {
+    if let Some(n) = rs.nodes.get(wid) {
+        return Some((n.x, n.y));
+    }
+    if let Some(s) = rs.structures.get(wid) {
+        return Some((s.x, s.y));
+    }
+    if let Some(n) = rs.npcs.get(wid) {
+        return Some((n.x, n.y));
+    }
+    rs.carcasses.get(wid).map(|c| (c.x, c.y))
 }
 
 /// Fixed isometric offset; the camera re-frames the local player every frame.
