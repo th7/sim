@@ -247,3 +247,66 @@ fn snapshot_carries_the_npcs_demeanor() {
     assert_eq!(wire_demeanor(&sim, NpcKind::Wolf), Demeanor::Aggressive, "hunting wolf");
     assert_eq!(wire_demeanor(&sim, NpcKind::Deer), Demeanor::Fleeing, "hunted deer");
 }
+
+/// The wire velocity magnitude of the first NPC of `kind`.
+fn wire_speed(sim: &Sim, kind: NpcKind) -> f64 {
+    sim.overworld()
+        .snapshot_states()
+        .into_values()
+        .find_map(|e| match e {
+            sim::wire::EntityWire::Npc { kind: k, vx, vy, .. } if k == kind => {
+                Some((vx * vx + vy * vy).sqrt())
+            }
+            _ => None,
+        })
+        .expect("npc on the wire")
+}
+
+/// A calm wolf ambles; an aggressive one runs. The lope/charge contrast is
+/// observable on the wire, so the client's Mirror integrates it too.
+#[test]
+fn calm_wolf_wanders_slower_than_it_hunts() {
+    // A lone, sated wolf: nothing to hunt, nothing to fear → Calm wander.
+    let mut calm = Sim::new();
+    calm.spawn_npc(NpcKind::Wolf, pos(8_000, 8_000), Drives::default());
+    calm.tick();
+    let amble = wire_speed(&calm, NpcKind::Wolf);
+    assert!(amble > 0.0, "a wandering wolf moves");
+
+    // A hungry wolf with prey in sight → Aggressive chase.
+    let mut hunt = Sim::new();
+    hunt.spawn_npc(NpcKind::Wolf, pos(8_000, 8_000), Drives { hunger: 0.8, ..Default::default() });
+    hunt.spawn_npc(NpcKind::Deer, pos(8_800, 8_000), Drives::default());
+    hunt.tick();
+    let charge = wire_speed(&hunt, NpcKind::Wolf);
+
+    assert!(
+        amble * 1.5 < charge,
+        "a calm wolf should amble well below its hunting speed ({amble} vs {charge})"
+    );
+}
+
+/// A grazing bout sates the deer; a sated deer wanders; metabolism brings it
+/// back to the grass. The rhythm is observable as the Demeanor alternating
+/// Feeding → Calm → Feeding, and needs no state beyond hunger itself.
+#[test]
+fn deer_alternates_grazing_bouts_with_wandering() {
+    use protocol::types::Demeanor;
+    let mut sim = Sim::new();
+    sim.spawn_npc(NpcKind::Deer, pos(8_000, 8_000), Drives { hunger: 0.3, ..Default::default() });
+
+    // ~20 s of sim time, sampling the wire Demeanor each tick.
+    let mut seq = Vec::new();
+    for _ in 0..400 {
+        sim.tick();
+        seq.push(wire_demeanor(&sim, NpcKind::Deer));
+    }
+
+    assert!(seq.contains(&Demeanor::Feeding), "the deer grazes");
+    assert!(seq.contains(&Demeanor::Calm), "the deer wanders between meals");
+    let bouts = seq
+        .windows(2)
+        .filter(|w| w[0] != Demeanor::Feeding && w[1] == Demeanor::Feeding)
+        .count();
+    assert!(bouts >= 2, "grazing should recur after wandering (got {bouts} bout starts)");
+}

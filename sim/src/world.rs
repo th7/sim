@@ -42,6 +42,10 @@ const NPC_ACT_COOLDOWN_MS: u64 = 500;
 const CARCASS_PERISH_MS: u64 = 60_000;
 /// Hunger removed per unit of meat eaten.
 const EAT_FEED: f64 = 0.4;
+/// Hunger removed per graze action. Smaller than a meat meal: grazing sates in
+/// nibbles, so a deer alternates short grazing bouts with wandering as its
+/// hunger falls below the idle threshold and metabolism lifts it back.
+const GRAZE_FEED: f64 = 0.1;
 /// How long a fleeing deer stays alarmed (panic contagion window).
 const ALARM_MS: u64 = 1_200;
 
@@ -452,7 +456,14 @@ impl RealmWorld {
 
             let mut next = drives;
             let decision = decide(kind, &perc, &mut next, &params, dt_s);
-            let (vx, vy) = velocity_for(decision, self_p, params.speed, self_id, clock_ms);
+            // An unhurried animal doesn't run: Calm Decisions move at the
+            // kind's amble, urgent ones at full speed.
+            let speed = if decision.demeanor() == protocol::types::Demeanor::Calm {
+                params.calm_speed
+            } else {
+                params.speed
+            };
+            let (vx, vy) = velocity_for(decision, self_p, speed, self_id, clock_ms);
 
             if let Ok(mut d) = self.world.get::<&mut Drives>(e) {
                 *d = next;
@@ -517,6 +528,15 @@ impl RealmWorld {
                         eats.push((e, ce));
                         cooldowns.push((e, clock_ms + NPC_ACT_COOLDOWN_MS));
                     }
+                }
+                Decision::Graze => {
+                    // Grazing actually sates: a nibble per action, on the same
+                    // cooldown cadence as eating. (Grass is the computed
+                    // ecosystem level — grazing doesn't deplete it.)
+                    if let Ok(mut d) = self.world.get::<&mut Drives>(e) {
+                        d.feed(GRAZE_FEED);
+                    }
+                    cooldowns.push((e, clock_ms + NPC_ACT_COOLDOWN_MS));
                 }
                 _ => {}
             }

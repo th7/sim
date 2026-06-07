@@ -133,8 +133,12 @@ pub struct Params {
     pub hunger_tau_s: f64,
     pub safety_tau_s: f64,
     pub pressure_cap: f64,
-    /// Movement speed in sub-units/sec when pursuing a Decision.
+    /// Movement speed in sub-units/sec when pursuing an urgent Decision
+    /// (Aggressive/Fleeing — and Feeding, though feeding stands still).
     pub speed: f64,
+    /// Movement speed when the committed Decision reads Calm (wander, amble
+    /// toward food) — an unhurried animal doesn't run.
+    pub calm_speed: f64,
     /// Static inter-chain priority bias (safety > hunger).
     pub hunger_bias: f64,
     pub safety_bias: f64,
@@ -163,6 +167,7 @@ impl Params {
                 safety_tau_s: 10.0,
                 pressure_cap: 1.0,
                 speed: 4_200.0,
+                calm_speed: 2_100.0, // a wolf lopes at half its charge
                 hunger_bias: 1.0,
                 safety_bias: 1.2,
                 perception_range_sq: 1_000 * 1_000,
@@ -178,6 +183,7 @@ impl Params {
                 safety_tau_s: 8.0,
                 pressure_cap: 1.0,
                 speed: 3_800.0,
+                calm_speed: 3_800.0, // deer stay quick on their feet even calm
                 hunger_bias: 1.0,
                 safety_bias: 1.5,
                 perception_range_sq: 1_000 * 1_000,
