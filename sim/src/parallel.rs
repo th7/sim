@@ -24,7 +24,7 @@
 //! result is independent of worker count and thread scheduling (applied in a
 //! deterministic order), which the tests assert against the serial tick.
 
-use crate::collision::{clamp_step, Obstacle};
+use crate::collision::Obstacle;
 use crate::ids::ClusterId;
 use crate::world::Bounds;
 use hecs::Entity;
@@ -72,9 +72,7 @@ pub fn run_cluster(job: &ClusterJob, dt: f64) -> ClusterResult {
     let start = Instant::now();
     let mut positions = Vec::with_capacity(job.movers.len());
     for &(e, x, y, vx, vy) in &job.movers {
-        let step_x = (vx * dt).round() as i64;
-        let step_y = (vy * dt).round() as i64;
-        let (nx, ny) = clamp_step(x, y, step_x, step_y, &job.obstacles);
+        let (nx, ny) = simcore::motion::step_actor(x, y, vx, vy, dt, &job.obstacles);
         let (nx, ny) = clamp_bounds(nx, ny, job.bounds);
         positions.push((e, nx, ny));
     }

@@ -15,10 +15,14 @@
 // `crate::consts` paths keep working unchanged.
 pub use protocol::{consts, geometry, ids, phx};
 
+// The movement integrator, collision, and footprint catalogue live in the
+// shared `simcore` crate (one implementation for the server and the client's
+// Mirror); re-exported so `crate::collision` keeps working.
+pub use simcore::collision;
+
 pub mod catalogue;
 pub mod chunkgraph;
 pub mod contract;
-pub mod collision;
 pub mod components;
 pub mod datastore;
 pub mod delta;

@@ -33,14 +33,10 @@ pub struct Velocity {
     pub vy: f64,
 }
 
-/// The shape an obstacle occupies for one-way movement collision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Footprint {
-    /// Circle of `radius` centered at the entity's Position.
-    Circle { radius: i64 },
-    /// Axis-aligned rectangle of full width × height centered at Position.
-    Aabb { w: i64, h: i64 },
-}
+/// The shape an obstacle occupies for one-way movement collision. Lives in
+/// `simcore` (the Mirror reconstructs obstacles client-side); re-exported so
+/// the server's `crate::components::Footprint` path keeps working.
+pub use simcore::Footprint;
 
 /// A gatherable Resource node (harvestable now). Mutually exclusive with
 /// [`Depleted`].

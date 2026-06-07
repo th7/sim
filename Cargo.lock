@@ -1822,8 +1822,16 @@ dependencies = [
  "protocol",
  "serde",
  "serde_json",
+ "simcore",
  "tokio",
  "tokio-tungstenite",
+]
+
+[[package]]
+name = "simcore"
+version = "0.1.0"
+dependencies = [
+ "protocol",
 ]
 
 [[package]]

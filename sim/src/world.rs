@@ -12,9 +12,10 @@ use crate::catalogue::{
     carcass_meat as npc_carcass_meat, npc_max_hp, resource_footprint, resource_yield,
     structure_footprint,
 };
-use crate::collision::{clamp_step, Obstacle};
+use crate::collision::Obstacle;
+use simcore::motion::{intent_velocity, step_actor};
 use crate::components::*;
-use crate::consts::{DAMAGE_PER_CLICK, DEFAULT_SPEED, IDLE_TIMEOUT_MS, RESPAWN_MS};
+use crate::consts::{DAMAGE_PER_CLICK, IDLE_TIMEOUT_MS, RESPAWN_MS};
 use crate::datastore::{DepletionRecord, PersistEvent, PlayerRecord, StructureRecord};
 use crate::ecosystem;
 use crate::geometry::{coord_for, ChunkCoord};
@@ -631,12 +632,14 @@ impl RealmWorld {
     }
 
     /// Set a player's velocity from a normalized intent `(dx, dy)` (each in
-    /// [-1, 1]); scaled by [`DEFAULT_SPEED`]. No-op if the player is absent.
+    /// [-1, 1]); scaled by the shared [`simcore::motion::intent_velocity`].
+    /// No-op if the player is absent.
     pub fn set_intent(&mut self, username: &str, dx: f64, dy: f64) {
         if let Some(&e) = self.username_index.get(username) {
             if let Ok(mut v) = self.world.get::<&mut Velocity>(e) {
-                v.vx = dx * DEFAULT_SPEED;
-                v.vy = dy * DEFAULT_SPEED;
+                let (vx, vy) = intent_velocity(dx, dy);
+                v.vx = vx;
+                v.vy = vy;
             }
         }
     }
@@ -701,9 +704,7 @@ impl RealmWorld {
                         _ => continue,
                     }
                 };
-                let step_x = (vel.vx * dt).round() as i64;
-                let step_y = (vel.vy * dt).round() as i64;
-                let (nx, ny) = clamp_step(pos.x, pos.y, step_x, step_y, &obstacles);
+                let (nx, ny) = step_actor(pos.x, pos.y, vel.vx, vel.vy, dt, &obstacles);
                 let (nx, ny) = self.clamp_bounds(nx, ny);
                 if let Ok(mut p) = self.world.get::<&mut Position>(e) {
                     p.x = nx;

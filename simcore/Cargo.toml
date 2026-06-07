@@ -1,0 +1,8 @@
+[package]
+name = "simcore"
+version = "0.1.0"
+edition = "2021"
+description = "The shared simulation core: movement integration, collision, and the kind→Footprint catalogue — one implementation consumed by both the server (sim) and the client's Mirror"
+
+[dependencies]
+protocol = { path = "../protocol" }

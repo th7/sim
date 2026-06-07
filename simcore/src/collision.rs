@@ -1,19 +1,17 @@
 //! Movement collision — axis-decomposed clamping of a body circle's step against
 //! obstacle **Footprint**s, plus the build-time `aabb_blocked` predicate.
 //!
-//! A direct port of the Elixir `GameCore.Collision`, kept storage-agnostic
-//! (operates on obstacle slices, not the ECS) so it is pure and unit-testable.
-//! Per-axis stop gives free slide along axis-aligned walls; a body currently
-//! overlapping any footprint is grandfathered (moves freely until clear) so
-//! spawn-on-obstacle never sticks.
+//! Storage-agnostic (operates on obstacle slices, not the ECS) so it is pure
+//! and unit-testable — and so the client's Mirror runs it over obstacles
+//! reconstructed from snapshots. Per-axis stop gives free slide along
+//! axis-aligned walls; a body currently overlapping any footprint is
+//! grandfathered (moves freely until clear) so spawn-on-obstacle never sticks.
 //!
-//! Unlike the Elixir per-chunk world, a cluster owns its actors' full 3×3
-//! footprint, so collision sees obstacles in neighbouring chunks too — this is
-//! the intended resolution of the old chunk-boundary "clip-and-stop" artifact.
-//! For obstacles away from boundaries the result is identical.
+//! A cluster owns its actors' full 3×3 footprint, so collision sees obstacles
+//! in neighbouring chunks too.
 
-use crate::components::Footprint;
-use crate::consts::PLAYER_BODY_RADIUS;
+use crate::Footprint;
+use protocol::consts::PLAYER_BODY_RADIUS;
 
 /// An obstacle: a footprint anchored at a sub-unit position.
 #[derive(Debug, Clone, Copy)]

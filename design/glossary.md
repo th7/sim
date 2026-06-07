@@ -86,6 +86,10 @@ _Avoid:_ Navigator (implies steering movement), coordinator/manager (too generic
 start, read to integrate movement and resolve interactions. A **Player**'s Intent comes from
 their session; an **NPC**'s comes from its **Motivation**. This is the single seam both kinds
 of actor share.
+_Design promise:_ Intent is *perishable* — it must be continuously renewed by its source. A
+**Motivation** renews natively every tick; a session renews for as long as it is live, and
+when its renewals stop, the Intent expires (after a short grace) and the Player stands still.
+A stalled or vanished session never leaves a Player acting on stale Intent.
 _Avoid:_ Input, command, keypress.
 
 ---
@@ -273,6 +277,26 @@ _Design promise:_ completeness — a new kind of drawable thing cannot be added 
 Showcase displaying it. The mechanism that keeps the promise is engineer-owned.
 _Avoid:_ Gallery (implies a widget library), demo (implies audience-facing).
 
+**Mirror** — The client's non-authoritative, speculative simulation of its Player's **View
+window**: the **Island**'s own movement integration, fed by **Intents** — its own Player's
+locally and immediately, every other actor's as last received from the server — and
+continuously overridden by authoritative state as it arrives. The Mirror decides nothing;
+every divergence is temporary and resolves in the authority's favor.
+_Design promise:_ the Mirror speculates **continuous state only** (movement) and never
+speculates discrete events — spawns, despawns, yields, depletion, placement reach it solely
+as authoritative fact. And its speculation is bounded: the Mirror's **Lead** never exceeds a
+fixed bound; at the bound it freezes whole rather than speculating further (the client-side
+face of **Backpressure**). The Mirror is *born frozen* — at login, relocation, and Instance
+entry/exit alike, it speculates only from an authoritative baseline.
+_Avoid:_ Island (an Island is the authority; the Mirror has none), shadow/replica (implies
+a faithful copy; the Mirror knowingly speculates), client prediction (names the technique,
+not the thing).
+
+**Lead** — How far ahead of the last authoritative state the **Mirror** has speculated,
+measured in ticks. Deliberate, not error: a healthy connection always carries some Lead.
+Bounded by construction — at the bound the Mirror freezes until authority catches up.
+_Avoid:_ Drift (implies error), lag (the thing Lead compensates for), prediction window.
+
 ---
 
 ## Relationships
@@ -316,6 +340,9 @@ _Avoid:_ Gallery (implies a widget library), demo (implies audience-facing).
   (a depleted, high-Disturbance Region spawns hungry, aggressive animals; a healthy one, placid).
 - A killed animal leaves a **Carcass**: **Players** harvest it for meat/hide, **NPCs** eat from
   it, rival predators contest it.
+- The client runs one **Mirror** of its Player's **View window**. The Mirror speculates ahead
+  of authoritative state by at most its **Lead** bound, decides no interaction, and yields to
+  the **Island**'s authority on every divergence.
 
 ---
 
