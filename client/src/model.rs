@@ -295,6 +295,7 @@ impl ClientModel {
             kind: "wall".to_string(),
             x: cell_x,
             y: cell_y,
+            seq: self.move_seq,
         }))]
     }
 
@@ -922,7 +923,7 @@ mod tests {
         let cmds = m.click(3.2, 3.2);
         assert_eq!(
             cmds,
-            vec![Cmd::Send(Outbound::Build(BuildPayload { kind: "wall".into(), x: 3_500, y: 3_500 }))]
+            vec![Cmd::Send(Outbound::Build(BuildPayload { kind: "wall".into(), x: 3_500, y: 3_500, seq: 0 }))]
         );
     }
 

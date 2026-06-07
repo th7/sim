@@ -94,8 +94,11 @@ pub struct Sim {
     /// Per-player Instance return info: `(entry chunk, entry portal pos)`.
     return_to: BTreeMap<String, (ChunkCoord, (i64, i64))>,
     pending: Vec<OutboundEvent>,
-    /// Per-actor queued action intents, resolved in the tick (never on receipt).
-    action_queues: BTreeMap<String, VecDeque<Action>>,
+    /// Per-actor queued action intents, resolved in the tick (never on
+    /// receipt), each pinned to the movement seq at press time: an action
+    /// waits until its seq's movement has integrated, so eligibility is judged
+    /// at the exact position the pressing client displayed.
+    action_queues: BTreeMap<String, VecDeque<(Action, u32)>>,
     /// Per-player queued movement input frames, consumed one per tick.
     move_queues: BTreeMap<String, VecDeque<MoveFrame>>,
     /// Per-player ticks since the last consumed frame. Intent is perishable:
@@ -533,8 +536,11 @@ impl Sim {
     pub fn tick(&mut self) {
         self.clock_ms += TICK_MS;
         self.tick_count += 1;
-        self.consume_move_frames();
+        // Actions first — judged at positions as of the end of the previous
+        // tick, i.e. exactly the press frame for a seq-pinned verb — then this
+        // tick's movement frame is consumed and integrated.
         self.resolve_action_intents();
+        self.consume_move_frames();
         self.overworld.tick(TICK_MS, self.clock_ms);
         for inst in self.instances.values_mut() {
             inst.tick(TICK_MS, self.clock_ms);
@@ -556,8 +562,8 @@ impl Sim {
         let dt = TICK_MS as f64 / 1000.0;
         let clock = self.clock_ms;
 
-        self.consume_move_frames();
         self.resolve_action_intents();
+        self.consume_move_frames();
 
         let tick_realm = |rw: &mut RealmWorld| {
             rw.drive_npcs(TICK_MS, clock);
@@ -642,9 +648,10 @@ impl Sim {
     // in the tick by [`Sim::resolve_action_intents`]. The verb *logic* lives on
     // the realm (`RealmWorld::{harvest,build,damage}`).
 
-    /// Enqueue a player action intent (fire-and-forget). Resolved in the tick,
-    /// never on receipt.
-    pub fn enqueue_action(&mut self, username: &str, action: Action) {
+    /// Enqueue a player action intent (fire-and-forget), pinned to the
+    /// movement `seq` at press time. Resolved in the tick — at the tick after
+    /// `seq`'s movement has integrated — never on receipt.
+    pub fn enqueue_action(&mut self, username: &str, action: Action, seq: u32) {
         let queue = self.action_queues.entry(username.to_string()).or_default();
         if queue.len() >= ACTION_QUEUE_CAP {
             // Reject the newest; the committed queue is honoured first.
@@ -657,19 +664,37 @@ impl Sim {
             });
             return;
         }
-        queue.push_back(action);
+        queue.push_back((action, seq));
     }
 
-    /// Resolve every actor's queued action intents, in id (username) order,
-    /// FIFO within an actor — run at the top of the tick, before movement, so a
-    /// freshly built obstacle is solid for the same tick's integrator and range
-    /// checks use start-of-tick positions. Reuses the realm verb logic.
+    /// Resolve queued action intents, in id (username) order, FIFO within an
+    /// actor — run at the very top of the tick (before this tick's movement
+    /// frame is even consumed), so a freshly built obstacle is solid for the
+    /// same tick's integrator and a pinned action is judged at the position
+    /// its press frame displayed: an action pinned to seq S resolves only
+    /// once S's movement has integrated (a prior tick consumed S). An action
+    /// pinned past everything the session ever sent (the move queue is empty
+    /// and S is still unconsumed — a fabricated seq, or a test hook's 0 on a
+    /// fresh session) resolves immediately: the Island judges with what it
+    /// has rather than holding a verb hostage to a frame that will never come.
     fn resolve_action_intents(&mut self) {
         let clock = self.clock_ms;
-        let queues = std::mem::take(&mut self.action_queues);
-        for (username, actions) in queues {
-            let Some(realm) = self.realm_of(&username) else { continue };
-            for action in actions {
+        let users: Vec<String> = self.action_queues.keys().cloned().collect();
+        for username in users {
+            let Some(realm) = self.realm_of(&username) else {
+                self.action_queues.remove(&username);
+                continue;
+            };
+            loop {
+                let consumed = self.last_move_seq.get(&username).copied().unwrap_or(0);
+                let frames_pending =
+                    self.move_queues.get(&username).is_some_and(|q| !q.is_empty());
+                let Some(queue) = self.action_queues.get_mut(&username) else { break };
+                let Some(&(_, seq)) = queue.front() else { break };
+                if seq > consumed && frames_pending {
+                    break; // pinned to a frame still to integrate — wait, FIFO
+                }
+                let (action, _) = queue.pop_front().expect("front checked");
                 let Some(rw) = self.realm_world_mut(realm) else { continue };
                 let (verb, at) = action.attribution();
                 let outcome = match action {
@@ -692,6 +717,9 @@ impl Sim {
                         reason: e.as_str(),
                     }),
                 }
+            }
+            if self.action_queues.get(&username).is_some_and(|q| q.is_empty()) {
+                self.action_queues.remove(&username);
             }
         }
     }
@@ -894,7 +922,7 @@ mod tests {
     fn enqueued_action_resolves_on_the_next_tick_not_on_receipt() {
         let mut sim = Sim::new();
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
 
         // Not resolved on receipt — inventory unchanged.
         assert_eq!(
@@ -927,15 +955,51 @@ mod tests {
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
 
         for _ in 0..ACTION_QUEUE_CAP {
-            sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
+            sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
         }
         assert_eq!(queue_full_events(&sim.drain_events()), 0, "the first cap intents are accepted");
 
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
         assert_eq!(
             queue_full_events(&sim.drain_events()),
             1,
             "the intent past the cap is refused with queue_full"
+        );
+    }
+
+    /// Seq-pinning: a Verb carrying movement seq S resolves at the tick after
+    /// S's movement has integrated, so its eligibility is judged at the exact
+    /// position the pressing client displayed (press-frame own position).
+    /// Here the press happens while approaching: out of range at send time,
+    /// in range at the pinned frame — the old arrival-time judging would have
+    /// rejected `too_far`; press-frame judging harvests.
+    #[test]
+    fn a_verb_is_judged_at_its_press_frame_position_not_at_arrival() {
+        let mut sim = Sim::new();
+        // Approach the centre tree due east: 4 frames west at 200/tick walk
+        // x from 9_431 toward the flanking trees' contact point (~8_831),
+        // taking the distance to (8_000,8_000) from 1_431 (out of range) to
+        // ~831 (in range).
+        sim.connect_at("a", Position { x: 9_431, y: 8_000 }, Inventory::default());
+        for seq in 1..=4u32 {
+            sim.enqueue_move("a", seq, -1.0, 0.0);
+        }
+        // The press, pinned to frame 4 — sent before any frame has resolved.
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 4);
+        let _ = sim.drain_events();
+
+        for _ in 0..6 {
+            sim.tick();
+        }
+        let rejected = sim
+            .drain_events()
+            .into_iter()
+            .any(|e| matches!(e, OutboundEvent::ActionRejected { .. }));
+        assert!(!rejected, "the press-frame position is in range — no too_far");
+        assert_eq!(
+            sim.inventory_of("a").unwrap().items.get(&Item::Wood),
+            Some(&1),
+            "the harvest lands, judged at the pinned frame's position"
         );
     }
 
@@ -949,7 +1013,7 @@ mod tests {
         let _ = sim.drain_events(); // clear connect-time events
 
         // The neighbour chunk's centre tree — real, hydrated, far out of range.
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:24000:8000".into()) });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:24000:8000".into()) }, 0);
         sim.tick();
 
         let rejected: Vec<_> = sim
@@ -982,7 +1046,7 @@ mod tests {
         sim.connect_at("p", Position { x: 2_600, y: 3_000 }, inv);
         sim.set_intent("p", 1.0, 0.0); // heading east, into the wall's path
 
-        sim.enqueue_action("p", Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 });
+        sim.enqueue_action("p", Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 }, 0);
         sim.tick();
 
         let x = sim.position("p").unwrap().x;
@@ -1000,8 +1064,8 @@ mod tests {
     fn all_queued_actions_drain_in_one_tick() {
         let mut sim = Sim::new();
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) }, 0);
 
         sim.tick();
 
@@ -1042,13 +1106,13 @@ mod tests {
 
         // A resolved harvest leaves pending writes in the buffer (un-flushed:
         // the DB-flush cadence hasn't elapsed) — our overload to drain.
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
         sim.tick();
         assert!(sim.datastore().pending_len() > 0, "buffered writes to drain");
         assert_eq!(sim.inventory_of("a").unwrap().items.get(&Item::Wood).copied(), Some(1));
 
         // Queue another intent and start moving, then trip the overload.
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) }, 0);
         sim.set_intent("a", 1.0, 0.0);
         sim.set_persist_thresholds(Thresholds { n_high: 1, n_low: 1 });
         assert_eq!(sim.datastore().mode(), Mode::Backpressured, "overload engaged");
@@ -1083,7 +1147,7 @@ mod tests {
     fn guard_flushes_durable_state_then_reports_the_panic() {
         let mut sim = Sim::new();
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
         sim.tick(); // resolve the harvest → a pending durable write
         assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
 
@@ -1110,7 +1174,7 @@ mod tests {
         let mut sim = Sim::new();
         sim.enable_pool(2);
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
-        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) });
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0);
         sim.tick(); // resolve the harvest → a pending durable write
         assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
 

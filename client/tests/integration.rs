@@ -561,6 +561,46 @@ async fn a_rejected_press_surfaces_the_islands_reason_in_last_error() {
     assert_eq!(alice.render_state().last_error.as_deref(), Some("depleted"));
 }
 
+/// Seq-pinning end-to-end: target a far tree, run at it, and press the moment
+/// the Verb button lights. The press is judged at the exact frame the client
+/// displayed (the Verb resolves at its seq's tick), so the running press
+/// succeeds deterministically — under arrival-time judging this would race
+/// the player's own latency and flake.
+#[tokio::test]
+async fn a_press_the_moment_the_button_lights_succeeds_while_moving() {
+    let port = start_server().await;
+    let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
+    // The neighbour chunk's centre tree, ~16 units east — far out of range.
+    assert!(
+        alice.pump_until(T, |m| m.nodes().contains_key("tree:24000:8000")).await,
+        "the neighbour chunk's tree is visible"
+    );
+    alice.click(24.0, 8.0).await.unwrap();
+    assert_eq!(alice.model().target(), Some("tree:24000:8000"));
+    assert_eq!(
+        alice.model().verb_button(),
+        client::model::VerbButton::Dimmed("harvest"),
+        "far target: dimmed"
+    );
+
+    // Run east; press the instant the button reads Ready.
+    alice.movement(false, false, true, false).await.unwrap();
+    assert!(
+        alice
+            .pump_until(T, |m| m.verb_button() == client::model::VerbButton::Ready("harvest"))
+            .await,
+        "the button lights as the lawful render enters range"
+    );
+    alice.press_verb().await.unwrap();
+    alice.movement(false, false, false, false).await.unwrap();
+
+    assert!(
+        alice.pump_until(T, |m| m.inventory().get("wood").copied().unwrap_or(0) >= 1).await,
+        "the moment-it-lights press harvests — judged at its press frame"
+    );
+    assert_ne!(alice.model().last_error(), Some("too_far"), "no arrival-time rejection");
+}
+
 /// The full hunt loop over the wire: click an NPC → Target; press the Verb
 /// button → entity-directed damage kills it into a Carcass; click the Carcass
 /// → retarget (no auto-transfer — the Carcass is a different entity); press →

@@ -6,6 +6,9 @@
       "payload": {
         "additionalProperties": false,
         "properties": {
+          "seq": {
+            "type": "integer"
+          },
           "type": {
             "enum": [
               "wall"
@@ -22,7 +25,8 @@
         "required": [
           "type",
           "x",
-          "y"
+          "y",
+          "seq"
         ],
         "type": "object"
       },

@@ -98,8 +98,8 @@ fn player_kills_deer_into_carcass_then_harvests_meat_and_hide() {
     // before movement), so the deer can't flee between them — the intent-model
     // equivalent of "no tick between".
     let deer = npc_wid(&sim, NpcKind::Deer);
-    sim.enqueue_action("alice", Action::Damage { target: deer.clone() });
-    sim.enqueue_action("alice", Action::Damage { target: deer });
+    sim.enqueue_action("alice", Action::Damage { target: deer.clone() }, 0);
+    sim.enqueue_action("alice", Action::Damage { target: deer }, 0);
     sim.tick();
     assert!(!has_npc(&sim, NpcKind::Deer), "deer should be dead");
 
@@ -108,7 +108,7 @@ fn player_kills_deer_into_carcass_then_harvests_meat_and_hide() {
         .into_iter()
         .find_map(|(wid, s)| matches!(s, EntityWire::Carcass { .. }).then_some(wid))
         .expect("the dead deer leaves a Carcass");
-    sim.enqueue_action("alice", Action::Harvest { target: carcass });
+    sim.enqueue_action("alice", Action::Harvest { target: carcass }, 0);
     sim.tick();
     let inv = sim.inventory_of("alice").unwrap();
     assert_eq!(inv.items.get(&Item::Meat).copied(), Some(3));
@@ -134,7 +134,7 @@ fn damage_by_identity_hits_the_named_deer_not_the_nearest() {
         })
         .expect("the farther deer is on the wire");
 
-    sim.enqueue_action("alice", Action::Damage { target: farther.clone() });
+    sim.enqueue_action("alice", Action::Damage { target: farther.clone() }, 0);
     sim.tick();
 
     let hps: Vec<(String, i64)> = entity_states(sim.overworld())
@@ -175,7 +175,7 @@ fn attacked_wolf_flees_when_not_hungry() {
     sim.connect_at("alice", pos(8_000, 8_000), Inventory::default());
     sim.spawn_npc(NpcKind::Wolf, pos(8_500, 8_000), Drives { hunger: 0.2, ..Default::default() });
 
-    sim.enqueue_action("alice", Action::Damage { target: npc_wid(&sim, NpcKind::Wolf) }); // provoke it
+    sim.enqueue_action("alice", Action::Damage { target: npc_wid(&sim, NpcKind::Wolf) }, 0); // provoke it
     sim.tick();
     let before = npc_x(&sim, NpcKind::Wolf);
     for _ in 0..5 {

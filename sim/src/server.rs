@@ -109,13 +109,14 @@ pub fn route(sim: &mut Sim, conn: &mut ConnState, msg: &PhxMessage) -> Outcome {
             Outcome::default()
         }
         "build" => {
-            if let (Some(user), Some(kind), Some(x), Some(y)) = (
+            if let (Some(user), Some(kind), Some(x), Some(y), Some(seq)) = (
                 conn.username.clone(),
                 msg.payload.get("type").and_then(|v| v.as_str()).and_then(StructureKind::parse),
                 int(&msg.payload, "x"),
                 int(&msg.payload, "y"),
+                int(&msg.payload, "seq"),
             ) {
-                sim.enqueue_action(&user, Action::Build { kind, x, y });
+                sim.enqueue_action(&user, Action::Build { kind, x, y }, seq as u32);
             }
             Outcome::default()
         }
@@ -131,10 +132,12 @@ fn enqueue_entity_verb(
     msg: &PhxMessage,
     make: impl Fn(WireId) -> Action,
 ) {
-    if let (Some(user), Some(target)) =
-        (conn.username.clone(), msg.payload.get("target").and_then(|v| v.as_str()))
-    {
-        sim.enqueue_action(&user, make(WireId(target.to_string())));
+    if let (Some(user), Some(target), Some(seq)) = (
+        conn.username.clone(),
+        msg.payload.get("target").and_then(|v| v.as_str()),
+        int(&msg.payload, "seq"),
+    ) {
+        sim.enqueue_action(&user, make(WireId(target.to_string())), seq as u32);
     }
 }
 

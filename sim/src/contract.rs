@@ -73,8 +73,13 @@ fn ack_payload() -> Value {
 
 fn build_payload() -> Value {
     object(
-        &[("type", enum_str(&[StructureKind::Wall.as_str()])), ("x", integer()), ("y", integer())],
-        &["type", "x", "y"],
+        &[
+            ("type", enum_str(&[StructureKind::Wall.as_str()])),
+            ("x", integer()),
+            ("y", integer()),
+            ("seq", integer()),
+        ],
+        &["type", "x", "y", "seq"],
     )
 }
 

@@ -153,7 +153,7 @@ fn snapshot_payload_conforms() {
     let mut inv = Inventory::default();
     inv.items.insert(Item::Wood, 5);
     sim.connect_at("alice", Position { x: 2_700, y: 3_000 }, inv);
-    sim.enqueue_action("alice", Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 });
+    sim.enqueue_action("alice", Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 }, 0);
     sim.tick();
 
     let states = sim.overworld().snapshot_states();

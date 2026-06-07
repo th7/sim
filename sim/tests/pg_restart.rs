@@ -39,7 +39,7 @@ fn cross_restart_durability_via_postgres() {
         let mut inv = Inventory::default();
         inv.items.insert(Item::Wood, 5);
         sim.connect_at(&user, Position { x: 2_700, y: 3_000 }, inv);
-        sim.enqueue_action(&user, Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 });
+        sim.enqueue_action(&user, Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 }, 0);
     sim.tick();
         assert_eq!(sim.inventory_of(&user).unwrap().items.get(&Item::Wood).copied().unwrap_or(0), 0);
 

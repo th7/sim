@@ -240,7 +240,7 @@ impl Session {
     }
 
     pub async fn send_build(&mut self, kind: &str, x: i64, y: i64) -> Result<(), String> {
-        self.push_verb("build", json!({ "type": kind, "x": x, "y": y })).await
+        self.push_verb("build", json!({ "type": kind, "x": x, "y": y, "seq": 0 })).await
     }
 
     pub async fn send_damage(&mut self, target: &str) -> Result<(), String> {

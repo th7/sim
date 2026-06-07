@@ -207,6 +207,9 @@ pub struct BuildPayload {
     pub kind: String,
     pub x: i64,
     pub y: i64,
+    /// The movement input seq at press time — like the entity-directed verbs,
+    /// placement resolves at the tick that seq's movement applies.
+    pub seq: u32,
 }
 
 /// An entity-directed Verb: see [`HarvestPayload`].
@@ -282,8 +285,13 @@ mod tests {
     #[test]
     fn verb_payloads_serialize_as_contract() {
         assert_eq!(
-            serde_json::to_value(BuildPayload { kind: "wall".into(), x: 3000, y: 3000 }).unwrap(),
-            serde_json::json!({ "type": "wall", "x": 3000, "y": 3000 })
+            serde_json::to_value(BuildPayload { kind: "wall".into(), x: 3000, y: 3000, seq: 9 })
+                .unwrap(),
+            serde_json::json!({ "type": "wall", "x": 3000, "y": 3000, "seq": 9 })
+        );
+        assert_eq!(
+            serde_json::to_value(HarvestPayload { target: "tree:1:2".into(), seq: 9 }).unwrap(),
+            serde_json::json!({ "target": "tree:1:2", "seq": 9 })
         );
         assert_eq!(
             serde_json::to_value(MovePayload { seq: 7, dx: 1.0, dy: 0.0 }).unwrap(),
