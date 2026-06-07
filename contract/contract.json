@@ -529,6 +529,9 @@
             },
             "type": "array"
           },
+          "frontier_violations": {
+            "type": "integer"
+          },
           "total_npcs": {
             "type": "integer"
           },

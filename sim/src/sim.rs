@@ -102,6 +102,10 @@ pub struct Sim {
     /// Per-player highest Frontier asserted so far (monotone by law: a session
     /// never un-sees an authoritative tick; a regressing claim is clamped up).
     asserted_frontier: BTreeMap<String, u64>,
+    /// Impossible Frontier claims seen (never-future or regressing — neither
+    /// is producible by an honest session). Claims are clamped (worthless),
+    /// never punished; this count is the probe signal the dev stats surface.
+    frontier_violations: u64,
     /// Per-player queued movement input frames, consumed one per tick.
     move_queues: BTreeMap<String, VecDeque<MoveFrame>>,
     /// Per-player ticks since the last consumed frame. Intent is perishable:
@@ -184,6 +188,7 @@ impl Sim {
             move_starved: BTreeMap::new(),
             last_move_seq: BTreeMap::new(),
             asserted_frontier: BTreeMap::new(),
+            frontier_violations: 0,
             next_instance: 1,
             pool: None,
             datastore: Datastore::new(Box::new(store)),
@@ -254,6 +259,11 @@ impl Sim {
     pub fn clock_ms(&self) -> u64 {
         self.clock_ms
     }
+    /// Total impossible Frontier claims observed (see `enqueue_action`).
+    pub fn frontier_violations(&self) -> u64 {
+        self.frontier_violations
+    }
+
     pub fn tick_count(&self) -> u64 {
         self.tick_count
     }
@@ -661,8 +671,14 @@ impl Sim {
     /// asserted). Resolved in the tick — at the tick after `seq`'s movement
     /// has integrated — never on receipt.
     pub fn enqueue_action(&mut self, username: &str, action: Action, seq: u32, frontier: u64) {
-        let f = frontier.min(self.tick_count); // never-future
+        if frontier > self.tick_count {
+            self.frontier_violations += 1; // never-future: impossible honestly
+        }
+        let f = frontier.min(self.tick_count);
         let stored = self.asserted_frontier.entry(username.to_string()).or_insert(0);
+        if f < *stored {
+            self.frontier_violations += 1; // regression: impossible honestly
+        }
         let f = f.max(*stored); // monotone
         *stored = f;
         let queue = self.action_queues.entry(username.to_string()).or_default();
@@ -1028,6 +1044,39 @@ mod tests {
                 matches!(s, crate::wire::EntityWire::Npc { .. }).then_some(wid)
             })
             .expect("an NPC is on the wire")
+    }
+
+    /// Impossible Frontier claims are *worthless* (clamped) but never
+    /// *invisible*: each one increments a counter the dev stats surface. An
+    /// honest session can produce neither kind — its auth tick is never ahead
+    /// of the server's and never regresses across presses (one ordered
+    /// stream) — so the count is a pure probe signal.
+    #[test]
+    fn impossible_frontier_claims_are_counted_not_punished() {
+        let mut sim = Sim::new();
+        sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
+        sim.tick(); // tick 1
+        let tree = || Action::Harvest { target: WireId("tree:8000:8000".into()) };
+
+        // Honest claims: at or below the present, non-regressing → no count.
+        sim.enqueue_action("a", tree(), 0, 0);
+        sim.enqueue_action("a", tree(), 0, 1);
+        assert_eq!(sim.frontier_violations(), 0, "honest claims are free");
+
+        // A claim from the future: impossible — counted, clamped, play continues.
+        sim.enqueue_action("a", tree(), 0, 99);
+        assert_eq!(sim.frontier_violations(), 1, "never-future violation counted");
+
+        // A regressing claim after a higher one: impossible — counted too.
+        sim.enqueue_action("a", tree(), 0, 0);
+        assert_eq!(sim.frontier_violations(), 2, "monotonicity violation counted");
+
+        // And nothing was punished: the player still resolves verbs normally.
+        sim.tick();
+        assert!(
+            sim.inventory_of("a").unwrap().items.get(&crate::components::Item::Wood).is_some(),
+            "clamped claims still resolve (worthless, not fatal)"
+        );
     }
 
     /// Confluence: a tick's outcome is a pure function of the locked intents —

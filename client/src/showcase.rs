@@ -153,7 +153,7 @@ fn overworld(t_ms: f64) -> RenderState {
             }
         })
         .collect();
-    model.on_stats(StatsPayload { active_chunks: 3, total_players: 7, total_npcs: 2, around });
+    model.on_stats(StatsPayload { active_chunks: 3, total_players: 7, total_npcs: 2, frontier_violations: 0, around });
 
     RenderState::from_model(&model)
 }

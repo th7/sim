@@ -195,6 +195,7 @@ fn stats_payload() -> Value {
             ("active_chunks", integer()),
             ("around", json!({ "type": "array", "items": around_item })),
             ("total_players", integer()), ("total_npcs", integer()),
+            ("frontier_violations", integer()),
         ],
         &["active_chunks", "around", "total_players", "total_npcs"],
     )

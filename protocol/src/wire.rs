@@ -168,6 +168,10 @@ pub struct StatsPayload {
     /// Live NPCs (wolves + deer) currently simulated in the Overworld.
     #[serde(default)]
     pub total_npcs: u64,
+    /// Impossible Frontier claims observed (never-future or regressing) —
+    /// clamped to worthlessness, counted here as the probe signal.
+    #[serde(default)]
+    pub frontier_violations: u64,
     pub around: Vec<ChunkStatWire>,
 }
 

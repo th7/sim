@@ -61,6 +61,7 @@ mod tests {
             active_chunks: 1,
             total_players: 1,
             total_npcs: 2,
+            frontier_violations: 0,
             around: Vec::new(),
         });
         assert_eq!(dev.stats().unwrap().total_npcs, 2);

@@ -37,6 +37,7 @@ pub fn stats_payload(sim: &Sim, dev_username: Option<&str>) -> Value {
         active_chunks: sim.active_chunk_count() as u64,
         total_players: sim.player_count() as u64,
         total_npcs: sim.npc_count() as u64,
+        frontier_violations: sim.frontier_violations(),
         around,
     };
     serde_json::to_value(payload).unwrap_or(Value::Null)
