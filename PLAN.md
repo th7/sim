@@ -19,7 +19,8 @@ Carcass perishing, starving-deer-feeds-through-threat, wildlife identity/populat
 `overload-backpressure` is wired and its proving test
 (`players_freeze_under_overload_and_resume_intact`) is no longer `#[ignore]`d. The key move: **all
 player input is now a fire-and-forget [`Action`] intent** (`harvest`/`build`/`damage` join `move`),
-enqueued on receipt into a per-actor bounded FIFO and resolved only in the tick (before movement),
+enqueued on receipt into a per-actor bounded FIFO and resolved only in the tick (post-movement
+since the simultaneity-law revision — see `design/targeting-and-wysiwyg.md`),
 with outcomes async (`self` deltas, or an `action_rejected` push). With nothing resolving outside
 the tick, the overload freeze is just **skip-the-tick** while the Datastore is `Backpressured` (clock
 held, flush kept running so it self-relieves). There is one Datastore, so the freeze is global —

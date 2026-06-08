@@ -55,13 +55,16 @@ ecological role).
 ## Time & resolution
 
 **Tick** — The atomic unit of simulated time; all world change happens *in* some named
-tick. _Design promise:_ a tick's outcome is a **pure function of the locked Intents** it
-was given — simultaneity inside a tick is resolved by a fixed neutral law (Verbs before
-movement, deterministic order), **never by network arrival order**; replaying the Intent
-log reproduces history bit-identically. Facts of a tick may *resolve and emit eagerly*
-(before every input has arrived) when no missing input could affect them — eagerness is
-scheduling, never semantics — and **an emitted fact is final**: authority never revises
-what it has published.
+tick, and every Intent is **processed with its tick** — never deferred to the next.
+_Design promise:_ a tick's outcome is a **pure function of the locked Intents** it
+was given — simultaneity inside a tick is resolved by a fixed neutral law (movement
+first, then **Verbs** judged at final positions — *arrival-into beats placement*, so a
+placed Structure can never appear under a body and is solid from the next tick),
+**never by network arrival order**; replaying the Intent log reproduces history
+bit-identically. Facts of a tick may *resolve and emit eagerly* (before every input has
+arrived) when no missing input could affect them — eagerness is scheduling, never
+semantics — and **an emitted fact is final**: authority never revises what it has
+published.
 _Avoid:_ Frame (a client render concept), step, cycle.
 
 ## Presence & authority

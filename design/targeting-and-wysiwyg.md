@@ -29,11 +29,15 @@ Each decision was locked in order; later ones depend on earlier ones.
    speculated positions is a permanent false negative (the one Mirror divergence that can
    never resolve, because nothing was sent). The button *dims* on a speculated
    out-of-range hint but still sends; the Island judges.
-3. **Intents bind to named Ticks; one lock each.** Tick outcomes are a pure function of
-   the locked-intent log under a fixed neutral simultaneity law (verbs before movement,
-   deterministic order) — never network arrival order. Verbs are seq-pinned: resolved at
-   the tick the player pressed in, so own-position eligibility is replay-exact
-   (eliminates "ran at the tree, pressed too early" rejections by construction).
+3. **Intents bind to named Ticks; one lock each — and are processed with their tick.**
+   Tick outcomes are a pure function of the locked-intent log under a fixed neutral
+   simultaneity law — never network arrival order. The law (revised in the after-the-fact
+   grill, ratified): **movement first, then verbs**, judged at final positions —
+   *arrival-into beats placement*, a wall can never appear under a body and is solid from
+   the next tick, and player verbs share the post-movement phase NPC actions always had.
+   Verbs are seq-pinned: a verb pinned to seq S resolves in the very tick S integrates,
+   so own-position eligibility is replay-exact at zero added latency (eliminates "ran at
+   the tree, pressed too early" rejections by construction).
 4. **Preemptive resolution (eager facts, final emission).** A tick's facts may resolve
    and emit before all intents arrive, iff no missing input could affect them: each
    missing intent casts a *could-affect shadow* (last position ⊕ max speed ⊕ enforced

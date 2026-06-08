@@ -96,8 +96,9 @@ pub struct Sim {
     pending: Vec<OutboundEvent>,
     /// Per-actor queued action intents, resolved in the tick (never on
     /// receipt), each pinned to the movement seq at press time: an action
-    /// waits until its seq's movement has integrated, so eligibility is judged
-    /// at the exact position the pressing client displayed.
+    /// resolves in the tick its seq's movement integrates (post-movement), so
+    /// eligibility is judged at the exact position the pressing client
+    /// displayed.
     action_queues: BTreeMap<String, VecDeque<(Action, u32, u64)>>,
     /// Per-player highest Frontier asserted so far (monotone by law: a session
     /// never un-sees an authoritative tick; a regressing claim is clamped up).
@@ -550,15 +551,21 @@ impl Sim {
     pub fn tick(&mut self) {
         self.clock_ms += TICK_MS;
         self.tick_count += 1;
-        // Actions first — judged at positions as of the end of the previous
-        // tick, i.e. exactly the press frame for a seq-pinned verb — then this
-        // tick's movement frame is consumed and integrated.
-        self.resolve_action_intents();
+        // Movement first, verbs after — the simultaneity law. An intent is
+        // processed *with its tick*: this tick's frame is consumed and
+        // integrated, then verbs resolve, judged at exactly the position the
+        // press frame displayed (a verb pinned to seq S resolves in the very
+        // tick S integrates). Arrival-into beats placement: a build is judged
+        // against final positions, so a wall can never appear under a body.
+        // Within the phase, NPC actions (inside the realm tick) precede
+        // player verbs; portals trigger last, so a verb always resolves in
+        // the realm it was pressed in.
         self.consume_move_frames();
         self.overworld.tick(TICK_MS, self.clock_ms);
         for inst in self.instances.values_mut() {
             inst.tick(TICK_MS, self.clock_ms);
         }
+        self.resolve_action_intents();
         self.process_portals();
         self.update_wildlife(self.clock_ms);
         self.emit_move_acks();
@@ -576,7 +583,6 @@ impl Sim {
         let dt = TICK_MS as f64 / 1000.0;
         let clock = self.clock_ms;
 
-        self.resolve_action_intents();
         self.consume_move_frames();
 
         let tick_realm = |rw: &mut RealmWorld| {
@@ -594,6 +600,9 @@ impl Sim {
         for inst in self.instances.values_mut() {
             tick_realm(inst);
         }
+        // Same phase law as the serial tick: movement first, verbs after,
+        // portals last.
+        self.resolve_action_intents();
         self.process_portals();
         self.update_wildlife(self.clock_ms);
         self.emit_move_acks();
@@ -668,8 +677,8 @@ impl Sim {
     /// lawful-render judging). Hard checks at the door: **never-future** (a
     /// claim past the present is clamped to it) and **monotone** (a session
     /// never un-sees a tick; regressing claims are clamped up to the highest
-    /// asserted). Resolved in the tick — at the tick after `seq`'s movement
-    /// has integrated — never on receipt.
+    /// asserted). Resolved in the tick — the very tick `seq`'s movement
+    /// integrates, after movement — never on receipt.
     pub fn enqueue_action(&mut self, username: &str, action: Action, seq: u32, frontier: u64) {
         if frontier > self.tick_count {
             self.frontier_violations += 1; // never-future: impossible honestly
@@ -697,15 +706,16 @@ impl Sim {
     }
 
     /// Resolve queued action intents, in id (username) order, FIFO within an
-    /// actor — run at the very top of the tick (before this tick's movement
-    /// frame is even consumed), so a freshly built obstacle is solid for the
-    /// same tick's integrator and a pinned action is judged at the position
-    /// its press frame displayed: an action pinned to seq S resolves only
-    /// once S's movement has integrated (a prior tick consumed S). An action
-    /// pinned past everything the session ever sent (the move queue is empty
-    /// and S is still unconsumed — a fabricated seq, or a test hook's 0 on a
-    /// fresh session) resolves immediately: the Island judges with what it
-    /// has rather than holding a verb hostage to a frame that will never come.
+    /// actor — run *after* this tick's movement has integrated (the
+    /// simultaneity law: arrival-into beats placement, and a build judged
+    /// against final positions can never appear under a body). An intent is
+    /// processed with its tick: an action pinned to seq S resolves in the
+    /// very tick that consumed S, judged at exactly the position its press
+    /// frame displayed. An action pinned past everything the session ever
+    /// sent (the move queue is empty and S is still unconsumed — a fabricated
+    /// seq, or a test hook's 0 on a fresh session) resolves immediately: the
+    /// Island judges with what it has rather than holding a verb hostage to a
+    /// frame that will never come.
     fn resolve_action_intents(&mut self) {
         let clock = self.clock_ms;
         let users: Vec<String> = self.action_queues.keys().cloned().collect();
@@ -1021,7 +1031,10 @@ mod tests {
         sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 4, 0);
         let _ = sim.drain_events();
 
-        for _ in 0..6 {
+        // The invariant: an intent is processed *with its tick* — frame 4
+        // integrates in tick 4, and the verb pinned to it resolves in tick 4
+        // (post-movement), never pushed to tick 5.
+        for _ in 0..4 {
             sim.tick();
         }
         let rejected = sim
@@ -1032,7 +1045,48 @@ mod tests {
         assert_eq!(
             sim.inventory_of("a").unwrap().items.get(&Item::Wood),
             Some(&1),
-            "the harvest lands, judged at the pinned frame's position"
+            "the harvest lands in its own tick, judged at the pinned frame's position"
+        );
+    }
+
+    /// The simultaneity tie-break: movement resolves before verbs within a
+    /// tick, so *arrival-into beats placement* — a build into a cell someone
+    /// walks into this same tick is judged against final positions and
+    /// refused (`footprint_blocked`). The wall can never appear under a body.
+    #[test]
+    fn same_tick_arrival_into_a_cell_beats_placement() {
+        let mut sim = Sim::new();
+        // Builder in range of cell (3_500, 3_000); walker one frame east of
+        // body-blocking it (contact = half-width 500 + body 300 = 800).
+        sim.connect_at("b", Position { x: 2_700, y: 3_000 }, {
+            let mut inv = Inventory::default();
+            inv.items.insert(Item::Wood, 5);
+            inv
+        });
+        sim.connect_at("a", Position { x: 4_350, y: 3_000 }, Inventory::default());
+        sim.enqueue_move("a", 1, -1.0, 0.0); // → 4_150: inside the block band
+        sim.enqueue_action(
+            "b",
+            Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 },
+            0,
+            0,
+        );
+        let _ = sim.drain_events();
+        sim.tick();
+
+        let reasons: Vec<_> = sim
+            .drain_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                OutboundEvent::ActionRejected { reason, .. } => Some(reason),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reasons, vec!["footprint_blocked"], "the walker won the cell");
+        assert_eq!(
+            sim.inventory_of("b").unwrap().items.get(&Item::Wood),
+            Some(&5),
+            "no wood was spent on the refused wall"
         );
     }
 
@@ -1249,29 +1303,43 @@ mod tests {
         );
     }
 
-    /// Action intents resolve *before* movement integration: a wall built this
-    /// tick is a solid obstacle for this tick's movement. A player at x=2600
-    /// moving east would coast to 2800 unobstructed; with the wall (west face at
-    /// x=3000, player radius 300 → contact at 2700) solid the same tick, they
-    /// stop at the contact instead.
+    /// Action intents resolve *after* movement integration — the simultaneity
+    /// law. Same-tick: the mover coasts unobstructed and the build, judged at
+    /// final positions, is refused if a body landed in its band (here the
+    /// builder's own — a wall can never appear under anyone, the builder
+    /// included). Built clear, the wall is solid from the next tick on.
     #[test]
-    fn a_build_is_solid_for_the_same_tick_movement() {
+    fn a_build_resolves_after_movement_and_is_solid_from_the_next_tick() {
+        // Half 1: moving into your own placement band refuses the build.
         let mut sim = Sim::new();
         let mut inv = Inventory::default();
         inv.items.insert(Item::Wood, crate::consts::WALL_COST);
-        sim.connect_at("p", Position { x: 2_600, y: 3_000 }, inv);
-        sim.set_intent("p", 1.0, 0.0); // heading east, into the wall's path
+        sim.connect_at("p", Position { x: 2_600, y: 3_000 }, inv.clone());
+        sim.set_intent("p", 1.0, 0.0); // east, into the wall's band
+        sim.enqueue_action("p", Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 }, 0, 0);
+        let _ = sim.drain_events();
+        sim.tick();
+        let x = sim.position("p").unwrap().x;
+        assert_eq!(x, 2_800, "this tick's movement is unobstructed (no same-tick wall)");
+        assert!(
+            sim.drain_events().iter().any(|e| matches!(
+                e,
+                OutboundEvent::ActionRejected { reason: "footprint_blocked", .. }
+            )),
+            "the build is judged at final positions: the body in the band refuses it"
+        );
 
+        // Half 2: built clear (standing still), the wall is solid next tick.
+        let mut sim = Sim::new();
+        sim.connect_at("p", Position { x: 2_600, y: 3_000 }, inv);
         sim.enqueue_action("p", Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 }, 0, 0);
         sim.tick();
-
+        sim.set_intent("p", 1.0, 0.0);
+        for _ in 0..5 {
+            sim.tick();
+        }
         let x = sim.position("p").unwrap().x;
-        assert!(x > 2_600, "the player did move east this tick (x={x})");
-        assert!(
-            x <= 2_700,
-            "the same-tick wall blocks this tick's movement at the contact (x={x}); \
-             unobstructed the player would have reached 2800"
-        );
+        assert_eq!(x, 2_700, "from the next tick on, the wall stops movement at contact");
     }
 
     /// All of an actor's queued actions drain in one tick, FIFO. Two harvests
