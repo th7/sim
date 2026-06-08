@@ -126,6 +126,25 @@ something observable.
    determinism makes anything older recomputable from the intent log).
    When the trio lands, the shadow scheduler slots under it unchanged.
 
+4. **The unreachable-pin fallback (the reachability rule).** A seq-pinned Verb
+   is held only while its seq is reachable — ≤ the highest seq consumed or
+   queued for that session. A pin *above* that envelope can never be satisfied
+   by any real Input frame (a fabricated future seq, or a frame dropped under
+   `MOVE_QUEUE_CAP` overflow) and resolves immediately, judged at the current
+   authoritative position — the least-generous frame, identical to an unpinned
+   press. Honest pins are untouched: a press's Input frame always precedes it
+   on the same ordered stream. Rejected alternatives: wait-forever (a 3-second
+   network burst wedges the actor's whole FIFO until reconnect), reject
+   (punishes the honest frame-drop case and needs a magic-number timeout to
+   decide "never"). Caveat on confluence: for *well-formed* inputs, outcomes
+   are schedule-invariant (pinned by `outcomes_are_invariant_to_intent_arrival_schedule`);
+   for a *fabricated* seq, whether the fallback fires on a given tick depends
+   on queue state, so schedule-invariance is forfeited for the input class
+   that lied — replay determinism survives (the enqueue tick is logged), and
+   no scheduling/reach advantage is obtainable. Pinned by
+   `a_verb_pinned_to_an_unreachable_seq_resolves_without_waiting` and its
+   reachable counterpart `a_verb_pinned_to_a_pending_seq_waits_for_it`.
+
 ## Rejected / parked
 
 - **Arrival-order resolution** (within or across ticks) — rejected. Determinism degrades

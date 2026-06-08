@@ -67,6 +67,20 @@ semantics — and **an emitted fact is final**: authority never revises what it 
 published.
 _Avoid:_ Frame (a client render concept), step, cycle.
 
+**Input frame** — The per-**Tick** unit of a **Player**'s movement **Intent**: one
+`{seq, direction}` the session sends each client tick while moving (plus a final
+zero-frame on release; silence while idle). Its **seq** is a per-session counter that
+advances *only when a frame is sent* — an index into the Player's own input history, not
+a clock. The server consumes exactly one per Tick in order and acks the last consumed
+seq; the **Mirror** replays its unacked tail on that anchor (own-position prediction is
+bit-identical to the authority's integration). The Player's displayed position at any
+moment is *all frames through the latest seq, integrated* — so the seq a **Verb** carries
+names the exact Input frame whose post-integration position the Player was looking at:
+the **press frame** of lawful-render judging.
+_Avoid:_ Keypress (an Input frame is per-tick renewed Intent, not a key event), packet,
+message; seq alone (the seq identifies an Input frame — keep the thing and its index
+distinct).
+
 ## Presence & authority
 
 **Player** — A human participant, identified by a chosen username; also the in-world entity

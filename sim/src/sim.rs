@@ -715,7 +715,13 @@ impl Sim {
     /// sent (the move queue is empty and S is still unconsumed — a fabricated
     /// seq, or a test hook's 0 on a fresh session) resolves immediately: the
     /// Island judges with what it has rather than holding a verb hostage to a
-    /// frame that will never come.
+    /// frame that will never come. "Never come" is the **reachability rule**:
+    /// a pin is held only while its seq is ≤ the highest seq that exists or is
+    /// en route (consumed ∪ queued); a seq above that envelope — a fabricated
+    /// future, or a frame dropped under queue overflow — can never be
+    /// satisfied, so it resolves now. Honest pins are untouched (a press's
+    /// frame always precedes it on the wire); the rule has no magic timeout
+    /// and a moving fabricator can only wedge their own FIFO, never escape it.
     fn resolve_action_intents(&mut self) {
         let clock = self.clock_ms;
         let users: Vec<String> = self.action_queues.keys().cloned().collect();
@@ -726,11 +732,19 @@ impl Sim {
             };
             loop {
                 let consumed = self.last_move_seq.get(&username).copied().unwrap_or(0);
-                let frames_pending =
-                    self.move_queues.get(&username).is_some_and(|q| !q.is_empty());
+                // The highest seq that exists or is en route: a pin at or below
+                // it is *reachable* and waited for (FIFO); a pin above it can
+                // never be satisfied by any real Input frame and resolves now
+                // (judged at the current position — the least-generous frame).
+                let max_reachable = self
+                    .move_queues
+                    .get(&username)
+                    .and_then(|q| q.iter().map(|f| f.seq).max())
+                    .unwrap_or(0)
+                    .max(consumed);
                 let Some(queue) = self.action_queues.get_mut(&username) else { break };
                 let Some(&(_, seq, _)) = queue.front() else { break };
-                if seq > consumed && frames_pending {
+                if seq > consumed && seq <= max_reachable {
                     break; // pinned to a frame still to integrate — wait, FIFO
                 }
                 let (action, _, frontier) = queue.pop_front().expect("front checked");
@@ -1130,6 +1144,57 @@ mod tests {
         assert!(
             sim.inventory_of("a").unwrap().items.get(&crate::components::Item::Wood).is_some(),
             "clamped claims still resolve (worthless, not fatal)"
+        );
+    }
+
+    /// A Verb pinned to an *unreachable* seq — one greater than everything
+    /// consumed AND everything still queued — resolves immediately (judged at
+    /// the current position, the least-generous frame), even while the player
+    /// keeps moving. The reachability rule: a pin no real Input frame can ever
+    /// satisfy is not held hostage. This closes the moving-fabricator wedge —
+    /// a non-empty queue must not let a fabricated future seq wedge the FIFO.
+    #[test]
+    fn a_verb_pinned_to_an_unreachable_seq_resolves_without_waiting() {
+        let mut sim = Sim::new();
+        sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
+        // The player is moving: frames 1,2,3 are queued (pending, not yet
+        // consumed). A press fabricates seq 99 — past everything that exists.
+        for seq in 1..=3u32 {
+            sim.enqueue_move("a", seq, 0.0, 1.0);
+        }
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 99, 0);
+        let _ = sim.drain_events();
+
+        // One tick: the unreachable pin resolves now (judged at the current
+        // position — in range of the centre tree → wood), rather than waiting
+        // behind the three real frames.
+        sim.tick();
+        assert_eq!(
+            sim.inventory_of("a").unwrap().items.get(&Item::Wood),
+            Some(&1),
+            "the unreachable pin resolved this tick, not wedged behind the queue"
+        );
+    }
+
+    /// The counterpart: a Verb pinned to a *reachable* pending seq waits for
+    /// that frame to integrate (FIFO), even though resolving now would also
+    /// succeed — the pin is honored, not short-circuited.
+    #[test]
+    fn a_verb_pinned_to_a_pending_seq_waits_for_it() {
+        let mut sim = Sim::new();
+        // Stand one frame's travel short of range; the pinned frame closes it.
+        sim.connect_at("a", Position { x: 9_150, y: 8_000 }, Inventory::default());
+        sim.enqueue_move("a", 1, -1.0, 0.0); // → 8_950: in range at frame 1
+        sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 1, 0);
+        let _ = sim.drain_events();
+        // Before the tick, frame 1 is pending and seq 1 is reachable → the
+        // verb must wait for it (not resolve at the start-of-tick 9_150, which
+        // is out of range). One tick integrates frame 1, then the verb lands.
+        sim.tick();
+        assert_eq!(
+            sim.inventory_of("a").unwrap().items.get(&Item::Wood),
+            Some(&1),
+            "the verb waited for its reachable pending frame, then landed in range"
         );
     }
 
