@@ -54,6 +54,12 @@ by target id; contract regenerated. The e2e layer covers the tracer (click→tar
 wood), the hunt loop (kill by identity → Carcass retarget → meat+hide), rejection
 surfacing, and the moving press.
 
+The view layer (Target marker disc, the contextual Verb button in its inert/ready/dimmed
+states, `E`/Escape) was **visually confirmed on a real display**. Verb-button labels are
+final as the raw verb names ("harvest (E)" / "damage (E)") — domain vocabulary == display
+vocabulary, no presentation mapping. (Scope note: this pass covered the new targeting
+visuals only; the older cosmetic-gap list under "Deferred follow-ups" was not part of it.)
+
 > Engineering deviations (frontier-on-verbs, either-frame eligibility, preemptive
 > resolution as pinned-promises-not-machinery) were reviewed and ratified in the
 > after-the-fact grill; that grill also revised the simultaneity law to movement-first

@@ -145,6 +145,17 @@ something observable.
    `a_verb_pinned_to_an_unreachable_seq_resolves_without_waiting` and its
    reachable counterpart `a_verb_pinned_to_a_pending_seq_waits_for_it`.
 
+## Visual confirmation
+
+The view layer was confirmed on a real display (the in-container build has no GL, so the
+Showcase machine-checks *presence* of every drawable; appearance needs eyes): the diegetic
+**Target marker** disc, the contextual **Verb button** in its inert/ready/dimmed states,
+and the `E`/Escape bindings. **Verb-button labels are final as the raw verb names**
+("harvest (E)" / "damage (E)") — domain vocabulary doubles as display vocabulary, one
+fewer mapping to drift (closing the one open presentation question from the grill). The
+older cosmetic-gap list (portal ring, grid lines, shadows — see `PLAN.md`) was outside
+this pass.
+
 ## Rejected / parked
 
 - **Arrival-order resolution** (within or across ticks) — rejected. Determinism degrades
