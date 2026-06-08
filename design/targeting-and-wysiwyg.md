@@ -70,10 +70,15 @@ siblings have (client-only gate today → cross-chunk build is possible from a h
 client, and the unenforced reach inflates could-affect shadows to chunk scale). Fix ships
 with increment 1.
 
-## Engineering deviations (made at the engineer's discretion — review welcome)
+## Engineering deviations (ratified)
 
-Two points where implementation deviated from the grilled design, each with the
-options weighed and the choice taken:
+Reviewed in the after-the-fact grill (2026-06-08): items 1–3 below ratified as-is;
+the silent clamping of impossible Frontier claims was upgraded to clamp-and-count
+(`frontier_violations` in the dev stats — worthless, never fatal, but visible), and
+the simultaneity law was revised to movement-first (see the ladder, step 3).
+Disconnect-on-proof joins the lockstep trio on the PvP-era list.
+
+Each deviation, with the options weighed and the choice taken:
 
 1. **The Frontier rides entity-directed Verbs, not every input frame.** The
    grill locked "frontier on every input frame; verbs carry nothing" — but the

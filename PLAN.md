@@ -54,9 +54,11 @@ by target id; contract regenerated. The e2e layer covers the tracer (click→tar
 wood), the hunt loop (kill by identity → Carcass retarget → meat+hide), rejection
 surfacing, and the moving press.
 
-> Engineering deviations from the grilled design (frontier-on-verbs, either-frame
-> eligibility, preemptive resolution as pinned-promises-not-machinery) are documented with
-> options + rationale in `design/targeting-and-wysiwyg.md` — flagged for designer/PO review.
+> Engineering deviations (frontier-on-verbs, either-frame eligibility, preemptive
+> resolution as pinned-promises-not-machinery) were reviewed and ratified in the
+> after-the-fact grill; that grill also revised the simultaneity law to movement-first
+> ("intents are processed with their tick" is now an invariant) and added the
+> frontier_violations probe counter. Details in `design/targeting-and-wysiwyg.md`.
 
 ## Candidate next increments
 
