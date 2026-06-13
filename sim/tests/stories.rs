@@ -617,7 +617,12 @@ mod wildlife_materialize_dissolve {
         );
     }
 
-    /// Scenario: Population reflects the Region's current level.
+    /// Scenario: Population and temperament reflect the Region's current level.
+    /// This pins the *population* half (count tracks level). The *temperament*
+    /// half — a prey-scarce Region materializes hungrier wolves — is pinned by
+    /// `ecosystem_world::a_prey_scarce_region_materializes_hungrier_wolves`
+    /// (and the pure coupling by `ecosystem::depleted_region_spawns_hungrier_wolves`
+    /// / `ecosystem::deer_in_wolfy_region_spawn_wary`).
     #[test]
     fn population_reflects_region_level() {
         let count_at = |x: i64, y: i64| {
@@ -658,8 +663,11 @@ mod region_depletion_and_healing {
     // Scenario: Overhunting depletes a Region — `ecosystem_world::overhunting_a_region_lowers_its_deer_level`.
     // Scenario: A depleted Region spawns fewer / more aggressive animals — the
     //   depleted level drives `population_reflects_region_level` (fewer), and
-    //   `ecosystem::initial_drives` makes a depleted Region's animals hungrier
-    //   (more aggressive); the spawn path is `Sim::materialize`.
+    //   `ecosystem_world::a_prey_scarce_region_materializes_hungrier_wolves`
+    //   proves a prey-scarce Region puts hungrier, higher-pressure wolves on the
+    //   ground end-to-end through `Sim::materialize` (the pure coupling itself is
+    //   `ecosystem::depleted_region_spawns_hungrier_wolves` /
+    //   `ecosystem::deer_in_wolfy_region_spawn_wary`).
 
     /// Scenario: A Region heals when left alone.
     #[test]
