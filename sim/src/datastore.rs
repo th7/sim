@@ -130,10 +130,12 @@ impl DurableStore for Box<dyn DurableStore + Send> {
     }
 }
 
-/// Backpressure mode. `Flowing` accepts writes; `Backpressured` would park them
-/// (the sim is single-threaded so we surface the mode rather than block).
+/// Backpressure mode — the Datastore's private overload state, surfaced to the
+/// tick loop only through [`Datastore::backpressured`]. `Flowing` accepts writes;
+/// `Backpressured` freezes the world (the sim is single-threaded, so we surface
+/// the condition and skip the tick rather than block).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
+enum Mode {
     Flowing,
     Backpressured,
 }
@@ -179,8 +181,12 @@ impl<S: DurableStore> Datastore<S> {
         ds
     }
 
-    pub fn mode(&self) -> Mode {
-        self.mode
+    /// True while overloaded: the world freezes (the tick is skipped) until the
+    /// pending buffer drains below the low-water mark. The single overload
+    /// signal the tick loop reads — the counter and thresholds behind it are
+    /// the Datastore's own business.
+    pub fn backpressured(&self) -> bool {
+        self.mode == Mode::Backpressured
     }
 
     /// Retune the backpressure thresholds and re-evaluate the mode immediately
@@ -199,7 +205,7 @@ impl<S: DurableStore> Datastore<S> {
         self.durable
     }
 
-    pub fn pending_len(&self) -> usize {
+    pub(crate) fn pending_len(&self) -> usize {
         self.pending_players.len() + self.pending_structures.len() + self.pending_depletions.len()
     }
 
@@ -406,12 +412,12 @@ mod tests {
             MemStore::default(),
             Thresholds { n_high: 5, n_low: 2 },
         );
-        assert_eq!(ds.mode(), Mode::Flowing);
+        assert!(!ds.backpressured());
         for i in 0..5 {
             ds.apply(PersistEvent::UpsertPlayer(player(&format!("p{i}"), i, i, 0)));
         }
-        assert_eq!(ds.mode(), Mode::Backpressured, "engages at n_high");
+        assert!(ds.backpressured(), "engages at n_high");
         ds.flush();
-        assert_eq!(ds.mode(), Mode::Flowing, "disengages once drained below n_low");
+        assert!(!ds.backpressured(), "disengages once drained below n_low");
     }
 }

@@ -244,8 +244,9 @@ entity that feeds an **Intent** per tick.
 
 **Backpressure** — The system's overload-protection promise: when the **Datastore** cannot
 keep up, affected **Players** *freeze* (their inputs stall) rather than the system losing their
-state or crashing; play resumes when the Datastore recovers. The freeze is whole-**Island** —
-everyone sharing a stalled authority waits together. The mechanism is engineer-owned.
+state or crashing; play resumes when the Datastore recovers. The freeze is **whole-world** — there is one **Datastore**, so everyone sharing that single
+persistence authority freezes together (the freeze is keyed on the Datastore, not on any one
+**Island**). The mechanism is engineer-owned.
 _Avoid:_ Throttle, rate-limit, drop.
 
 ---

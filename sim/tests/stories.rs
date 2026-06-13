@@ -268,7 +268,7 @@ mod overload_backpressure {
     // everyone sharing that authority freezes together. See
     // `design/backpressure-freeze.html`.
     use super::*;
-    use sim::datastore::{Mode, Thresholds};
+    use sim::datastore::Thresholds;
     use sim::sim::Action;
 
     /// Scenario: Under sustained overload, affected Players freeze instead of
@@ -288,7 +288,6 @@ mod overload_backpressure {
         // A resolved harvest leaves buffered writes — the backlog to drain.
         sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
         sim.tick();
-        assert!(sim.datastore().pending_len() > 0, "a write backlog exists");
 
         // Everyone is moving; "a" has a further action queued (taken pre-freeze).
         for who in group {
@@ -301,7 +300,7 @@ mod overload_backpressure {
 
         // The world's persistence cannot keep up → the whole authority freezes.
         sim.set_persist_thresholds(Thresholds { n_high: 1, n_low: 1 });
-        assert_eq!(sim.datastore().mode(), Mode::Backpressured, "overload engaged");
+        assert!(sim.backpressured(), "overload engaged");
 
         // Then: those Players' inputs stall — they freeze together; no state is
         // dropped or corrupted; the system does not crash.
@@ -312,7 +311,7 @@ mod overload_backpressure {
         assert_eq!(sim.inventory_of("a").unwrap(), inv_a_before, "no state dropped while frozen");
 
         // When the persistence subsystem recovers (the flush drained the backlog):
-        assert_eq!(sim.datastore().mode(), Mode::Flowing, "the overload cleared");
+        assert!(!sim.backpressured(), "the overload cleared");
 
         // Then the frozen Players resume play, and the actions they took before
         // the freeze are intact.

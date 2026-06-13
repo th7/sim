@@ -10,7 +10,7 @@
 use crate::components::{Inventory, Position, PortalDirection, StructureKind, WireId};
 use crate::consts::{FLUSH_MS, TICK_MS};
 use crate::motivation::{Drives, NpcKind};
-use crate::datastore::{Datastore, DurableStore, MemStore, Mode, PersistEvent, PlayerRecord, Thresholds};
+use crate::datastore::{Datastore, DurableStore, MemStore, PersistEvent, PlayerRecord, Thresholds};
 use crate::ecosystem::{self, Stratum};
 use crate::geometry::{chunk_center, coord_for, ChunkCoord};
 use crate::ids::{ClusterId, Realm};
@@ -246,8 +246,12 @@ impl Sim {
         self.datastore.into_durable()
     }
 
-    pub fn datastore(&self) -> &Datastore<BoxedStore> {
-        &self.datastore
+    /// Whether the Datastore is backpressured — the world freezes (the tick is
+    /// skipped) while true, resuming once the buffer drains. The single overload
+    /// signal exposed to callers; the counter and thresholds stay the
+    /// Datastore's own business.
+    pub fn backpressured(&self) -> bool {
+        self.datastore.backpressured()
     }
 
     /// Attach a persistent worker pool of `workers` threads. Subsequent
@@ -509,7 +513,7 @@ impl Sim {
         // and no queued action resolves. We still flush, unconditionally, so the
         // backlog drains and the freeze self-relieves the moment it falls below
         // the low-water mark. "Freeze" is literally skip-the-tick.
-        if self.datastore.mode() == Mode::Backpressured {
+        if self.datastore.backpressured() {
             return self.guard(|s| s.freeze_flush());
         }
         match self.pool.as_ref().map(|p| p.size()) {
@@ -1435,7 +1439,7 @@ mod tests {
         sim.set_intent("a", 1.0, 0.0); // standing velocity east
 
         sim.set_persist_thresholds(Thresholds { n_high: 0, n_low: 0 });
-        assert_eq!(sim.datastore().mode(), Mode::Backpressured, "overload engaged");
+        assert!(sim.backpressured(), "overload engaged");
 
         let pos_before = sim.position("a").unwrap();
         let clock_before = sim.clock_ms();
@@ -1457,14 +1461,15 @@ mod tests {
         // the DB-flush cadence hasn't elapsed) — our overload to drain.
         sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
         sim.tick();
-        assert!(sim.datastore().pending_len() > 0, "buffered writes to drain");
         assert_eq!(sim.inventory_of("a").unwrap().items.get(&Item::Wood).copied(), Some(1));
 
-        // Queue another intent and start moving, then trip the overload.
+        // Queue another intent and start moving, then trip the overload. The
+        // harvest above left buffered writes, so lowering the high-water mark
+        // engages backpressure.
         sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8500:8500".into()) }, 0, 0);
         sim.set_intent("a", 1.0, 0.0);
         sim.set_persist_thresholds(Thresholds { n_high: 1, n_low: 1 });
-        assert_eq!(sim.datastore().mode(), Mode::Backpressured, "overload engaged");
+        assert!(sim.backpressured(), "overload engaged");
 
         let pos_before = sim.position("a").unwrap();
 
@@ -1476,8 +1481,7 @@ mod tests {
             Some(1),
             "frozen: the queued harvest did not resolve"
         );
-        assert_eq!(sim.datastore().pending_len(), 0, "frozen: no new writes; buffer drained");
-        assert_eq!(sim.datastore().mode(), Mode::Flowing, "the freeze self-relieved");
+        assert!(!sim.backpressured(), "the flush drained the buffer — the freeze self-relieved");
 
         // Resume: the surviving queued intent resolves and movement continues.
         sim.tick_or_flush().unwrap();
@@ -1498,7 +1502,7 @@ mod tests {
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
         sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
         sim.tick(); // resolve the harvest → a pending durable write
-        assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
+        assert!(sim.datastore.pending_len() > 0, "there is an unflushed durable write");
 
         // Silence the default panic print for this expected, caught panic.
         let prev = std::panic::take_hook();
@@ -1508,7 +1512,7 @@ mod tests {
 
         assert!(res.is_err(), "the guard reports the panic rather than swallowing it");
         assert_eq!(
-            sim.datastore().pending_len(),
+            sim.datastore.pending_len(),
             0,
             "the guard flushed durable state on the way out"
         );
@@ -1525,7 +1529,7 @@ mod tests {
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
         sim.enqueue_action("a", Action::Harvest { target: WireId("tree:8000:8000".into()) }, 0, 0);
         sim.tick(); // resolve the harvest → a pending durable write
-        assert!(sim.datastore().pending_len() > 0, "there is an unflushed durable write");
+        assert!(sim.datastore.pending_len() > 0, "there is an unflushed durable write");
 
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
@@ -1535,6 +1539,6 @@ mod tests {
         std::panic::set_hook(prev);
 
         assert!(res.is_err(), "a worker panic must surface through the parallel tick, not be lost");
-        assert_eq!(sim.datastore().pending_len(), 0, "durable state flushed on the way down");
+        assert_eq!(sim.datastore.pending_len(), 0, "durable state flushed on the way down");
     }
 }
