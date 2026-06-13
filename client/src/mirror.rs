@@ -97,7 +97,7 @@ impl Mirror {
     /// [`protocol::consts::LEAD_BOUND_TICKS`] past the last authoritative
     /// tick (the client-side face of Backpressure).
     /// The last authoritative tick incorporated — the session's Frontier,
-    /// asserted on every entity-directed Verb (lawful-render judging basis).
+    /// asserted on every entity-directed Action (lawful-render judging basis).
     pub fn auth_tick(&self) -> Option<u64> {
         self.auth_tick
     }

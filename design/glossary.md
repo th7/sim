@@ -58,7 +58,7 @@ ecological role).
 tick, and every Intent is **processed with its tick** — never deferred to the next.
 _Design promise:_ a tick's outcome is a **pure function of the locked Intents** it
 was given — simultaneity inside a tick is resolved by a fixed neutral law (movement
-first, then **Verbs** judged at final positions — *arrival-into beats placement*, so a
+first, then **Actions** judged at final positions — *arrival-into beats placement*, so a
 placed Structure can never appear under a body and is solid from the next tick),
 **never by network arrival order**; replaying the Intent log reproduces history
 bit-identically. Facts of a tick may *resolve and emit eagerly* (before every input has
@@ -74,7 +74,7 @@ advances *only when a frame is sent* — an index into the Player's own input hi
 a clock. The server consumes exactly one per Tick in order and acks the last consumed
 seq; the **Mirror** replays its unacked tail on that anchor (own-position prediction is
 bit-identical to the authority's integration). The Player's displayed position at any
-moment is *all frames through the latest seq, integrated* — so the seq a **Verb** carries
+moment is *all frames through the latest seq, integrated* — so the seq an **Action** carries
 names the exact Input frame whose post-integration position the Player was looking at:
 the **press frame** of lawful-render judging.
 _Avoid:_ Keypress (an Input frame is per-tick renewed Intent, not a key event), packet,
@@ -124,27 +124,27 @@ still. A stalled or vanished session never leaves a Player acting on stale Inten
 never holds the world's resolution hostage beyond that grace.
 _Avoid:_ Input, command, keypress.
 
-**Verb** — A **Player**-initiated world-changing command — *harvest*, *build*, *damage* —
+**Action** — A **Player**-initiated world-changing command — *harvest*, *build*, *damage* —
 resolved by the Player's **Island** inside the tick, fire-and-forget: outcomes arrive
 asynchronously as world deltas or a rejection. The Player counterpart of an NPC-Plan
-**Action**, even where the two resolve to the same effect.
-_Design promise:_ an entity-directed Verb acts on the **Target**'s *identity*, never on a
+**Decision**, even where the two resolve to the same effect.
+_Design promise:_ an entity-directed Action acts on the **Target**'s *identity*, never on a
 remembered place, and resolves at the Tick the Player pressed in. Its *eligibility* (range)
 is judged in the **press frame** — the Player's own exact position against the Target's
 **Lawful render** — so what the screen lawfully showed in range, the Island honors. The
 forgiveness is *continuous-only*: liveness, depletion, yields, and existence are always
 judged in the authoritative present (a stale screen never resurrects or double-pays), and
 effects always land at the resolve Tick — eligibility is forgiven, time is not.
-_Avoid:_ Action (an NPC-Plan primitive), command, ability, skill.
+_Avoid:_ Verb (the retired name for this); Decision (an NPC-Plan primitive); command, ability, skill.
 
 **Target** — The one world entity a **Player** has designated to receive their next
-entity-directed **Verb**. Targetable: **Gatherables**, **Structures**, **NPCs**. Not
-targetable: **Players** (no PvP in v1), **Portals** (entry is by overlap, not Verb).
+entity-directed **Action**. Targetable: **Gatherables**, **Structures**, **NPCs**. Not
+targetable: **Players** (no PvP in v1), **Portals** (entry is by overlap, not an Action).
 *Build* is placement at a cell, not entity-directed, so it never involves a Target.
 _Design promise:_ a Target is *sticky observation* — it persists until the Player explicitly
 clears it, designates another, or the entity ceases to be visible (despawn, leaving the
 **View window**, a world transition). Distance never clears it, and a depleted **Resource
-node** stays targeted; range and state gate the *Verb*, not the Target.
+node** stays targeted; range and state gate the *Action*, not the Target.
 _Avoid:_ Selection (HUD-flavored), focus, lock; Goal's avoided alias "target" (NPC-internal)
 is unrelated.
 
@@ -290,24 +290,24 @@ _Avoid:_ Urgency (a node's immediate activation, not the accumulated term), stre
 arbitration (static bias modulated by **Pressure**). Expanded into a **Plan**.
 _Avoid:_ Objective, target, Intent (Intent is the per-tick output).
 
-**Plan** — The most-immediate *actionable* sequence of **Actions** pursuing the current
+**Plan** — The most-immediate *actionable* sequence of **Decisions** pursuing the current
 **Goal**, chosen by the same precondition-gated immediacy rule as a chain **Bid**, and adapting
 to circumstance (a `feed` Goal yields `fight-to-hold` when a threat blocks calm feeding). Bottoms
 out in per-tick **Intent**.
 _Avoid:_ Script, routine, behaviour.
 
-**Action** — A primitive in a **shared** library that **Plans** compose — move-to, eat,
-pick-up, attack, flee. Owned by no Need or chain: the same Action can serve different Goals (a
-wolf fighting *for* food, not *for* safety).
-_Avoid:_ Verb (a Verb is a Player-initiated server command — harvest/build/damage; an Action is
+**Decision** — A primitive in a **shared** library that **Plans** compose — move-to, eat,
+pick-up, attack, flee. Owned by no Need or chain: the same Decision can serve different Goals (a
+wolf fighting *for* food, not *for* safety). The NPC counterpart of a Player **Action**.
+_Avoid:_ Action (a Player-initiated server command — harvest/build/damage; a Decision is
 an NPC-Plan primitive, even where the two resolve to the same effect), skill, ability.
 
 **Demeanor** — How an **NPC** outwardly carries itself: the observer-facing classification
-of its committed **Action**, one of **Calm**, **Feeding**, **Aggressive**, or **Fleeing**.
-A projection made *for* observers, deliberately coarser than the Action itself — each
+of its committed **Decision**, one of **Calm**, **Feeding**, **Aggressive**, or **Fleeing**.
+A projection made *for* observers, deliberately coarser than the Decision itself — each
 Demeanor changes what a watching **Player** should do; nothing finer is actionable. Authored
 by the **Island** (never speculated by the **Mirror**).
-_Avoid:_ Activity, behavior, state (all collide with the Action/Goal/Plan family), mood
+_Avoid:_ Activity, behavior, state (all collide with the Decision/Goal/Plan family), mood
 (mood suggests the inner Pressure; Demeanor is the outward read).
 
 **Health** — How wounded a damageable **NPC** is, from unhurt to dead; reaching zero kills
@@ -346,14 +346,14 @@ of entities (**Players**, **Resource nodes**, **Structures**, **Portals**, **NPC
 UI element.
 _Avoid:_ Widget, control (imply HUD-only); component (web connotation).
 
-**Verb button** — The single context-sensitive **UI element** through which a **Player**
-issues entity-directed **Verbs**: it acts on the current **Target**, and which Verb it
+**Action button** — The single context-sensitive **UI element** through which a **Player**
+issues entity-directed **Actions**: it acts on the current **Target**, and which Action it
 issues follows from what the Target *is* (a **Gatherable** → *harvest*; a **Structure** or
 **NPC** → *damage*). Inert when no Target exists.
 _Design promise:_ its readiness hint is *truthful by construction* — it reads the **Lawful
 render**, the same frame the **Island** judges in, so a lit button is refused only for
 discrete staleness (the thing no client can know).
-_Avoid:_ Action button (Action is an NPC-Plan primitive), interact key, hotkey.
+_Avoid:_ Verb button (the retired name); interact key, hotkey.
 
 **Target marker** — The diegetic in-world annotation showing which entity is the current
 **Target** — and the *only* Target display: there is deliberately no HUD target frame, no
@@ -402,7 +402,7 @@ _Avoid:_ Ack (transport flavor), client tick, last-seen.
 **Frontier**: the authoritative state at the Frontier, speculated forward by the asserted
 **Lead** under the shared integrator. Lawful because the authority can recompute it
 bit-for-bit from data it itself delivered — no client-supplied geometry is ever trusted.
-The frame in which an entity-directed **Verb**'s eligibility is judged.
+The frame in which an entity-directed **Action**'s eligibility is judged.
 _Avoid:_ Client view (unverifiable), claimed render, screenshot.
 
 ---
@@ -437,7 +437,7 @@ _Avoid:_ Client view (unverifiable), claimed render, screenshot.
 - An **NPC** has one Motivation; a Motivation has a fixed set of root **Needs**; each Need
   roots one **Behavioral chain** and carries one **Pressure**. Each tick every chain offers one
   **Bid**; arbitration (bias × Pressure) picks the winning **Goal**; the Goal expands to a
-  **Plan**; the Plan's head **Action** resolves to the tick's Intent. **Actions** are a shared
+  **Plan**; the Plan's head **Decision** resolves to the tick's Intent. **Decisions** are a shared
   library owned by no Need.
 - **NPCs do not anchor the Warm set** — only **Players** keep Chunks hot; NPCs are simulated
   only within Player-hot Chunks, and have **no persistent individual identity**: wildlife
@@ -449,7 +449,7 @@ _Avoid:_ Client view (unverifiable), claimed render, screenshot.
 - A killed animal leaves a **Carcass**: **Players** harvest it for meat/hide, **NPCs** eat from
   it, rival predators contest it.
 - Every **NPC** presents two independent observer-facing axes: a **Demeanor** (the outward
-  read of its committed **Action**) and a banded **Health**. Both are authoritative facts
+  read of its committed **Decision**) and a banded **Health**. Both are authoritative facts
   from the **Island** — the **Mirror** never speculates either.
 - The client runs one **Mirror** of its Player's **View window**. The Mirror speculates ahead
   of authoritative state by at most its **Lead** bound, decides no interaction, and yields to

@@ -117,7 +117,7 @@ impl View {
 
     /// Build and draw one frame from `rs`. `extra_ui` lets the caller add its
     /// own egui windows (the showcase legend); the game passes `|_| {}`.
-    /// Returns whether the HUD Verb button was clicked this frame (the game
+    /// Returns whether the HUD Action button was clicked this frame (the game
     /// turns that into the same input the `E` key sends).
     pub fn frame(
         &mut self,
@@ -310,21 +310,21 @@ impl View {
                         .anchor(Align2::RIGHT_TOP, [-8.0, 8.0])
                         .show(ctx, |ui| dev_panel(ui, rs));
                 }
-                // The Verb button: the one issuer of entity-directed Verbs
+                // The Action button: the one issuer of entity-directed Actions
                 // (with the `E` key). Its state is the model's truthful hint:
                 // inert without a Target, dimmed when the lawful render says
                 // out of range — dimmed still sends; the Island judges.
                 EWindow::new("verb").anchor(Align2::CENTER_BOTTOM, [0.0, -8.0]).show(ctx, |ui| {
-                    use crate::model::VerbButton;
-                    let clicked = match rs.verb_button {
-                        VerbButton::Inert => {
+                    use crate::model::ActionButton;
+                    let clicked = match rs.action_button {
+                        ActionButton::Inert => {
                             ui.add_enabled(false, three_d::egui::Button::new("—"));
                             false
                         }
-                        VerbButton::Ready(verb) => {
+                        ActionButton::Ready(verb) => {
                             ui.button(format!("{verb} (E)")).clicked()
                         }
-                        VerbButton::Dimmed(verb) => ui
+                        ActionButton::Dimmed(verb) => ui
                             .button(
                                 three_d::egui::RichText::new(format!("{verb} (E)")).weak(),
                             )

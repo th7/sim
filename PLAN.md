@@ -39,7 +39,7 @@ flaw; click hit-testing is nearest-within-tolerance); `E`/the HUD button is the 
 of entity-directed Verbs (Gatherable→harvest, Structure/NPC→damage, by WireId); the
 diegetic Target marker is the only Target display; Escape clears; despawn/View-exit/
 relocation clear, distance and depletion never do. Verbs are seq-pinned (judged at the
-press frame's own position — `a_verb_is_judged_at_its_press_frame_position_not_at_arrival`,
+press frame's own position — `an_action_is_judged_at_its_press_frame_position_not_at_arrival`,
 plus the moment-it-lights e2e) and Frontier-asserting (range judged against the Target's
 lawful render OR the authoritative present; never-future/monotone/Lead-window clamps —
 `a_press_is_judged_against_the_targets_lawful_render`,

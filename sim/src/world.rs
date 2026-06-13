@@ -22,7 +22,7 @@ use crate::geometry::{coord_for, ChunkCoord};
 use crate::ids::{ActorId, ClusterId, Realm};
 use crate::labeler::{Labeler, TopologyEvent};
 use crate::motivation::{decide, Decision, Drives, NpcKind, Params, Perception, Sensed, P2};
-use crate::verbs::{ActionOutcome, VerbError};
+use crate::actions::{ActionOutcome, ActionError};
 use crate::worldgen;
 use protocol::wire::ChunkLifecycle;
 use hecs::{Entity, World};
@@ -1055,11 +1055,11 @@ impl RealmWorld {
         }
     }
 
-    // --- Verbs (mirroring GameCore.Chunk's with-chains in order) ---
+    // --- Actions (mirroring GameCore.Chunk's with-chains in order) ---
 
     /// Harvest the Gatherable named by `target` — a Resource node (deplete,
     /// respawn after [`RESPAWN_MS`]) or a Carcass (consume). Entity-directed:
-    /// the Verb acts on the Target's identity, judged here against authoritative
+    /// the Action acts on the Target's identity, judged here against authoritative
     /// position. Returns the new inventory on success. Check order: no_player →
     /// no_target → too_far → no_target/depleted.
     pub(crate) fn harvest(
@@ -1067,16 +1067,16 @@ impl RealmWorld {
         username: &str,
         target: &WireId,
         clock_ms: u64,
-    ) -> Result<ActionOutcome, VerbError> {
-        let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(VerbError::NoPlayer)?;
-        let node = self.wire_index.get(target).copied().ok_or(VerbError::NoTarget)?;
+    ) -> Result<ActionOutcome, ActionError> {
+        let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(ActionError::NoPlayer)?;
+        let node = self.wire_index.get(target).copied().ok_or(ActionError::NoTarget)?;
         let (tx, ty) = self
             .world
             .get::<&Position>(node)
             .map(|p| (p.x, p.y))
-            .map_err(|_| VerbError::NoTarget)?;
+            .map_err(|_| ActionError::NoTarget)?;
         if !in_range(px, py, tx, ty) {
-            return Err(VerbError::TooFar);
+            return Err(ActionError::TooFar);
         }
         if self.world.get::<&Carcass>(node).is_ok() {
             return self.harvest_carcass(username, node);
@@ -1088,9 +1088,9 @@ impl RealmWorld {
                 Err(_) => {
                     // Present but not gatherable → depleted (or no_target).
                     return if self.world.get::<&Depleted>(node).is_ok() {
-                        Err(VerbError::Depleted)
+                        Err(ActionError::Depleted)
                     } else {
-                        Err(VerbError::NoTarget)
+                        Err(ActionError::NoTarget)
                     };
                 }
             }
@@ -1099,7 +1099,7 @@ impl RealmWorld {
         // Yield +1 to inventory.
         let player_e = self.username_index[username];
         {
-            let mut inv = self.world.get::<&mut Inventory>(player_e).map_err(|_| VerbError::NoPlayer)?;
+            let mut inv = self.world.get::<&mut Inventory>(player_e).map_err(|_| ActionError::NoPlayer)?;
             *inv.items.entry(item).or_insert(0) += 1;
         }
         // Deplete the node.
@@ -1124,11 +1124,11 @@ impl RealmWorld {
 
     /// Harvest the targeted Carcass into meat + hide Items. Reuses the harvest
     /// verb's range gate (already applied by the caller).
-    fn harvest_carcass(&mut self, username: &str, ce: Entity) -> Result<ActionOutcome, VerbError> {
+    fn harvest_carcass(&mut self, username: &str, ce: Entity) -> Result<ActionOutcome, ActionError> {
         let meat = self.world.get::<&Carcass>(ce).map(|c| c.meat).unwrap_or(0);
-        let player_e = *self.username_index.get(username).ok_or(VerbError::NoPlayer)?;
+        let player_e = *self.username_index.get(username).ok_or(ActionError::NoPlayer)?;
         {
-            let mut inv = self.world.get::<&mut Inventory>(player_e).map_err(|_| VerbError::NoPlayer)?;
+            let mut inv = self.world.get::<&mut Inventory>(player_e).map_err(|_| ActionError::NoPlayer)?;
             if meat > 0 {
                 *inv.items.entry(Item::Meat).or_insert(0) += meat as u32;
             }
@@ -1150,19 +1150,19 @@ impl RealmWorld {
         kind: StructureKind,
         x: i64,
         y: i64,
-    ) -> Result<ActionOutcome, VerbError> {
+    ) -> Result<ActionOutcome, ActionError> {
         // Structures are an Overworld-only affordance; Instances are ephemeral.
         if !self.realm.is_overworld() {
-            return Err(VerbError::NoBuildInInstance);
+            return Err(ActionError::NoBuildInInstance);
         }
         // Build cell must be in the player's current chunk, and in reach — the
         // Island judges range for every verb; the client's gate is only a hint.
-        let player_pos = self.position_of(username).ok_or(VerbError::NoPlayer)?;
+        let player_pos = self.position_of(username).ok_or(ActionError::NoPlayer)?;
         if coord_for(x, y) != player_pos.chunk() {
-            return Err(VerbError::OutOfChunk);
+            return Err(ActionError::OutOfChunk);
         }
         if !in_range(player_pos.x, player_pos.y, x, y) {
-            return Err(VerbError::TooFar);
+            return Err(ActionError::TooFar);
         }
 
         // Footprint clear of obstacles and player bodies.
@@ -1174,16 +1174,16 @@ impl RealmWorld {
         let obstacles = self.obstacles_for_cluster_of(username);
         let players = self.player_positions();
         if crate::collision::aabb_blocked(x, y, w, h, &obstacles, &players) {
-            return Err(VerbError::FootprintBlocked);
+            return Err(ActionError::FootprintBlocked);
         }
 
         // Materials.
         let player_e = self.username_index[username];
         {
-            let inv = self.world.get::<&Inventory>(player_e).map_err(|_| VerbError::NoPlayer)?;
+            let inv = self.world.get::<&Inventory>(player_e).map_err(|_| ActionError::NoPlayer)?;
             for &(item, qty) in crate::catalogue::cost(kind) {
                 if inv.items.get(&item).copied().unwrap_or(0) < qty {
-                    return Err(VerbError::InsufficientMaterials);
+                    return Err(ActionError::InsufficientMaterials);
                 }
             }
         }
@@ -1214,7 +1214,7 @@ impl RealmWorld {
     }
 
     /// Damage the Structure or NPC named by `target` by [`DAMAGE_PER_CLICK`].
-    /// Entity-directed: the Verb acts on the Target's identity — naming a deer
+    /// Entity-directed: the Action acts on the Target's identity — naming a deer
     /// hits *that* deer, however it has moved, never a nearer one. Range
     /// eligibility for a moving target is judged in the **press frame**: the
     /// target's lawful render at the asserting session's `frontier` *or* its
@@ -1231,14 +1231,14 @@ impl RealmWorld {
         target: &WireId,
         clock_ms: u64,
         frontier: u64,
-    ) -> Result<ActionOutcome, VerbError> {
-        let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(VerbError::NoPlayer)?;
-        let e = self.wire_index.get(target).copied().ok_or(VerbError::NoTarget)?;
+    ) -> Result<ActionOutcome, ActionError> {
+        let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(ActionError::NoPlayer)?;
+        let e = self.wire_index.get(target).copied().ok_or(ActionError::NoTarget)?;
         let (x, y) = self
             .world
             .get::<&Position>(e)
             .map(|p| (p.x, p.y))
-            .map_err(|_| VerbError::NoTarget)?;
+            .map_err(|_| ActionError::NoTarget)?;
         let now_in_range = in_range(px, py, x, y);
         let lawful_in_range = || {
             let resolve_tick = clock_ms / crate::consts::TICK_MS;
@@ -1246,7 +1246,7 @@ impl RealmWorld {
                 .is_some_and(|(lx, ly)| in_range(px, py, lx, ly))
         };
         if !now_in_range && !lawful_in_range() {
-            return Err(VerbError::TooFar);
+            return Err(ActionError::TooFar);
         }
         if self.world.get::<&Structure>(e).is_ok() {
             let new_hp = self.world.get::<&Structure>(e).map(|s| s.hp).unwrap_or(0) - DAMAGE_PER_CLICK;
@@ -1273,7 +1273,7 @@ impl RealmWorld {
 
         // An NPC: the player extends the same damage verb to wildlife.
         if self.world.get::<&Npc>(e).is_err() {
-            return Err(VerbError::NoTarget);
+            return Err(ActionError::NoTarget);
         }
         let by = self
             .username_index
@@ -1281,7 +1281,7 @@ impl RealmWorld {
             .and_then(|&pe| self.world.get::<&PlayerControlled>(pe).ok().map(|p| p.actor.0))
             .unwrap_or(0);
         let dead = {
-            let mut h = self.world.get::<&mut Health>(e).map_err(|_| VerbError::NoTarget)?;
+            let mut h = self.world.get::<&mut Health>(e).map_err(|_| ActionError::NoTarget)?;
             h.hp -= DAMAGE_PER_CLICK;
             h.hp <= 0
         };

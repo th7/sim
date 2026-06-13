@@ -51,7 +51,7 @@ fn overworld_scenario_displays_every_ui_element_state() {
     assert!(!rs.inventory.is_empty(), "inventory items");
     assert!(rs.last_error.is_some(), "error line");
 
-    // Targeting: a Target marker on a visible entity, and a Ready Verb button.
+    // Targeting: a Target marker on a visible entity, and a Ready Action button.
     let target = rs.target.as_deref().expect("a Target is displayed");
     assert!(
         rs.nodes.contains_key(target)
@@ -61,9 +61,9 @@ fn overworld_scenario_displays_every_ui_element_state() {
         "the Target marker sits on a visible entity"
     );
     assert!(
-        matches!(rs.verb_button, client::model::VerbButton::Ready("harvest")),
-        "the Verb button is Ready over an in-range Gatherable, got {:?}",
-        rs.verb_button
+        matches!(rs.action_button, client::model::ActionButton::Ready("harvest")),
+        "the Action button is Ready over an in-range Gatherable, got {:?}",
+        rs.action_button
     );
 
     // Dev overlay: stats present and covering every chunk lifecycle, with a
@@ -113,15 +113,15 @@ fn instance_scenario_shows_the_instance_realm_with_an_empty_inventory() {
     assert!(rs.last_error.is_none(), "no error line");
     assert!(rs.players.contains_key(&rs.own), "own player anchors the camera");
     assert!(!rs.frozen, "a live scene is not frozen");
-    // No Target here: the Verb button's Inert state is on display.
+    // No Target here: the Action button's Inert state is on display.
     assert!(rs.target.is_none(), "no Target in the instance scenario");
     assert!(
-        matches!(rs.verb_button, client::model::VerbButton::Inert),
-        "the Inert Verb button is displayed"
+        matches!(rs.action_button, client::model::ActionButton::Inert),
+        "the Inert Action button is displayed"
     );
 }
 
-/// The Verb button's third state: a Target whose lawful render is out of
+/// The Action button's third state: a Target whose lawful render is out of
 /// interact range shows Dimmed (still pressable — the hint, not a gate).
 #[test]
 fn wildlife_scenario_displays_a_dimmed_verb_button_on_a_far_target() {
@@ -129,9 +129,9 @@ fn wildlife_scenario_displays_a_dimmed_verb_button_on_a_far_target() {
     let target = rs.target.as_deref().expect("a Target is displayed");
     assert!(rs.npcs.contains_key(target), "the wildlife Target is an NPC");
     assert!(
-        matches!(rs.verb_button, client::model::VerbButton::Dimmed("damage")),
-        "the Dimmed Verb button is displayed, got {:?}",
-        rs.verb_button
+        matches!(rs.action_button, client::model::ActionButton::Dimmed("damage")),
+        "the Dimmed Action button is displayed, got {:?}",
+        rs.action_button
     );
 }
 

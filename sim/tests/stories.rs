@@ -14,7 +14,7 @@ use sim::components::{Inventory, Item, Position, StructureKind, WireId};
 use sim::geometry::{chunk_center, ChunkCoord};
 use sim::motivation::{Drives, NpcKind};
 use sim::sim::Sim;
-use sim::verbs::VerbError;
+use sim::actions::ActionError;
 use sim::wire::{entity_states, EntityWire};
 
 fn at(x: i64, y: i64) -> Position {
@@ -36,13 +36,13 @@ fn wood(sim: &Sim, who: &str) -> u32 {
 // tick between calls (so "two clicks, no tick between" still holds). Players
 // send these as intents over the wire; that path (enqueue + tick + async
 // outcome) is pinned in `overload_backpressure` and the sim suite.
-fn harvest(sim: &mut Sim, who: &str, target: &str) -> Result<(), VerbError> {
+fn harvest(sim: &mut Sim, who: &str, target: &str) -> Result<(), ActionError> {
     sim.harvest(who, &WireId(target.into())).map(|_| ())
 }
-fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) -> Result<(), VerbError> {
+fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) -> Result<(), ActionError> {
     sim.build(who, kind, x, y).map(|_| ())
 }
-fn damage(sim: &mut Sim, who: &str, target: &str) -> Result<(), VerbError> {
+fn damage(sim: &mut Sim, who: &str, target: &str) -> Result<(), ActionError> {
     let frontier = sim.clock_ms() / sim::consts::TICK_MS;
     sim.damage(who, &WireId(target.into()), frontier).map(|_| ())
 }
@@ -333,7 +333,7 @@ mod instances {
 
     // Scenario: Entering an Instance through a Portal, and
     // Scenario: Exiting returns the Player to where they entered —
-    //   `verbs::portal_entry_and_exit_round_trip`.
+    //   `actions::portal_entry_and_exit_round_trip`.
     // Scenario: Disconnecting inside an Instance returns the Player beside the
     //   entry Portal — `persistence::mid_instance_disconnect_resumes_west_of_entry_portal`.
 
@@ -345,7 +345,7 @@ mod instances {
         // No Structures: building is refused outright inside an Instance.
         assert_eq!(
             build(&mut sim, "p", StructureKind::Wall, 23_000, 24_000),
-            Err(VerbError::NoBuildInInstance),
+            Err(ActionError::NoBuildInInstance),
             "an Instance hosts no Structures"
         );
         // No Resource nodes on the wire, and a harvest finds nothing to gather:
@@ -359,7 +359,7 @@ mod instances {
         let p = sim.position("p").unwrap();
         assert_eq!(
             harvest(&mut sim, "p", &format!("tree:{}:{}", p.x, p.y)),
-            Err(VerbError::NoTarget),
+            Err(ActionError::NoTarget),
             "a harvest in an Instance finds nothing to gather"
         );
     }
@@ -384,7 +384,7 @@ mod harvest_resource_node {
 
     // Scenario: Harvesting a tree yields wood; Scenario: a harvested node
     // depletes; Scenario: a depleted node respawns on a timer —
-    //   `verbs::harvest_yields_wood_and_depletes_then_respawns`.
+    //   `actions::harvest_yields_wood_and_depletes_then_respawns`.
 
     /// Scenario: A node's Footprint is unchanged by depletion.
     /// Movement-blocking of a depleted node is in
@@ -400,10 +400,10 @@ mod harvest_resource_node {
         }
         assert_eq!(wood(&sim, "p"), 5);
         // Building on the depleted centre node is still Footprint-blocked, exactly
-        // as it is for a full node (`verbs::build_errors`).
+        // as it is for a full node (`actions::build_errors`).
         assert_eq!(
             build(&mut sim, "p", StructureKind::Wall, 8_000, 8_000),
-            Err(VerbError::FootprintBlocked),
+            Err(ActionError::FootprintBlocked),
             "a depleted node keeps its Footprint"
         );
     }
@@ -417,7 +417,7 @@ mod build_structure {
 
     // Scenario: Building a wooden palisade spends its cost (and is owned by the
     // placer); Scenario: building requires enough wood —
-    //   `verbs::build_places_wall_and_spends_wood`, `verbs::build_errors`.
+    //   `actions::build_places_wall_and_spends_wood`, `actions::build_errors`.
 
     /// Scenario: A built Structure blocks Player movement.
     #[test]
@@ -443,7 +443,7 @@ mod damage_structure {
     use super::*;
 
     // Scenario: A Structure can be damaged; Scenario: enough damage destroys it
-    // (it no longer exists) — `verbs::damage_reduces_hp_and_destroys_at_zero`.
+    // (it no longer exists) — `actions::damage_reduces_hp_and_destroys_at_zero`.
 
     /// Scenario: a destroyed Structure no longer blocks Player movement.
     #[test]

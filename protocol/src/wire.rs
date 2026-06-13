@@ -195,9 +195,9 @@ pub struct AckPayload {
     pub tick: u64,
 }
 
-/// An entity-directed Verb: acts on the Target's identity (its WireId), never
+/// An entity-directed Action: acts on the Target's identity (its WireId), never
 /// on a remembered place. `seq` is the movement input seq at press time — the
-/// Verb resolves at the tick that seq's movement applies (press-frame own
+/// Action resolves at the tick that seq's movement applies (press-frame own
 /// position; see `design/targeting-and-wysiwyg.md`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HarvestPayload {
@@ -220,7 +220,7 @@ pub struct BuildPayload {
     pub seq: u32,
 }
 
-/// An entity-directed Verb: see [`HarvestPayload`].
+/// An entity-directed Action: see [`HarvestPayload`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DamagePayload {
     pub target: String,

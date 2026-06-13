@@ -121,7 +121,7 @@ fn overworld(t_ms: f64) -> RenderState {
 
     model.on_snapshot(ChunkCoord::new(0, 0), snap);
 
-    // Targeting: the in-range tree wears the Target marker and the Verb
+    // Targeting: the in-range tree wears the Target marker and the Action
     // button reads Ready("harvest").
     model.click(8.8, 6.0);
 
@@ -131,7 +131,7 @@ fn overworld(t_ms: f64) -> RenderState {
             .into_iter()
             .collect(),
     });
-    model.on_verb_error("sample_rejection".into());
+    model.on_action_error("sample_rejection".into());
 
     // Dev overlay on, with the 3×3 ring cycling through every lifecycle and a
     // countdown on the idle-armed chunks.
@@ -199,7 +199,7 @@ fn wildlife(_t_ms: f64) -> RenderState {
     // The showcase's own player anchors the camera at the grid centre.
     snap.players.insert("showcase".into(), PlayerWire { x: 6_500, y: 7_000, ..PlayerWire::default() });
     model.on_snapshot(ChunkCoord::new(0, 0), snap);
-    // Target a far grid animal: the Verb button's Dimmed state on display
+    // Target a far grid animal: the Action button's Dimmed state on display
     // (out of lawful-rendered range — a press would still send).
     model.click(2.0, 1.5);
     RenderState::from_model(&model)

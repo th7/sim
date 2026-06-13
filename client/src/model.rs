@@ -44,11 +44,11 @@ pub enum Outbound {
     Damage(DamagePayload),
 }
 
-/// The Verb button's display state. The readiness hint reads the lawful render
+/// The Action button's display state. The readiness hint reads the lawful render
 /// — the same frame the Island judges in — so it is honest by construction;
 /// `Dimmed` is a hint, never a gate (a dimmed press still sends).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VerbButton {
+pub enum ActionButton {
     /// No Target: the button is inert (a press sends nothing).
     Inert,
     /// The Target is within lawful-rendered interact range of the player.
@@ -75,7 +75,7 @@ pub struct ClientModel {
     move_seq: u32,
     last_error: Option<String>,
     /// The current Target: the one entity designated to receive the next
-    /// entity-directed Verb (its WireId). Sticky observation — see the Target
+    /// entity-directed Action (its WireId). Sticky observation — see the Target
     /// glossary entry; set by clicking a targetable entity, cleared explicitly
     /// or when the entity ceases to be visible.
     target: Option<String>,
@@ -173,7 +173,7 @@ impl ClientModel {
 
     /// A verb (harvest/build/damage) was rejected by the server. Surface the
     /// reason so the view can show it instead of failing silently.
-    pub fn on_verb_error(&mut self, reason: String) {
+    pub fn on_action_error(&mut self, reason: String) {
         self.last_error = Some(reason);
     }
 
@@ -310,9 +310,9 @@ impl ClientModel {
         self.target.as_deref()
     }
 
-    /// The Verb the current Target implies and the entity's rendered position
+    /// The Action the current Target implies and the entity's rendered position
     /// — `None` when no Target is visible.
-    fn target_verb_and_pos(&self) -> Option<(&'static str, i64, i64)> {
+    fn target_action_and_pos(&self) -> Option<(&'static str, i64, i64)> {
         let wid = self.target.as_deref()?;
         if let Some(n) = self.nodes().get(wid) {
             return Some(("harvest", n.x, n.y));
@@ -329,31 +329,31 @@ impl ClientModel {
         None
     }
 
-    /// The Verb button's display state — see [`VerbButton`]. The range hint
+    /// The Action button's display state — see [`ActionButton`]. The range hint
     /// reads the lawful render (own Mirror position vs the Target's rendered
     /// position), the same frame the Island judges in.
-    pub fn verb_button(&self) -> VerbButton {
-        let Some((verb, tx, ty)) = self.target_verb_and_pos() else {
-            return VerbButton::Inert;
+    pub fn action_button(&self) -> ActionButton {
+        let Some((verb, tx, ty)) = self.target_action_and_pos() else {
+            return ActionButton::Inert;
         };
         let Some(me) = self.player_pos(&self.username) else {
-            return VerbButton::Dimmed(verb);
+            return ActionButton::Dimmed(verb);
         };
         let (dx, dy) = (me.x - tx, me.y - ty);
         if dx * dx + dy * dy <= INTERACT_RANGE_SQ {
-            VerbButton::Ready(verb)
+            ActionButton::Ready(verb)
         } else {
-            VerbButton::Dimmed(verb)
+            ActionButton::Dimmed(verb)
         }
     }
 
-    /// The Verb button: issue the entity-directed Verb the current Target
+    /// The Action button: issue the entity-directed Action the current Target
     /// implies — a Gatherable (Resource node or Carcass) → harvest; a
     /// Structure or NPC → damage. Inert without a Target. With one, it always
     /// sends: eligibility (range, state) is the Island's to judge, and a
     /// refusal arrives async as `action_rejected` — the client never
     /// suppresses a press on speculated data.
-    pub fn press_verb(&mut self) -> Vec<Cmd> {
+    pub fn press_action(&mut self) -> Vec<Cmd> {
         let Some(wid) = self.target.clone() else {
             return Vec::new();
         };
@@ -722,8 +722,8 @@ mod tests {
         // Click at world (8,8) — the tree becomes the Target; nothing is sent.
         assert!(m.click(8.0, 8.0).is_empty(), "clicking selects only");
         assert_eq!(m.target(), Some("tree:8000:8000"));
-        // The Verb button issues the harvest at the Target's identity.
-        let cmds = m.press_verb();
+        // The Action button issues the harvest at the Target's identity.
+        let cmds = m.press_action();
         assert_eq!(
             cmds,
             vec![Cmd::Send(Outbound::Harvest(HarvestPayload {
@@ -753,7 +753,7 @@ mod tests {
         assert!(cmds.is_empty(), "targets the depleted tree; never builds on it");
         assert_eq!(m.target(), Some("tree:8000:8000"));
         assert!(
-            matches!(&m.press_verb()[..], [Cmd::Send(Outbound::Harvest(_))]),
+            matches!(&m.press_action()[..], [Cmd::Send(Outbound::Harvest(_))]),
             "the press sends; the Island answers `depleted`"
         );
     }
@@ -768,7 +768,7 @@ mod tests {
         );
         m.on_snapshot(cc(0, 0), snap);
         m.click(8.2, 8.0);
-        let cmds = m.press_verb();
+        let cmds = m.press_action();
         assert_eq!(
             cmds,
             vec![Cmd::Send(Outbound::Damage(DamagePayload { target: "npc:deer:5".into(), seq: 0, frontier: 0 }))]
@@ -785,7 +785,7 @@ mod tests {
         );
         m.on_snapshot(cc(0, 0), snap);
         m.click(3.5, 3.0);
-        let cmds = m.press_verb();
+        let cmds = m.press_action();
         assert_eq!(
             cmds,
             vec![Cmd::Send(Outbound::Damage(DamagePayload {
@@ -814,7 +814,7 @@ mod tests {
         // Inert without a Target; Ready with one in lawful-rendered range;
         // Dimmed (but still pressable — always-send) out of range.
         let mut m = model_with_player_at(8_000, 8_000);
-        assert_eq!(m.verb_button(), VerbButton::Inert);
+        assert_eq!(m.action_button(), ActionButton::Inert);
 
         let mut snap = snap_with_player("alice", 8_000, 8_000);
         snap.resource_nodes.insert(
@@ -828,12 +828,12 @@ mod tests {
         m.on_snapshot(cc(0, 0), snap);
 
         m.click(8.5, 8.0);
-        assert_eq!(m.verb_button(), VerbButton::Ready("harvest"), "in-range Gatherable");
+        assert_eq!(m.action_button(), ActionButton::Ready("harvest"), "in-range Gatherable");
 
         m.click(12.0, 8.0);
-        assert_eq!(m.verb_button(), VerbButton::Dimmed("damage"), "out-of-range NPC: dimmed, not denied");
+        assert_eq!(m.action_button(), ActionButton::Dimmed("damage"), "out-of-range NPC: dimmed, not denied");
         assert!(
-            matches!(&m.press_verb()[..], [Cmd::Send(Outbound::Damage(_))]),
+            matches!(&m.press_action()[..], [Cmd::Send(Outbound::Damage(_))]),
             "a dimmed press still sends — the Island judges"
         );
     }
@@ -915,7 +915,7 @@ mod tests {
         assert_eq!(m.target(), Some("tree:8000:8000"));
         m.escape();
         assert_eq!(m.target(), None);
-        assert!(m.press_verb().is_empty(), "no Target → the Verb button is inert");
+        assert!(m.press_action().is_empty(), "no Target → the Action button is inert");
     }
 
     #[test]
@@ -967,7 +967,7 @@ mod tests {
     fn verb_error_is_captured_as_last_error() {
         let (mut m, _) = ClientModel::new("alice", cc(0, 0));
         assert!(m.last_error().is_none(), "starts clear");
-        m.on_verb_error("footprint_blocked".into());
+        m.on_action_error("footprint_blocked".into());
         assert_eq!(m.last_error(), Some("footprint_blocked"));
     }
 
@@ -980,7 +980,7 @@ mod tests {
         let mut inv = BTreeMap::new();
         inv.insert("wood".to_string(), 5);
         m.on_self(SelfPayload { inventory: inv });
-        m.on_verb_error("footprint_blocked".into());
+        m.on_action_error("footprint_blocked".into());
         let cmds = m.click(3.2, 3.2);
         assert!(matches!(cmds.as_slice(), [Cmd::Send(Outbound::Build(_))]));
         assert_eq!(m.last_error(), None, "issuing a fresh verb clears the stale error");

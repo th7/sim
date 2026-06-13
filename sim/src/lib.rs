@@ -37,7 +37,7 @@ pub mod repack;
 pub mod server;
 pub mod sim;
 pub mod transport;
-pub mod verbs;
+pub mod actions;
 pub mod wire;
 pub mod world;
 pub mod worldgen;

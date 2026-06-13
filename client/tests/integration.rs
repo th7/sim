@@ -132,18 +132,18 @@ async fn click_targets_the_tree_and_the_verb_button_harvests_it() {
         alice.pump_until(T, |m| m.nodes().contains_key("tree:8000:8000")).await,
         "the centre tree should be visible"
     );
-    // Clicking the tree designates it the Target — and issues no Verb.
+    // Clicking the tree designates it the Target — and issues no Action.
     alice.click(8.0, 8.0).await.unwrap();
     assert_eq!(alice.model().target(), Some("tree:8000:8000"));
     assert!(
         !alice.pump_until(Duration::from_millis(500), |m| !m.inventory().is_empty()).await,
-        "clicking selects only — nothing harvested before the Verb button is pressed"
+        "clicking selects only — nothing harvested before the Action button is pressed"
     );
-    // The Verb button issues the harvest at the Target's identity.
-    alice.press_verb().await.unwrap();
+    // The Action button issues the harvest at the Target's identity.
+    alice.press_action().await.unwrap();
     assert!(
         alice.pump_until(T, |m| m.inventory().get("wood").copied().unwrap_or(0) >= 1).await,
-        "pressing the Verb button should harvest the targeted tree"
+        "pressing the Action button should harvest the targeted tree"
     );
 }
 
@@ -516,7 +516,7 @@ async fn click_builds_a_wall_in_the_cell_directly_next_to_the_cluster() {
     assert_eq!((wall.kind.as_str(), wall.hp), ("wall", 100));
 }
 
-/// When the Island rejects a Verb, the reason is observable on the client model
+/// When the Island rejects a Action, the reason is observable on the client model
 /// (which the view will show in the HUD), rather than failing silently. The
 /// press always sends — a depleted Target is the Island's to judge — and the
 /// async `action_rejected` lands in `last_error`. (The old build-on-depleted
@@ -551,7 +551,7 @@ async fn a_rejected_press_surfaces_the_islands_reason_in_last_error() {
     // Island's to judge) and the Island answers `depleted`, asynchronously.
     alice.click(8.5, 8.5).await.unwrap();
     assert_eq!(alice.model().target(), Some("tree:8500:8500"));
-    alice.press_verb().await.unwrap();
+    alice.press_action().await.unwrap();
     assert!(
         alice.pump_until(T, |m| m.last_error() == Some("depleted")).await,
         "the Island's rejection reason becomes visible to the client"
@@ -562,8 +562,8 @@ async fn a_rejected_press_surfaces_the_islands_reason_in_last_error() {
 }
 
 /// Seq-pinning end-to-end: target a far tree, run at it, and press the moment
-/// the Verb button lights. The press is judged at the exact frame the client
-/// displayed (the Verb resolves at its seq's tick), so the running press
+/// the Action button lights. The press is judged at the exact frame the client
+/// displayed (the Action resolves at its seq's tick), so the running press
 /// succeeds deterministically — under arrival-time judging this would race
 /// the player's own latency and flake.
 #[tokio::test]
@@ -578,8 +578,8 @@ async fn a_press_the_moment_the_button_lights_succeeds_while_moving() {
     alice.click(24.0, 8.0).await.unwrap();
     assert_eq!(alice.model().target(), Some("tree:24000:8000"));
     assert_eq!(
-        alice.model().verb_button(),
-        client::model::VerbButton::Dimmed("harvest"),
+        alice.model().action_button(),
+        client::model::ActionButton::Dimmed("harvest"),
         "far target: dimmed"
     );
 
@@ -587,11 +587,11 @@ async fn a_press_the_moment_the_button_lights_succeeds_while_moving() {
     alice.movement(false, false, true, false).await.unwrap();
     assert!(
         alice
-            .pump_until(T, |m| m.verb_button() == client::model::VerbButton::Ready("harvest"))
+            .pump_until(T, |m| m.action_button() == client::model::ActionButton::Ready("harvest"))
             .await,
         "the button lights as the lawful render enters range"
     );
-    alice.press_verb().await.unwrap();
+    alice.press_action().await.unwrap();
     alice.movement(false, false, false, false).await.unwrap();
 
     assert!(
@@ -601,7 +601,7 @@ async fn a_press_the_moment_the_button_lights_succeeds_while_moving() {
     assert_ne!(alice.model().last_error(), Some("too_far"), "no arrival-time rejection");
 }
 
-/// The full hunt loop over the wire: click an NPC → Target; press the Verb
+/// The full hunt loop over the wire: click an NPC → Target; press the Action
 /// button → entity-directed damage kills it into a Carcass; click the Carcass
 /// → retarget (no auto-transfer — the Carcass is a different entity); press →
 /// harvest yields meat + hide. A wolf is the quarry: it idles until provoked,
@@ -629,7 +629,7 @@ async fn hunt_target_press_kill_then_harvest_the_carcass() {
 
     // Four presses (80 HP / 25 per hit) — identity-directed, no re-aiming.
     for _ in 0..4 {
-        alice.press_verb().await.unwrap();
+        alice.press_action().await.unwrap();
     }
     assert!(
         alice.pump_until(T, |m| m.npcs().is_empty() && !m.carcasses().is_empty()).await,
@@ -641,7 +641,7 @@ async fn hunt_target_press_kill_then_harvest_the_carcass() {
     let (carcass_id, c) = alice.model().carcasses().into_iter().next().unwrap();
     alice.click(c.x as f64 / 1_000.0, c.y as f64 / 1_000.0).await.unwrap();
     assert_eq!(alice.model().target(), Some(carcass_id.as_str()));
-    alice.press_verb().await.unwrap();
+    alice.press_action().await.unwrap();
     assert!(
         alice
             .pump_until(T, |m| {

@@ -1,4 +1,4 @@
-//! Verb result errors, with `as_str` matching the contract's `reason` enums
+//! Action result errors, with `as_str` matching the contract's `reason` enums
 //! exactly (`contract/contract.json`). The order in which
 //! the verb implementations check these mirrors the Elixir `with` chains so the
 //! same input yields the same reason.
@@ -16,7 +16,7 @@ pub enum ActionOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VerbError {
+pub enum ActionError {
     NoPlayer,
     TooFar,
     Depleted,
@@ -29,19 +29,19 @@ pub enum VerbError {
     NoBuildInInstance,
 }
 
-impl VerbError {
+impl ActionError {
     pub fn as_str(self) -> &'static str {
         match self {
-            VerbError::NoPlayer => "no_player",
-            VerbError::TooFar => "too_far",
-            VerbError::Depleted => "depleted",
-            VerbError::NoTarget => "no_target",
-            VerbError::NoChunk => "no_chunk",
-            VerbError::InvalidType => "invalid_type",
-            VerbError::OutOfChunk => "out_of_chunk",
-            VerbError::FootprintBlocked => "footprint_blocked",
-            VerbError::InsufficientMaterials => "insufficient_materials",
-            VerbError::NoBuildInInstance => "no_build_in_instance",
+            ActionError::NoPlayer => "no_player",
+            ActionError::TooFar => "too_far",
+            ActionError::Depleted => "depleted",
+            ActionError::NoTarget => "no_target",
+            ActionError::NoChunk => "no_chunk",
+            ActionError::InvalidType => "invalid_type",
+            ActionError::OutOfChunk => "out_of_chunk",
+            ActionError::FootprintBlocked => "footprint_blocked",
+            ActionError::InsufficientMaterials => "insufficient_materials",
+            ActionError::NoBuildInInstance => "no_build_in_instance",
         }
     }
 }

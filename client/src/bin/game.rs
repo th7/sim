@@ -32,7 +32,7 @@ fn main() {
         stats: None,
         last_error: None,
         target: None, // the Target is born empty, like the Mirror
-        verb_button: client::model::VerbButton::Inert,
+        action_button: client::model::ActionButton::Inert,
         frozen: true, // born frozen — until the first authoritative snapshot
     }));
     let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<Input>();
@@ -129,9 +129,9 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
                     dev_view = !dev_view;
                     let _ = input_tx.send(Input::ToggleDev);
                 }
-                // The Verb button's key: act on the current Target.
+                // The Action button's key: act on the current Target.
                 Event::KeyPress { kind: Key::E, .. } => {
-                    let _ = input_tx.send(Input::PressVerb);
+                    let _ = input_tx.send(Input::PressAction);
                 }
                 // Escape: the explicit Target clear.
                 Event::KeyPress { kind: Key::Escape, .. } => {
@@ -157,9 +157,9 @@ fn run_view(cfg: Args, shared: Arc<Mutex<RenderState>>, input_tx: tokio::sync::m
         }
 
         let rs = shared.lock().unwrap().clone();
-        // The HUD Verb button is the same button as `E`.
+        // The HUD Action button is the same button as `E`.
         if view.frame(&context, &mut frame_input, &rs, dev_view, |_| {}) {
-            let _ = input_tx.send(Input::PressVerb);
+            let _ = input_tx.send(Input::PressAction);
         }
         FrameOutput::default()
     });

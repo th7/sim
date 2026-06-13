@@ -1,7 +1,7 @@
 # Targeting & WYSIWYG — decision record
 
-Outcome of a design grill (2026-06-07). Canonical terms live in `glossary.md` (Tick, Verb,
-Target, Frontier, Lawful render, Verb button, Target marker); this records the decisions,
+Outcome of a design grill (2026-06-07). Canonical terms live in `glossary.md` (Tick, Action,
+Target, Frontier, Lawful render, Action button, Target marker); this records the decisions,
 their order, and what was rejected or parked. Increment sequencing is in `PLAN.md`.
 
 ## The feature
@@ -9,8 +9,8 @@ their order, and what was rejected or parked. Increment sequencing is in `PLAN.m
 Select-then-act. Clicking a targetable entity (Gatherable, Structure, NPC — not Players,
 not Portals) designates it the **Target** and does nothing else; the click-priority
 heuristic in the client dies (its build branch survives as click-on-ground, to be improved
-separately). The **Verb button** (`E` + contextual HUD button, one concept) is the only
-issuer of entity-directed Verbs: Gatherable → harvest, Structure/NPC → damage. A Target is
+separately). The **Action button** (`E` + contextual HUD button, one concept) is the only
+issuer of entity-directed Actions: Gatherable → harvest, Structure/NPC → damage. A Target is
 sticky observation: cleared only by Escape, retargeting, despawn, leaving the View window,
 or world transitions — never by distance, never by clicking elsewhere; depleted stays
 targeted. Display is the diegetic **Target marker** only — deliberately no HUD target
@@ -20,39 +20,39 @@ frame (Demeanor/Health stay readable from the entity itself).
 
 Each decision was locked in order; later ones depend on earlier ones.
 
-1. **Verbs act on identity.** Entity-directed Verbs carry the Target's WireId (already the
+1. **Actions act on identity.** Entity-directed Actions carry the Target's WireId (already the
    snapshot key on the wire; the server already indexes by it); the Island resolves through
    `wire_index` and judges against authoritative state. Position payloads (`{x,y}`) leave
-   the wire for harvest/damage. The Mirror's speculation plays no part in any Verb outcome.
+   the wire for harvest/damage. The Mirror's speculation plays no part in any Action outcome.
 2. **No hard client gate.** The client gates only facts it holds non-speculatively (no
-   Target → inert; kind→verb mapping). Range is never client-denied: a denial based on
+   Target → inert; kind→action mapping). Range is never client-denied: a denial based on
    speculated positions is a permanent false negative (the one Mirror divergence that can
    never resolve, because nothing was sent). The button *dims* on a speculated
    out-of-range hint but still sends; the Island judges.
 3. **Intents bind to named Ticks; one lock each — and are processed with their tick.**
    Tick outcomes are a pure function of the locked-intent log under a fixed neutral
    simultaneity law — never network arrival order. The law (revised in the after-the-fact
-   grill, ratified): **movement first, then verbs**, judged at final positions —
+   grill, ratified): **movement first, then actions**, judged at final positions —
    *arrival-into beats placement*, a wall can never appear under a body and is solid from
-   the next tick, and player verbs share the post-movement phase NPC actions always had.
-   Verbs are seq-pinned: a verb pinned to seq S resolves in the very tick S integrates,
+   the next tick, and player actions share the post-movement phase NPC actions always had.
+   Actions are seq-pinned: a action pinned to seq S resolves in the very tick S integrates,
    so own-position eligibility is replay-exact at zero added latency (eliminates "ran at
    the tree, pressed too early" rejections by construction).
 4. **Preemptive resolution (eager facts, final emission).** A tick's facts may resolve
    and emit before all intents arrive, iff no missing input could affect them: each
    missing intent casts a *could-affect shadow* (last position ⊕ max speed ⊕ enforced
-   verb reach, ≈1.6 u, lifetime ≤ INTENT_GRACE_TICKS); outside all shadows, facts are
+   action reach, ≈1.6 u, lifetime ≤ INTENT_GRACE_TICKS); outside all shadows, facts are
    Resolved and emittable immediately. Emittable ⇔ Resolved; finalization is internal
    bookkeeping (Datastore cuts, state retention); speculated values never leave the
    Island. Sim state for tick T is discardable once T+1 finalizes; a separate ~10-tick
    position/intent ring serves judging (below). Monotone refinement ⇒ confluence: values
    are schedule-independent, replay needs only the intent log.
 5. **Lawful-render judging (press-frame eligibility).** A session continuously asserts
-   its **Frontier** (last incorporated authoritative tick) on every input frame; verbs
+   its **Frontier** (last incorporated authoritative tick) on every input frame; actions
    carry nothing and inherit it. Hard checks: delivered-tick reality, never-future
    (violation = proof of cheating), monotone, `M − frontier ≤ LEAD_BOUND` (asserting
    staleness forces freezing your own inputs, as an honest lagged Mirror would). Range
-   eligibility for entity-directed Verbs is judged in the **press frame**: own exact
+   eligibility for entity-directed Actions is judged in the **press frame**: own exact
    position vs the Target's lawful render (server-recomputed via the shared integrator
    from its ring). Forgiveness is continuous-only (never liveness/depletion/yields);
    effects land at the resolve tick, never backdated. Residual exploit: the permanent
@@ -80,12 +80,12 @@ Disconnect-on-proof joins the lockstep trio on the PvP-era list.
 
 Each deviation, with the options weighed and the choice taken:
 
-1. **The Frontier rides entity-directed Verbs, not every input frame.** The
-   grill locked "frontier on every input frame; verbs carry nothing" — but the
+1. **The Frontier rides entity-directed Actions, not every input frame.** The
+   grill locked "frontier on every input frame; actions carry nothing" — but the
    protocol sends *no* input frames while idle (Intent renewal goes silent), so
    a standing-only assertion goes stale exactly when a stationary player
    presses. Options: (a) assert on idle keepalive frames (new traffic, changes
-   the idle-silence protocol), (b) assert per-Verb with per-player monotonicity
+   the idle-silence protocol), (b) assert per-Action with per-player monotonicity
    (this choice), (c) both. Choice (b): identical judging power; per-press
    shopping stays impossible (the assertion is clamped monotone per player —
    regressing claims clamp *up*), never-future and Lead-window clamps as
@@ -108,7 +108,7 @@ something observable.
    finding: the could-affect-shadow machine's *driver* — resolution waiting on
    missing intents — does not exist in this architecture. Intent is perishable
    and the tick never stalls (grace absorbs missing frames); the only fact
-   that ever waits is a seq-pinned Verb, whose pin *is* its could-affect
+   that ever waits is a seq-pinned Action, whose pin *is* its could-affect
    dependency, already minimal. Shadows become load-bearing only under the
    parked lockstep trio (tick-named intent *locking* with gated emission).
    Options: (a) build the trio now to give shadows a driver (contradicts the
@@ -126,7 +126,7 @@ something observable.
    determinism makes anything older recomputable from the intent log).
    When the trio lands, the shadow scheduler slots under it unchanged.
 
-4. **The unreachable-pin fallback (the reachability rule).** A seq-pinned Verb
+4. **The unreachable-pin fallback (the reachability rule).** A seq-pinned Action
    is held only while its seq is reachable — ≤ the highest seq consumed or
    queued for that session. A pin *above* that envelope can never be satisfied
    by any real Input frame (a fabricated future seq, or a frame dropped under
@@ -142,15 +142,15 @@ something observable.
    on queue state, so schedule-invariance is forfeited for the input class
    that lied — replay determinism survives (the enqueue tick is logged), and
    no scheduling/reach advantage is obtainable. Pinned by
-   `a_verb_pinned_to_an_unreachable_seq_resolves_without_waiting` and its
-   reachable counterpart `a_verb_pinned_to_a_pending_seq_waits_for_it`.
+   `an_action_pinned_to_an_unreachable_seq_resolves_without_waiting` and its
+   reachable counterpart `an_action_pinned_to_a_pending_seq_waits_for_it`.
 
 ## Visual confirmation
 
 The view layer was confirmed on a real display (the in-container build has no GL, so the
 Showcase machine-checks *presence* of every drawable; appearance needs eyes): the diegetic
-**Target marker** disc, the contextual **Verb button** in its inert/ready/dimmed states,
-and the `E`/Escape bindings. **Verb-button labels are final as the raw verb names**
+**Target marker** disc, the contextual **Action button** in its inert/ready/dimmed states,
+and the `E`/Escape bindings. **Action-button labels are final as the raw action names**
 ("harvest (E)" / "damage (E)") — domain vocabulary doubles as display vocabulary, one
 fewer mapping to drift (closing the one open presentation question from the grill). The
 older cosmetic-gap list (portal ring, grid lines, shadows — see `PLAN.md`) was outside

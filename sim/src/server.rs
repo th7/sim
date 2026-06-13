@@ -94,7 +94,7 @@ pub fn route(sim: &mut Sim, conn: &mut ConnState, msg: &PhxMessage) -> Outcome {
             }
             Outcome::default() // move takes no reply
         }
-        // Verbs are fire-and-forget intents: enqueue and reply nothing (like
+        // Actions are fire-and-forget intents: enqueue and reply nothing (like
         // `move`). The outcome — effect deltas or an async `action_rejected` —
         // arrives later through the broadcast channel. Malformed frames are
         // dropped silently, as `move` drops a missing dx/dy.

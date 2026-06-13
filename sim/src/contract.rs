@@ -5,23 +5,23 @@
 //! the `export-contract` bin) and a freshness test asserts the committed file
 //! still matches — so the schema cannot drift from the code. The drift-prone
 //! enum strings are sourced from the Rust types themselves (verb-error reasons
-//! from [`crate::verbs::VerbError`], the structure type from `StructureKind`).
+//! from [`crate::actions::ActionError`], the structure type from `StructureKind`).
 
 use crate::components::StructureKind;
-use crate::verbs::VerbError;
+use crate::actions::ActionError;
 use serde_json::{json, Value};
 
 /// The full wire contract as a JSON value.
 pub fn contract() -> Value {
     json!({
         "messages": [
-            // Verbs are fire-and-forget intents (like `move`): no reply. The
+            // Actions are fire-and-forget intents (like `move`): no reply. The
             // outcome arrives asynchronously — effect deltas, a `self` push, or
             // an `action_rejected` push.
             intent("build", build_payload()),
             intent("damage", entity_verb_payload()),
             intent("harvest", entity_verb_payload()),
-            // `join` errors are channel-join reasons (not VerbError), kept as literals.
+            // `join` errors are channel-join reasons (not ActionError), kept as literals.
             join_message(),
             move_message(),
             out("ack", "player", ack_payload()),
@@ -114,15 +114,15 @@ fn action_rejected_payload() -> Value {
 /// queue is full).
 fn action_reasons() -> Value {
     let mut rs: Vec<&str> = [
-        VerbError::NoPlayer,
-        VerbError::TooFar,
-        VerbError::Depleted,
-        VerbError::NoTarget,
-        VerbError::NoChunk,
-        VerbError::OutOfChunk,
-        VerbError::FootprintBlocked,
-        VerbError::InsufficientMaterials,
-        VerbError::NoBuildInInstance,
+        ActionError::NoPlayer,
+        ActionError::TooFar,
+        ActionError::Depleted,
+        ActionError::NoTarget,
+        ActionError::NoChunk,
+        ActionError::OutOfChunk,
+        ActionError::FootprintBlocked,
+        ActionError::InsufficientMaterials,
+        ActionError::NoBuildInInstance,
     ]
     .iter()
     .map(|e| e.as_str())

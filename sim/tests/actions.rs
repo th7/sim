@@ -5,7 +5,7 @@ use sim::components::{Inventory, Item, Position, StructureKind, WireId};
 use sim::geometry::ChunkCoord;
 use sim::ids::Realm;
 use sim::sim::Sim;
-use sim::verbs::VerbError;
+use sim::actions::ActionError;
 use sim::wire::{entity_states, EntityWire};
 
 fn at(x: i64, y: i64) -> Position {
@@ -23,13 +23,13 @@ fn with_wood(n: u32) -> Inventory {
 // error-reason assertions below, applied with no tick between calls. (Players
 // send these as fire-and-forget intents over the wire; that path — enqueue +
 // tick + async outcome — is covered by the sim/stories suites.)
-fn harvest(sim: &mut Sim, who: &str, target: &str) -> Result<(), VerbError> {
+fn harvest(sim: &mut Sim, who: &str, target: &str) -> Result<(), ActionError> {
     sim.harvest(who, &WireId(target.into())).map(|_| ())
 }
-fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) -> Result<(), VerbError> {
+fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) -> Result<(), ActionError> {
     sim.build(who, kind, x, y).map(|_| ())
 }
-fn damage(sim: &mut Sim, who: &str, target: &str) -> Result<(), VerbError> {
+fn damage(sim: &mut Sim, who: &str, target: &str) -> Result<(), ActionError> {
     let frontier = sim.clock_ms() / sim::consts::TICK_MS;
     sim.damage(who, &WireId(target.into()), frontier).map(|_| ())
 }
@@ -50,7 +50,7 @@ fn harvest_yields_wood_and_depletes_then_respawns() {
         other => panic!("expected depleted node, got {other:?}"),
     }
     // Re-harvesting a depleted node fails.
-    assert_eq!(harvest(&mut sim, "alice", "tree:8000:8000"), Err(VerbError::Depleted));
+    assert_eq!(harvest(&mut sim, "alice", "tree:8000:8000"), Err(ActionError::Depleted));
 
     // After RESPAWN_MS (30s = 600 ticks) it is gatherable again.
     for _ in 0..600 {
@@ -66,11 +66,11 @@ fn harvest_errors() {
     sim.connect_at("alice", at(8_000, 8_000), Inventory::default());
 
     // A real but far-away target (the neighbour chunk's centre tree) → too_far.
-    assert_eq!(harvest(&mut sim, "alice", "tree:24000:8000"), Err(VerbError::TooFar));
+    assert_eq!(harvest(&mut sim, "alice", "tree:24000:8000"), Err(ActionError::TooFar));
     // An identity that names nothing → no_target.
-    assert_eq!(harvest(&mut sim, "alice", "tree:8010:8010"), Err(VerbError::NoTarget));
+    assert_eq!(harvest(&mut sim, "alice", "tree:8010:8010"), Err(ActionError::NoTarget));
     // Unknown player → no_player.
-    assert_eq!(harvest(&mut sim, "ghost", "tree:8000:8000"), Err(VerbError::NoPlayer));
+    assert_eq!(harvest(&mut sim, "ghost", "tree:8000:8000"), Err(ActionError::NoPlayer));
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn build_errors() {
     // Not enough wood (have 4, need 5).
     assert_eq!(
         build(&mut sim, "alice", StructureKind::Wall, 8_000, 12_800),
-        Err(VerbError::InsufficientMaterials)
+        Err(ActionError::InsufficientMaterials)
     );
 
     // Out of the player's chunk (chunk 1).
@@ -110,13 +110,13 @@ fn build_errors() {
     rich.connect_at("bob", at(8_000, 8_000), with_wood(10));
     assert_eq!(
         build(&mut rich, "bob", StructureKind::Wall, 20_000, 20_000),
-        Err(VerbError::OutOfChunk)
+        Err(ActionError::OutOfChunk)
     );
 
     // Footprint blocked: building on the center tree.
     assert_eq!(
         build(&mut rich, "bob", StructureKind::Wall, 8_000, 8_000),
-        Err(VerbError::FootprintBlocked)
+        Err(ActionError::FootprintBlocked)
     );
 }
 
@@ -132,7 +132,7 @@ fn build_is_range_gated_server_side() {
     // Same chunk, two units away → too_far.
     assert_eq!(
         build(&mut sim, "alice", StructureKind::Wall, 8_000, 14_000),
-        Err(VerbError::TooFar)
+        Err(ActionError::TooFar)
     );
     // Adjacent cell → builds.
     assert_eq!(build(&mut sim, "alice", StructureKind::Wall, 8_000, 12_800), Ok(()));
@@ -161,7 +161,7 @@ fn damage_reduces_hp_and_destroys_at_zero() {
     let states = entity_states(sim.overworld());
     assert!(!states.contains_key(&WireId("structure:3500:3000".into())));
     // Now no target there.
-    assert_eq!(damage(&mut sim, "alice", "structure:3500:3000"), Err(VerbError::NoTarget));
+    assert_eq!(damage(&mut sim, "alice", "structure:3500:3000"), Err(ActionError::NoTarget));
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn damage_too_far() {
     build(&mut sim, "alice", StructureKind::Wall, 3_500, 3_000).unwrap();
     // A player far from the wall cannot damage it.
     sim.connect_at("bob", at(10_000, 10_000), Inventory::default());
-    assert_eq!(damage(&mut sim, "bob", "structure:3500:3000"), Err(VerbError::TooFar));
+    assert_eq!(damage(&mut sim, "bob", "structure:3500:3000"), Err(ActionError::TooFar));
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn portal_entry_and_exit_round_trip() {
         .any(|e| matches!(e, sim::sim::OutboundEvent::Relocated { coord, .. } if *coord == ChunkCoord::new(1, 1))));
 
     // Building in an Instance is refused.
-    assert_eq!(build(&mut sim, "alice", StructureKind::Wall, 23_000, 24_000), Err(VerbError::NoBuildInInstance));
+    assert_eq!(build(&mut sim, "alice", StructureKind::Wall, 23_000, 24_000), Err(ActionError::NoBuildInInstance));
 
     // Walk east onto the return portal → exit back to the Overworld.
     sim.set_intent("alice", 1.0, 0.0);

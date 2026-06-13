@@ -2,7 +2,7 @@
 //!
 //! Holds the realms (one Overworld, zero-or-more Instances), an explicit
 //! deterministic clock, and the player→realm routing. [`Sim::tick`] advances
-//! every realm by one tick and the clock by [`consts::TICK_MS`]. Verbs and
+//! every realm by one tick and the clock by [`consts::TICK_MS`]. Actions and
 //! Instance transitions are layered on in later modules; this core is enough to
 //! prove the cluster model: movement, crossings, merges, splits, and the
 //! never-under-merge invariant.
@@ -14,7 +14,7 @@ use crate::datastore::{Datastore, DurableStore, MemStore, PersistEvent, PlayerRe
 use crate::ecosystem::{self, Stratum};
 use crate::geometry::{chunk_center, coord_for, ChunkCoord};
 use crate::ids::{ClusterId, Realm};
-use crate::verbs::{ActionOutcome, VerbError};
+use crate::actions::{ActionOutcome, ActionError};
 use crate::world::{instance_bounds, RealmWorld};
 use crate::worldgen;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -664,7 +664,7 @@ impl Sim {
         std::mem::take(&mut self.pending)
     }
 
-    // --- Verbs ---
+    // --- Actions ---
 
     // The synchronous verb-effect primitives the async intent path
     // ([`enqueue_action`] + tick) wraps. `resolve_action_intents` calls these
@@ -674,10 +674,10 @@ impl Sim {
     // place of handing callers a whole `RealmWorld`.
 
     /// Apply the harvest verb now, returning its [`ActionOutcome`].
-    pub fn harvest(&mut self, username: &str, target: &WireId) -> Result<ActionOutcome, VerbError> {
-        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
+    pub fn harvest(&mut self, username: &str, target: &WireId) -> Result<ActionOutcome, ActionError> {
+        let realm = self.realm_of(username).ok_or(ActionError::NoPlayer)?;
         let clock = self.clock_ms;
-        self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.harvest(username, target, clock)
+        self.realm_world_mut(realm).ok_or(ActionError::NoChunk)?.harvest(username, target, clock)
     }
 
     /// Place a Structure of `kind` at `(x, y)` now, returning its [`ActionOutcome`].
@@ -687,9 +687,9 @@ impl Sim {
         kind: StructureKind,
         x: i64,
         y: i64,
-    ) -> Result<ActionOutcome, VerbError> {
-        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
-        self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.build(username, kind, x, y)
+    ) -> Result<ActionOutcome, ActionError> {
+        let realm = self.realm_of(username).ok_or(ActionError::NoPlayer)?;
+        self.realm_world_mut(realm).ok_or(ActionError::NoChunk)?.build(username, kind, x, y)
     }
 
     /// Damage the targeted entity now, judged at press-frame `frontier` (the
@@ -700,10 +700,10 @@ impl Sim {
         username: &str,
         target: &WireId,
         frontier: u64,
-    ) -> Result<ActionOutcome, VerbError> {
-        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
+    ) -> Result<ActionOutcome, ActionError> {
+        let realm = self.realm_of(username).ok_or(ActionError::NoPlayer)?;
         let clock = self.clock_ms;
-        self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.damage(username, target, clock, frontier)
+        self.realm_world_mut(realm).ok_or(ActionError::NoChunk)?.damage(username, target, clock, frontier)
     }
 
     pub fn inventory_of(&self, username: &str) -> Option<Inventory> {
@@ -1064,14 +1064,14 @@ mod tests {
         );
     }
 
-    /// Seq-pinning: a Verb carrying movement seq S resolves at the tick after
+    /// Seq-pinning: a Action carrying movement seq S resolves at the tick after
     /// S's movement has integrated, so its eligibility is judged at the exact
     /// position the pressing client displayed (press-frame own position).
     /// Here the press happens while approaching: out of range at send time,
     /// in range at the pinned frame — the old arrival-time judging would have
     /// rejected `too_far`; press-frame judging harvests.
     #[test]
-    fn a_verb_is_judged_at_its_press_frame_position_not_at_arrival() {
+    fn an_action_is_judged_at_its_press_frame_position_not_at_arrival() {
         let mut sim = Sim::new();
         // Approach the centre tree due east: 4 frames west at 200/tick walk
         // x from 9_431 toward the flanking trees' contact point (~8_831),
@@ -1187,14 +1187,14 @@ mod tests {
         );
     }
 
-    /// A Verb pinned to an *unreachable* seq — one greater than everything
+    /// A Action pinned to an *unreachable* seq — one greater than everything
     /// consumed AND everything still queued — resolves immediately (judged at
     /// the current position, the least-generous frame), even while the player
     /// keeps moving. The reachability rule: a pin no real Input frame can ever
     /// satisfy is not held hostage. This closes the moving-fabricator wedge —
     /// a non-empty queue must not let a fabricated future seq wedge the FIFO.
     #[test]
-    fn a_verb_pinned_to_an_unreachable_seq_resolves_without_waiting() {
+    fn an_action_pinned_to_an_unreachable_seq_resolves_without_waiting() {
         let mut sim = Sim::new();
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
         // The player is moving: frames 1,2,3 are queued (pending, not yet
@@ -1216,11 +1216,11 @@ mod tests {
         );
     }
 
-    /// The counterpart: a Verb pinned to a *reachable* pending seq waits for
+    /// The counterpart: a Action pinned to a *reachable* pending seq waits for
     /// that frame to integrate (FIFO), even though resolving now would also
     /// succeed — the pin is honored, not short-circuited.
     #[test]
-    fn a_verb_pinned_to_a_pending_seq_waits_for_it() {
+    fn an_action_pinned_to_a_pending_seq_waits_for_it() {
         let mut sim = Sim::new();
         // Stand one frame's travel short of range; the pinned frame closes it.
         sim.connect_at("a", Position { x: 9_150, y: 8_000 }, Inventory::default());

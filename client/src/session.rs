@@ -34,8 +34,8 @@ pub struct RenderState {
     pub last_error: Option<String>,
     /// The current Target's WireId — the entity wearing the Target marker.
     pub target: Option<String>,
-    /// The Verb button's display state (Inert / Ready / Dimmed).
-    pub verb_button: crate::model::VerbButton,
+    /// The Action button's display state (Inert / Ready / Dimmed).
+    pub action_button: crate::model::ActionButton,
     /// The Mirror is frozen (born, at its Lead bound, or reset): the view
     /// shows a connection signal instead of silently stale state.
     pub frozen: bool,
@@ -60,7 +60,7 @@ impl RenderState {
             stats: model.stats().cloned(),
             last_error: model.last_error().map(str::to_string),
             target: model.target().map(str::to_string),
-            verb_button: model.verb_button(),
+            action_button: model.action_button(),
             frozen: model.mirror_frozen(),
         }
     }
@@ -71,8 +71,8 @@ impl RenderState {
 pub enum Input {
     Movement { north: bool, south: bool, east: bool, west: bool },
     Click { wx: f64, wy: f64 },
-    /// The Verb button (`E` or the HUD button): act on the current Target.
-    PressVerb,
+    /// The Action button (`E` or the HUD button): act on the current Target.
+    PressAction,
     /// Escape: clear the Target.
     Escape,
     ToggleDev,
@@ -169,8 +169,8 @@ impl Session {
                         let cmds = self.model.click(wx, wy);
                         self.execute(cmds).await.ok();
                     }
-                    Some(Input::PressVerb) => {
-                        let cmds = self.model.press_verb();
+                    Some(Input::PressAction) => {
+                        let cmds = self.model.press_action();
                         self.execute(cmds).await.ok();
                     }
                     Some(Input::Escape) => {
@@ -207,10 +207,10 @@ impl Session {
         self.execute(cmds).await
     }
 
-    /// The Verb button (`E` / the HUD button): issue the entity-directed Verb
+    /// The Action button (`E` / the HUD button): issue the entity-directed Action
     /// the current Target implies.
-    pub async fn press_verb(&mut self) -> Result<(), String> {
-        let cmds = self.model.press_verb();
+    pub async fn press_action(&mut self) -> Result<(), String> {
+        let cmds = self.model.press_action();
         self.execute(cmds).await
     }
 
@@ -347,12 +347,12 @@ impl Session {
                 }
             }
             "action_rejected" => {
-                // Verbs are fire-and-forget intents resolved server-side in the
+                // Actions are fire-and-forget intents resolved server-side in the
                 // tick; a refusal (a tick-time verb error, or `queue_full` under
                 // overload) comes back as this async push. Surface its reason so
                 // the user doesn't see clicks fail silently.
                 if let Some(reason) = m.payload.get("reason").and_then(|s| s.as_str()) {
-                    self.model.on_verb_error(reason.to_string());
+                    self.model.on_action_error(reason.to_string());
                 }
             }
             _ => {} // join/leave lifecycle frames carry no model state
