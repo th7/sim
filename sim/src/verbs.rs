@@ -3,6 +3,18 @@
 //! the verb implementations check these mirrors the Elixir `with` chains so the
 //! same input yields the same reason.
 
+use crate::components::Inventory;
+
+/// The success outcome of a verb's effect: either the actor's Inventory changed
+/// (and should be emitted), or nothing observable resulted. The single uniform
+/// return shared by the three verb effects, so resolution maps it to one outcome
+/// without per-verb special-casing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionOutcome {
+    Inventory(Inventory),
+    Silent,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerbError {
     NoPlayer,

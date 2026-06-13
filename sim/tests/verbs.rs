@@ -18,30 +18,20 @@ fn with_wood(n: u32) -> Inventory {
     inv
 }
 
-// The verb *logic* (range, depletion, materials, footprint, instance gate) lives
-// on the realm. These helpers exercise it directly and return its `Result`, the
-// natural layer for the error-reason assertions below. (Players send these as
-// fire-and-forget intents over the wire; that path — enqueue + tick + async
-// outcome — is covered by the sim/stories suites.)
+// The verb *logic* (range, depletion, materials, footprint, instance gate) is
+// reached through `Sim`'s synchronous verb methods — the natural layer for the
+// error-reason assertions below, applied with no tick between calls. (Players
+// send these as fire-and-forget intents over the wire; that path — enqueue +
+// tick + async outcome — is covered by the sim/stories suites.)
 fn harvest(sim: &mut Sim, who: &str, target: &str) -> Result<(), VerbError> {
-    let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
-    let clock = sim.clock_ms();
-    sim.realm_world_mut(realm)
-        .ok_or(VerbError::NoChunk)?
-        .harvest(who, &WireId(target.into()), clock)
-        .map(|_| ())
+    sim.harvest(who, &WireId(target.into())).map(|_| ())
 }
 fn build(sim: &mut Sim, who: &str, kind: StructureKind, x: i64, y: i64) -> Result<(), VerbError> {
-    let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
-    sim.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.build(who, kind, x, y).map(|_| ())
+    sim.build(who, kind, x, y).map(|_| ())
 }
 fn damage(sim: &mut Sim, who: &str, target: &str) -> Result<(), VerbError> {
-    let realm = sim.realm_of(who).ok_or(VerbError::NoPlayer)?;
-    let clock = sim.clock_ms();
-    sim.realm_world_mut(realm)
-        .ok_or(VerbError::NoChunk)?
-        .damage(who, &WireId(target.into()), clock, clock / sim::consts::TICK_MS)
-        .map(|_| ())
+    let frontier = sim.clock_ms() / sim::consts::TICK_MS;
+    sim.damage(who, &WireId(target.into()), frontier).map(|_| ())
 }
 
 #[test]

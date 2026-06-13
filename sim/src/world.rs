@@ -22,7 +22,7 @@ use crate::geometry::{coord_for, ChunkCoord};
 use crate::ids::{ActorId, ClusterId, Realm};
 use crate::labeler::{Labeler, TopologyEvent};
 use crate::motivation::{decide, Decision, Drives, NpcKind, Params, Perception, Sensed, P2};
-use crate::verbs::VerbError;
+use crate::verbs::{ActionOutcome, VerbError};
 use crate::worldgen;
 use protocol::wire::ChunkLifecycle;
 use hecs::{Entity, World};
@@ -1062,12 +1062,12 @@ impl RealmWorld {
     /// the Verb acts on the Target's identity, judged here against authoritative
     /// position. Returns the new inventory on success. Check order: no_player →
     /// no_target → too_far → no_target/depleted.
-    pub fn harvest(
+    pub(crate) fn harvest(
         &mut self,
         username: &str,
         target: &WireId,
         clock_ms: u64,
-    ) -> Result<Inventory, VerbError> {
+    ) -> Result<ActionOutcome, VerbError> {
         let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(VerbError::NoPlayer)?;
         let node = self.wire_index.get(target).copied().ok_or(VerbError::NoTarget)?;
         let (tx, ty) = self
@@ -1119,12 +1119,12 @@ impl RealmWorld {
             respawn_at_ms: respawn_at,
         }));
 
-        Ok(self.inventory_of(username).unwrap_or_default())
+        Ok(ActionOutcome::Inventory(self.inventory_of(username).unwrap_or_default()))
     }
 
     /// Harvest the targeted Carcass into meat + hide Items. Reuses the harvest
     /// verb's range gate (already applied by the caller).
-    fn harvest_carcass(&mut self, username: &str, ce: Entity) -> Result<Inventory, VerbError> {
+    fn harvest_carcass(&mut self, username: &str, ce: Entity) -> Result<ActionOutcome, VerbError> {
         let meat = self.world.get::<&Carcass>(ce).map(|c| c.meat).unwrap_or(0);
         let player_e = *self.username_index.get(username).ok_or(VerbError::NoPlayer)?;
         {
@@ -1138,19 +1138,19 @@ impl RealmWorld {
         if let Some(ev) = self.player_upsert(username) {
             self.emit(ev);
         }
-        Ok(self.inventory_of(username).unwrap_or_default())
+        Ok(ActionOutcome::Inventory(self.inventory_of(username).unwrap_or_default()))
     }
 
     /// Build a structure of `kind` at `(x, y)`. Check order: no_build_in_instance
     /// → out_of_chunk → footprint_blocked → no_player → insufficient_materials.
     /// Returns the new inventory.
-    pub fn build(
+    pub(crate) fn build(
         &mut self,
         username: &str,
         kind: StructureKind,
         x: i64,
         y: i64,
-    ) -> Result<Inventory, VerbError> {
+    ) -> Result<ActionOutcome, VerbError> {
         // Structures are an Overworld-only affordance; Instances are ephemeral.
         if !self.realm.is_overworld() {
             return Err(VerbError::NoBuildInInstance);
@@ -1210,7 +1210,7 @@ impl RealmWorld {
             y,
             hp,
         }));
-        Ok(self.inventory_of(username).unwrap_or_default())
+        Ok(ActionOutcome::Inventory(self.inventory_of(username).unwrap_or_default()))
     }
 
     /// Damage the Structure or NPC named by `target` by [`DAMAGE_PER_CLICK`].
@@ -1223,14 +1223,15 @@ impl RealmWorld {
     /// yet). The forgiveness is continuous-only: liveness is always judged
     /// now, and effects land now. Destroys/kills at ≤0 HP. Players are
     /// invulnerable (not targetable). Check order: no_player → no_target →
-    /// too_far. Returns the target's remaining HP (`None` if destroyed).
-    pub fn damage(
+    /// too_far. Succeeds `Silent` — damage changes no Inventory, so it emits no
+    /// outcome event (banded Health reaches the client via snapshots).
+    pub(crate) fn damage(
         &mut self,
         username: &str,
         target: &WireId,
         clock_ms: u64,
         frontier: u64,
-    ) -> Result<Option<i64>, VerbError> {
+    ) -> Result<ActionOutcome, VerbError> {
         let (px, py) = self.position_of(username).map(|p| (p.x, p.y)).ok_or(VerbError::NoPlayer)?;
         let e = self.wire_index.get(target).copied().ok_or(VerbError::NoTarget)?;
         let (x, y) = self
@@ -1263,11 +1264,11 @@ impl RealmWorld {
                     y,
                     hp: new_hp,
                 }));
-                return Ok(Some(new_hp));
+                return Ok(ActionOutcome::Silent);
             }
             self.despawn_wire(target);
             self.emit(PersistEvent::DeleteStructure { x, y });
-            return Ok(None);
+            return Ok(ActionOutcome::Silent);
         }
 
         // An NPC: the player extends the same damage verb to wildlife.
@@ -1287,10 +1288,9 @@ impl RealmWorld {
         let _ = self.world.insert_one(e, Hurt { last_ms: clock_ms, by });
         if dead {
             self.kill_npc(e, clock_ms);
-            return Ok(None);
+            return Ok(ActionOutcome::Silent);
         }
-        let hp = self.world.get::<&Health>(e).map(|h| h.hp).unwrap_or(0);
-        Ok(Some(hp))
+        Ok(ActionOutcome::Silent)
     }
 
     /// Portals in this realm a player at `(px, py)` currently overlaps, with the

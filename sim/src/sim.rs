@@ -14,6 +14,7 @@ use crate::datastore::{Datastore, DurableStore, MemStore, PersistEvent, PlayerRe
 use crate::ecosystem::{self, Stratum};
 use crate::geometry::{chunk_center, coord_for, ChunkCoord};
 use crate::ids::{ClusterId, Realm};
+use crate::verbs::{ActionOutcome, VerbError};
 use crate::world::{instance_bounds, RealmWorld};
 use crate::worldgen;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -665,6 +666,46 @@ impl Sim {
 
     // --- Verbs ---
 
+    // The synchronous verb-effect primitives the async intent path
+    // ([`enqueue_action`] + tick) wraps. `resolve_action_intents` calls these
+    // after its seq-pinning; tests call them directly for the effect's outcome
+    // (range/depletion/materials/footprint reasons). They route the actor to its
+    // realm and apply the effect there — the one door onto the verb logic, in
+    // place of handing callers a whole `RealmWorld`.
+
+    /// Apply the harvest verb now, returning its [`ActionOutcome`].
+    pub fn harvest(&mut self, username: &str, target: &WireId) -> Result<ActionOutcome, VerbError> {
+        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
+        let clock = self.clock_ms;
+        self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.harvest(username, target, clock)
+    }
+
+    /// Place a Structure of `kind` at `(x, y)` now, returning its [`ActionOutcome`].
+    pub fn build(
+        &mut self,
+        username: &str,
+        kind: StructureKind,
+        x: i64,
+        y: i64,
+    ) -> Result<ActionOutcome, VerbError> {
+        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
+        self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.build(username, kind, x, y)
+    }
+
+    /// Damage the targeted entity now, judged at press-frame `frontier` (the
+    /// async path supplies the Lead-clamped value; a synchronous caller passes
+    /// the current tick). Returns its [`ActionOutcome`] (`Silent`).
+    pub fn damage(
+        &mut self,
+        username: &str,
+        target: &WireId,
+        frontier: u64,
+    ) -> Result<ActionOutcome, VerbError> {
+        let realm = self.realm_of(username).ok_or(VerbError::NoPlayer)?;
+        let clock = self.clock_ms;
+        self.realm_world_mut(realm).ok_or(VerbError::NoChunk)?.damage(username, target, clock, frontier)
+    }
+
     pub fn inventory_of(&self, username: &str) -> Option<Inventory> {
         let realm = self.realm_of(username)?;
         self.realm_world(realm)?.inventory_of(username)
@@ -727,13 +768,12 @@ impl Sim {
     /// frame always precedes it on the wire); the rule has no magic timeout
     /// and a moving fabricator can only wedge their own FIFO, never escape it.
     fn resolve_action_intents(&mut self) {
-        let clock = self.clock_ms;
         let users: Vec<String> = self.action_queues.keys().cloned().collect();
         for username in users {
-            let Some(realm) = self.realm_of(&username) else {
+            if self.realm_of(&username).is_none() {
                 self.action_queues.remove(&username);
                 continue;
-            };
+            }
             loop {
                 let consumed = self.last_move_seq.get(&username).copied().unwrap_or(0);
                 // The highest seq that exists or is en route: a pin at or below
@@ -756,21 +796,17 @@ impl Sim {
                 // Mirror could lawfully have been — clamp into the window.
                 let frontier =
                     frontier.max(self.tick_count.saturating_sub(crate::consts::LEAD_BOUND_TICKS));
-                let Some(rw) = self.realm_world_mut(realm) else { continue };
                 let (verb, at) = action.attribution();
                 let outcome = match action {
-                    Action::Harvest { target } => rw.harvest(&username, &target, clock).map(Some),
-                    Action::Build { kind, x, y } => rw.build(&username, kind, x, y).map(Some),
-                    Action::Damage { target } => {
-                        rw.damage(&username, &target, clock, frontier).map(|_| None::<Inventory>)
-                    }
+                    Action::Harvest { target } => self.harvest(&username, &target),
+                    Action::Build { kind, x, y } => self.build(&username, kind, x, y),
+                    Action::Damage { target } => self.damage(&username, &target, frontier),
                 };
                 match outcome {
-                    Ok(Some(inv)) => self.pending.push(OutboundEvent::SelfInventory {
-                        username: username.clone(),
-                        inventory: inv,
-                    }),
-                    Ok(None) => {}
+                    Ok(ActionOutcome::Inventory(inventory)) => self
+                        .pending
+                        .push(OutboundEvent::SelfInventory { username: username.clone(), inventory }),
+                    Ok(ActionOutcome::Silent) => {}
                     Err(e) => self.pending.push(OutboundEvent::ActionRejected {
                         username: username.clone(),
                         verb,
@@ -915,7 +951,7 @@ impl Sim {
         }
     }
 
-    pub fn realm_world_mut(&mut self, realm: Realm) -> Option<&mut RealmWorld> {
+    pub(crate) fn realm_world_mut(&mut self, realm: Realm) -> Option<&mut RealmWorld> {
         match realm {
             Realm::Overworld => Some(&mut self.overworld),
             Realm::Instance(id) => self.instances.get_mut(&id),
