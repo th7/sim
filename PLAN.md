@@ -28,9 +28,7 @@ everyone sharing that persistence authority freezes together. Verb *logic* now l
 realm (`RealmWorld::{harvest,build,damage}`); the synchronous verb replies left the wire contract,
 replaced by the `action_rejected` event. Design + decision record: `design/backpressure-freeze.html`.
 
-> Note: this proceeded at the engineer's direction ahead of a formal PO/designer reply on the open
-> behaviour-gap thread (`messages/engineer-to-product_owner-backpressure-not-wired.md`); per-cluster
-> backpressure (only the overloaded Island freezes) remains deferred as v2.
+> Note: per-cluster backpressure (only the overloaded Island freezes) remains deferred as v2.
 
 ## Landed: targeting, the Verb button, and WYSIWYG judging
 

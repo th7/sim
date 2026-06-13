@@ -48,14 +48,3 @@ layer is stood up, those settle as follows:
   interviewing the human — not by guessing.
 - A doc is committed and pushed to `main` only once its open questions are resolved; anything
   with a live question is held.
-
-## Coordinating with other roles
-
-The `messages/` directory (created when the first message exists) is the role-to-role
-channel. When a design doc that the product owner depends on changes, the designer pushes a
-**handoff notice** so the affected stories are re-derived; the designer also reads `stories/`
-against these designs and flags a **discrepancy** (a story contradicts a design) or a **gap**
-(a story covers behaviour the designs don't address).
-
-As of this writing the designer is the only active role — no product owner or engineer clone
-is running against the remote yet — so there are no inbound messages to act on.

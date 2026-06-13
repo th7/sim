@@ -24,5 +24,5 @@ per **capability**, not per design doc. Each file's header comments cite its des
 | `region-depletion-and-healing` | living-world |
 | `emergent-behaviours` | living-world |
 
-Open questions are pushed upstream to the designer via `messages/`; the affected scenarios
+Open questions are pushed upstream to the designer; the affected scenarios
 are held out of the relevant `.feature` until resolved (see header comments).
