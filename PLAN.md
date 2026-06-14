@@ -24,21 +24,21 @@ since the simultaneity-law revision — see `design/targeting-and-wysiwyg.md`),
 with outcomes async (`self` deltas, or an `action_rejected` push). With nothing resolving outside
 the tick, the overload freeze is just **skip-the-tick** while the Datastore is `Backpressured` (clock
 held, flush kept running so it self-relieves). There is one Datastore, so the freeze is global —
-everyone sharing that persistence authority freezes together. Verb *logic* now lives only on the
-realm (`RealmWorld::{harvest,build,damage}`); the synchronous verb replies left the wire contract,
+everyone sharing that persistence authority freezes together. Action *logic* now lives only on the
+realm (`RealmWorld::{harvest,build,damage}`); the synchronous action replies left the wire contract,
 replaced by the `action_rejected` event. Design + decision record: `design/backpressure-freeze.html`.
 
 > Note: per-cluster backpressure (only the overloaded Island freezes) remains deferred as v2.
 
-## Landed: targeting, the Verb button, and WYSIWYG judging
+## Landed: targeting, the Action button, and WYSIWYG judging
 
 All four increments of `design/targeting-and-wysiwyg.md` are in (terms in
-`design/glossary.md`: Tick, Verb, Target, Frontier, Lawful render, Verb button, Target
+`design/glossary.md`: Tick, Action, Target, Frontier, Lawful render, Action button, Target
 marker). Click selects a Target (the click-priority heuristic died with its wasted-wood
 flaw; click hit-testing is nearest-within-tolerance); `E`/the HUD button is the one issuer
-of entity-directed Verbs (Gatherable→harvest, Structure/NPC→damage, by WireId); the
+of entity-directed Actions (Gatherable→harvest, Structure/NPC→damage, by WireId); the
 diegetic Target marker is the only Target display; Escape clears; despawn/View-exit/
-relocation clear, distance and depletion never do. Verbs are seq-pinned (judged at the
+relocation clear, distance and depletion never do. Actions are seq-pinned (judged at the
 press frame's own position — `an_action_is_judged_at_its_press_frame_position_not_at_arrival`,
 plus the moment-it-lights e2e) and Frontier-asserting (range judged against the Target's
 lawful render OR the authoritative present; never-future/monotone/Lead-window clamps —
@@ -47,18 +47,18 @@ lawful render OR the authoritative present; never-future/monotone/Lead-window cl
 `in_range` law. Schedule-confluence and bounded retention are pinned
 (`outcomes_are_invariant_to_intent_arrival_schedule`,
 `the_judging_ring_never_outgrows_the_lead_window`). Wire: harvest/damage are
-`{target, seq, frontier?}`, build gained `seq`; `action_rejected` attributes entity verbs
+`{target, seq, frontier?}`, build gained `seq`; `action_rejected` attributes entity actions
 by target id; contract regenerated. The e2e layer covers the tracer (click→target→press→
 wood), the hunt loop (kill by identity → Carcass retarget → meat+hide), rejection
 surfacing, and the moving press.
 
-The view layer (Target marker disc, the contextual Verb button in its inert/ready/dimmed
-states, `E`/Escape) was **visually confirmed on a real display**. Verb-button labels are
-final as the raw verb names ("harvest (E)" / "damage (E)") — domain vocabulary == display
+The view layer (Target marker disc, the contextual Action button in its inert/ready/dimmed
+states, `E`/Escape) was **visually confirmed on a real display**. Action-button labels are
+final as the raw action names ("harvest (E)" / "damage (E)") — domain vocabulary == display
 vocabulary, no presentation mapping. (Scope note: this pass covered the new targeting
 visuals only; the older cosmetic-gap list under "Deferred follow-ups" was not part of it.)
 
-> Engineering deviations (frontier-on-verbs, either-frame eligibility, preemptive
+> Engineering deviations (frontier-on-actions, either-frame eligibility, preemptive
 > resolution as pinned-promises-not-machinery) were reviewed and ratified in the
 > after-the-fact grill; that grill also revised the simultaneity law to movement-first
 > ("intents are processed with their tick" is now an invariant) and added the
@@ -66,7 +66,7 @@ visuals only; the older cosmetic-gap list under "Deferred follow-ups" was not pa
 
 ## Candidate next increments
 
-- **PO: new `.feature` stories for targeting** (select-then-act, the Verb button, rejection
+- **PO: new `.feature` stories for targeting** (select-then-act, the Action button, rejection
   honesty, lawful-render judging) — the 14 existing stories predate the feature; the sim
   tests above are ready citations.
 - Held story scenarios will arrive once the designer answers the PO's gaps (multi-member Party
