@@ -8,7 +8,7 @@ A **Rust** backend simulating one shared ECS world, partitioned by *interaction 
 
 - `protocol/` — the shared wire crate: the Phoenix-Channels codec, geometry, ids, and the bidirectional wire payload structs both sides serialize.
 - `simcore/` — the shared simulation core: movement integration, collision, and the kind→Footprint catalogue — one implementation consumed by both the server and the client's Mirror, so speculation and authority cannot drift.
-- `sim/` — the Rust backend: ECS + clusters, the serialized Labeler, worldgen, the Postgres-backed Datastore, and the Phoenix-Channels-v2 WebSocket server (`sim/src/bin/server.rs`). See [`sim/README.md`](./sim/README.md).
+- `sim/` — the Rust backend: ECS + Islands, the serialized Cartographer, worldgen, the Postgres-backed Datastore, and the Phoenix-Channels-v2 WebSocket server (`sim/src/bin/server.rs`). See [`sim/README.md`](./sim/README.md).
 - `client/` — the native client: a pure `ClientModel` + `Session` (WS/phx) bridged to a `three-d` + egui view (`client/src/bin/game.rs`), with a **Mirror** (`client/src/mirror.rs`) speculating the View window ahead of the wire — own player by exact replay, bounded by `LEAD_BOUND_TICKS`.
 - `contract/contract.json` — the wire contract (the shared schema both sides conform to; guarded by `sim/tests/contract.rs`).
 - [`design/`](./design/) — the canonical design layer: vision, the domain glossary, and per-area design docs (the *why/what*)

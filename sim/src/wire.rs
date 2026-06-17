@@ -3,7 +3,7 @@
 //! (`contract/contract.json`) byte-for-byte. Positions are
 //! sub-unit integers; the client divides by 1000.
 //!
-//! The cluster authors observation as changed-only deltas (see
+//! The island authors observation as changed-only deltas (see
 //! [`crate::delta`]); a full [`ChunkSnapshot`] is just the current state of one
 //! chunk, which is what the `snapshot` wire event carries.
 

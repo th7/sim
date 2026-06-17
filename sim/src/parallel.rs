@@ -1,31 +1,31 @@
-//! Parallel cluster execution (Phase 2).
+//! Parallel island execution (Phase 2).
 //!
-//! The Labeler guarantees clusters are **chunk-disjoint**, hence entity-disjoint:
+//! The Cartographer guarantees islands are **chunk-disjoint**, hence entity-disjoint:
 //! every entity lives in exactly one chunk, and each chunk has exactly one
-//! owning cluster (`chunk_owner` is a map). So the per-cluster movement
-//! computation is embarrassingly parallel — distinct clusters share no state.
+//! owning island (`chunk_owner` is a map). So the per-island movement
+//! computation is embarrassingly parallel — distinct islands share no state.
 //!
 //! ## On the `unsafe` boundary
 //!
 //! Phase 2 was framed as "disjoint `&mut` into the shared world behind a
 //! documented `unsafe` API". In practice the dominant cost is the collision
-//! *computation* (O(movers × obstacles) per cluster), not the position
-//! write-back. So we **extract** each cluster's inputs into owned data, run the
+//! *computation* (O(movers × obstacles) per island), not the position
+//! write-back. So we **extract** each island's inputs into owned data, run the
 //! computation across a worker pool on that owned data (no shared access at
 //! all — trivially `Send`, no `unsafe`), then **apply** the results serially.
 //! This achieves the model's parallelism profile (throughput scales with the
-//! number of independent clusters; a single indivisible dense cluster is the
+//! number of independent islands; a single indivisible dense island is the
 //! one-core floor) while keeping soundness *by construction* rather than by an
-//! `unsafe` precondition that a Labeler bug could violate. The cluster
+//! `unsafe` precondition that a Cartographer bug could violate. The island
 //! disjointness is still the load-bearing invariant — it is what makes the jobs
 //! independent — we simply don't need raw pointers to exploit it.
 //!
-//! Workers are assigned clusters by the Phase-1 [`crate::repack`] policy; the
+//! Workers are assigned islands by the Phase-1 [`crate::repack`] policy; the
 //! result is independent of worker count and thread scheduling (applied in a
 //! deterministic order), which the tests assert against the serial tick.
 
 use crate::collision::Obstacle;
-use crate::ids::ClusterId;
+use crate::ids::IslandId;
 use crate::world::Bounds;
 use hecs::Entity;
 use std::collections::BTreeMap;
@@ -33,41 +33,41 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-/// One cluster's movement inputs, fully owned so it can cross to a worker thread.
-pub struct ClusterJob {
-    pub cid: ClusterId,
+/// One island's movement inputs, fully owned so it can cross to a worker thread.
+pub struct IslandJob {
+    pub iid: IslandId,
     pub obstacles: Vec<Obstacle>,
-    /// `(entity, x, y, vx, vy)` for each player-actor in the cluster.
+    /// `(entity, x, y, vx, vy)` for each player-actor in the island.
     pub movers: Vec<(Entity, i64, i64, f64, f64)>,
     pub bounds: Option<Bounds>,
 }
 
-/// Computed new positions for one cluster, plus the wall-time the job took
-/// (used to update the cluster's tick-time EWMA for repack).
-pub struct ClusterResult {
-    pub cid: ClusterId,
+/// Computed new positions for one island, plus the wall-time the job took
+/// (used to update the island's tick-time EWMA for repack).
+pub struct IslandResult {
+    pub iid: IslandId,
     pub positions: Vec<(Entity, i64, i64)>,
     pub elapsed_secs: f64,
 }
 
-/// A worker's output for one dispatched batch: the per-cluster results, or the
+/// A worker's output for one dispatched batch: the per-island results, or the
 /// panic payload if computing the batch panicked. The pool propagates the
 /// payload to the calling (tick) thread so a worker bug crashes the runtime
 /// cleanly via the tick's panic guard, rather than hanging on a missing result.
-type WorkerOutput = std::thread::Result<Vec<ClusterResult>>;
+type WorkerOutput = std::thread::Result<Vec<IslandResult>>;
 
-/// Test-only hook: when set, [`run_cluster`] panics, standing in for a worker
+/// Test-only hook: when set, [`run_island`] panics, standing in for a worker
 /// bug so the panic-propagation path can be exercised from a test.
 #[cfg(test)]
 pub(crate) static PANIC_IN_RUN_CLUSTER: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// Run one cluster's movement: integrate each mover's velocity, clamp against
-/// the cluster's obstacles and bounds. Pure; no shared state.
-pub fn run_cluster(job: &ClusterJob, dt: f64) -> ClusterResult {
+/// Run one island's movement: integrate each mover's velocity, clamp against
+/// the island's obstacles and bounds. Pure; no shared state.
+pub fn run_island(job: &IslandJob, dt: f64) -> IslandResult {
     #[cfg(test)]
     if PANIC_IN_RUN_CLUSTER.load(std::sync::atomic::Ordering::Relaxed) {
-        panic!("injected run_cluster panic (test)");
+        panic!("injected run_island panic (test)");
     }
     let start = Instant::now();
     let mut positions = Vec::with_capacity(job.movers.len());
@@ -76,7 +76,7 @@ pub fn run_cluster(job: &ClusterJob, dt: f64) -> ClusterResult {
         let (nx, ny) = clamp_bounds(nx, ny, job.bounds);
         positions.push((e, nx, ny));
     }
-    ClusterResult { cid: job.cid, positions, elapsed_secs: start.elapsed().as_secs_f64() }
+    IslandResult { iid: job.iid, positions, elapsed_secs: start.elapsed().as_secs_f64() }
 }
 
 fn clamp_bounds(x: i64, y: i64, bounds: Option<Bounds>) -> (i64, i64) {
@@ -86,28 +86,28 @@ fn clamp_bounds(x: i64, y: i64, bounds: Option<Bounds>) -> (i64, i64) {
     }
 }
 
-/// Execute all cluster jobs across `worker_count` OS threads, grouping jobs by
-/// the repack `assignment` (`cluster → worker`). Returns results keyed by
-/// cluster id (deterministic order). Falls back to serial when `worker_count`
+/// Execute all island jobs across `worker_count` OS threads, grouping jobs by
+/// the repack `assignment` (`island → worker`). Returns results keyed by
+/// island id (deterministic order). Falls back to serial when `worker_count`
 /// ≤ 1 or there is nothing to parallelize.
 pub fn execute(
-    jobs: Vec<ClusterJob>,
-    assignment: &BTreeMap<ClusterId, u32>,
+    jobs: Vec<IslandJob>,
+    assignment: &BTreeMap<IslandId, u32>,
     worker_count: usize,
     dt: f64,
-) -> BTreeMap<ClusterId, ClusterResult> {
+) -> BTreeMap<IslandId, IslandResult> {
     if worker_count <= 1 || jobs.len() <= 1 {
-        return jobs.into_iter().map(|j| (j.cid, run_cluster(&j, dt))).collect();
+        return jobs.into_iter().map(|j| (j.iid, run_island(&j, dt))).collect();
     }
 
     // Bucket jobs by assigned worker (default worker 0 if unassigned).
-    let mut buckets: Vec<Vec<ClusterJob>> = (0..worker_count).map(|_| Vec::new()).collect();
+    let mut buckets: Vec<Vec<IslandJob>> = (0..worker_count).map(|_| Vec::new()).collect();
     for job in jobs {
-        let w = assignment.get(&job.cid).copied().unwrap_or(0) as usize % worker_count;
+        let w = assignment.get(&job.iid).copied().unwrap_or(0) as usize % worker_count;
         buckets[w].push(job);
     }
 
-    let mut results: BTreeMap<ClusterId, ClusterResult> = BTreeMap::new();
+    let mut results: BTreeMap<IslandId, IslandResult> = BTreeMap::new();
     std::thread::scope(|scope| {
         let handles: Vec<_> = buckets
             .into_iter()
@@ -116,7 +116,7 @@ pub fn execute(
                 scope.spawn(move || {
                     bucket
                         .iter()
-                        .map(|job| run_cluster(job, dt))
+                        .map(|job| run_island(job, dt))
                         .collect::<Vec<_>>()
                 })
             })
@@ -125,7 +125,7 @@ pub fn execute(
             match h.join() {
                 Ok(batch) => {
                     for r in batch {
-                        results.insert(r.cid, r);
+                        results.insert(r.iid, r);
                     }
                 }
                 // Re-raise a worker panic on this thread so the tick's guard sees it.
@@ -139,7 +139,7 @@ pub fn execute(
 /// A **persistent** pool of worker threads — the faithful realization of
 /// the "workers self-tick" model. Spawned once and reused across ticks, so the
 /// per-tick cost is just dispatch + join, not thread creation. Each tick the
-/// caller hands it a batch of cluster jobs (already disjoint by construction);
+/// caller hands it a batch of island jobs (already disjoint by construction);
 /// each worker computes its assigned jobs on owned data and returns the results.
 ///
 /// Measurement (`tests/ceiling.rs`) shows the per-tick OS-thread *spawn* model
@@ -153,7 +153,7 @@ pub struct WorkerPool {
 }
 
 enum PoolMsg {
-    Run(Vec<ClusterJob>, f64),
+    Run(Vec<IslandJob>, f64),
     Shutdown,
 }
 
@@ -176,7 +176,7 @@ impl WorkerPool {
                             // crash) instead of this thread dying and the caller
                             // blocking forever on the missing result.
                             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                jobs.iter().map(|j| run_cluster(j, dt)).collect::<Vec<_>>()
+                                jobs.iter().map(|j| run_island(j, dt)).collect::<Vec<_>>()
                             }));
                             if result_tx.send(out).is_err() {
                                 break;
@@ -197,20 +197,20 @@ impl WorkerPool {
     }
 
     /// Run all `jobs` on the pool, grouped by the repack `assignment`, and return
-    /// results keyed by cluster id. Deterministic in output regardless of how
+    /// results keyed by island id. Deterministic in output regardless of how
     /// work lands on threads.
     pub fn run(
         &self,
-        jobs: Vec<ClusterJob>,
-        assignment: &BTreeMap<ClusterId, u32>,
+        jobs: Vec<IslandJob>,
+        assignment: &BTreeMap<IslandId, u32>,
         dt: f64,
-    ) -> BTreeMap<ClusterId, ClusterResult> {
+    ) -> BTreeMap<IslandId, IslandResult> {
         if jobs.is_empty() {
             return BTreeMap::new();
         }
-        let mut buckets: Vec<Vec<ClusterJob>> = (0..self.size).map(|_| Vec::new()).collect();
+        let mut buckets: Vec<Vec<IslandJob>> = (0..self.size).map(|_| Vec::new()).collect();
         for job in jobs {
-            let w = assignment.get(&job.cid).copied().unwrap_or(0) as usize % self.size;
+            let w = assignment.get(&job.iid).copied().unwrap_or(0) as usize % self.size;
             buckets[w].push(job);
         }
 
@@ -230,7 +230,7 @@ impl WorkerPool {
             match self.results.recv() {
                 Ok(Ok(batch)) => {
                     for r in batch {
-                        results.insert(r.cid, r);
+                        results.insert(r.iid, r);
                     }
                 }
                 // A worker panicked computing its batch: re-raise on this (the
@@ -267,8 +267,8 @@ mod tests {
     #[test]
     fn a_worker_panic_propagates_to_the_caller_not_a_hang() {
         let pool = WorkerPool::new(2);
-        let jobs = vec![ClusterJob {
-            cid: ClusterId(0),
+        let jobs = vec![IslandJob {
+            iid: IslandId(0),
             obstacles: Vec::new(),
             movers: Vec::new(),
             bounds: None,

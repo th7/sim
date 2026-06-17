@@ -190,7 +190,7 @@ mod seamless_world {
     use sim::ids::Realm;
 
     /// Scenario: Crossing an internal Chunk boundary is a non-event.
-    /// (Cluster footprint-following across the boundary is also pinned in
+    /// (Island footprint-following across the boundary is also pinned in
     /// `core_model::lone_player_cluster_owns_its_3x3_and_follows`.)
     #[test]
     fn crossing_a_chunk_boundary_is_continuous() {
@@ -217,7 +217,7 @@ mod seamless_world {
     }
 
     // Scenario: Reaching the edge of already-active space does not stall — a lone
-    // Player's cluster keeps a 3×3 footprint hot ahead of them, so they never
+    // Player's island keeps a 3×3 footprint hot ahead of them, so they never
     // walk into a not-yet-ready area. The footprint-follow is proven by
     // `core_model::lone_player_cluster_owns_its_3x3_and_follows`; the continuous
     // step above would catch any stall at the edge.
@@ -268,8 +268,8 @@ mod overload_backpressure {
     fn players_freeze_under_overload_and_resume_intact() {
         let mut sim = Sim::new();
         // A group sharing one authority — the single Datastore. (They sit in
-        // separate interaction-clusters, which makes the point: they freeze
-        // together because they share the *persistence* authority, not a cluster.)
+        // separate interaction-islands, which makes the point: they freeze
+        // together because they share the *persistence* authority, not an island.)
         let group = ["a", "b", "c"];
         sim.connect_at("a", at(8_000, 8_000), Inventory::default());
         sim.connect_at("b", at(12_000, 12_000), Inventory::default());

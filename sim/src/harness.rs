@@ -1,4 +1,4 @@
-//! Test harness for the cluster model: a deterministic PRNG, a scripted-intent
+//! Test harness for the island model: a deterministic PRNG, a scripted-intent
 //! driver, and assertion helpers. Public (not `cfg(test)`) so integration tests
 //! in `tests/` can use it. The [`Sim`](crate::sim::Sim) clock is already
 //! explicit and deterministic, so the harness adds only randomized *input*
@@ -52,8 +52,8 @@ impl Rng {
 }
 
 /// Assert the never-under-merge invariant for one realm of a [`Sim`]: any two
-/// players whose body centers are within `interaction_range` share a cluster.
-/// The stronger structural guarantee (Chebyshev-1 chunk neighbours co-cluster)
+/// players whose body centers are within `interaction_range` share an Island.
+/// The stronger structural guarantee (Chebyshev-1 chunk neighbours co-island)
 /// is also checked, since that is what makes the range version a theorem.
 pub fn assert_invariant(sim: &Sim, realm: Realm) {
     let usernames = sim.players_in(realm);
@@ -69,8 +69,8 @@ pub fn assert_invariant(sim: &Sim, realm: Realm) {
                 (Some(a), Some(b)) => (a, b),
                 _ => continue,
             };
-            let ca = rw.cluster_of_username(ua);
-            let cb = rw.cluster_of_username(ub);
+            let ca = rw.island_of_username(ua);
+            let cb = rw.island_of_username(ub);
 
             // Range version.
             let dx = pa.x - pb.x;
@@ -78,17 +78,17 @@ pub fn assert_invariant(sim: &Sim, realm: Realm) {
             if dx * dx + dy * dy <= INTERACT_RANGE_SQ {
                 assert_eq!(
                     ca, cb,
-                    "players {ua} and {ub} within interaction range must share a cluster"
+                    "players {ua} and {ub} within interaction range must share an Island"
                 );
             }
 
-            // Structural version: chunks within Chebyshev 1 ⇒ same cluster.
+            // Structural version: chunks within Chebyshev 1 ⇒ same island.
             let cca = coord_for(pa.x, pa.y);
             let ccb = coord_for(pb.x, pb.y);
             if cca.chebyshev(ccb) <= 1 {
                 assert_eq!(
                     ca, cb,
-                    "players {ua}@{cca:?} and {ub}@{ccb:?} are chunk-neighbours and must co-cluster"
+                    "players {ua}@{cca:?} and {ub}@{ccb:?} are chunk-neighbours and must co-island"
                 );
             }
         }

@@ -126,8 +126,8 @@ pub struct RelocatedPayload {
 }
 
 /// A chunk's lifecycle in the dev overlay ring:
-/// - `Hot`: owned by a cluster and simulated this tick.
-/// - `IdleArmed`: loaded but no cluster owns it — counting down to unload, with
+/// - `Hot`: owned by an island and simulated this tick.
+/// - `IdleArmed`: loaded but no island owns it — counting down to unload, with
 ///   `idle_ms_remaining` ms left of the idle timeout.
 /// - `Cold`: not loaded.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

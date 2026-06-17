@@ -28,7 +28,7 @@ everyone sharing that persistence authority freezes together. Action *logic* now
 realm (`RealmWorld::{harvest,build,damage}`); the synchronous action replies left the wire contract,
 replaced by the `action_rejected` event. Design + decision record: `design/backpressure-freeze.html`.
 
-> Note: per-cluster backpressure (only the overloaded Island freezes) remains deferred as v2.
+> Note: per-Island backpressure (only the overloaded Island freezes) remains deferred as v2.
 
 ## Landed: targeting, the Action button, and WYSIWYG judging
 
@@ -80,7 +80,7 @@ visuals only; the older cosmetic-gap list under "Deferred follow-ups" was not pa
 Production drives the **parallel tick** (the server enables the worker pool; `tick_or_flush`
 dispatches to it). A tick panic — on the tick thread *or* a worker thread — no longer poisons the
 shared mutex, hangs the pool, or silently freezes the world. Per the chosen model the runtime is
-presumed corrupt and goes **down** (no in-process recovery / per-cluster re-home), but on the way:
+presumed corrupt and goes **down** (no in-process recovery / per-Island re-home), but on the way:
 worker panics are caught and re-raised on the tick thread, `flush_now()` makes the durable store as
 current as possible (fresh player positions + drained persist events), and the transport aborts —
 so loss is bounded to the unflushed window and a supervisor restarts from durable state.

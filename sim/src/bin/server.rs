@@ -47,8 +47,8 @@ async fn main() {
     let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     sim.set_clock_ms(now_ms);
 
-    // Drive the parallel tick: clusters are entity-disjoint, so independent
-    // clusters tick across a persistent worker pool (one dense cluster is the
+    // Drive the parallel tick: islands are entity-disjoint, so independent
+    // islands tick across a persistent worker pool (one dense island is the
     // single-core floor). Leave a couple of cores for the async transport.
     let workers = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2)).unwrap_or(1).max(1);
     sim.enable_pool(workers);

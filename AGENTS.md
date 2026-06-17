@@ -1,4 +1,4 @@
-Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per realm, partitioned by interaction locality into **clusters**; a serialized **Labeler** owns the partition; a Postgres-backed Datastore persists; a Phoenix-Channels-v2 WebSocket is the wire. A **native Rust client** (`client/`, three-d) speaks that wire over `/socket/websocket`; the shared codec + wire structs live in `protocol/`. Domain language is `design/glossary.md`; observable behaviour is the user stories in `stories/`; the architecture invariants are below.
+Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per realm, partitioned by interaction locality into **Islands**; a serialized **Cartographer** owns the partition; a Postgres-backed Datastore persists; a Phoenix-Channels-v2 WebSocket is the wire. A **native Rust client** (`client/`, three-d) speaks that wire over `/socket/websocket`; the shared codec + wire structs live in `protocol/`. Domain language is `design/glossary.md`; observable behaviour is the user stories in `stories/`; the architecture invariants are below.
 
 ## Project guidelines
 
@@ -12,14 +12,14 @@ Distilled from the former `docs/adr/` — load-bearing; change them only deliber
 
 - **Interaction-clustered authority.** A *cluster* is the single authority over a connected set of
   interacting entities + the Chunks they span; a Chunk is data, never a process. Never-under-merge holds
-  *by construction* — the serialized Labeler reconciles to the canonical footprint-overlap partition, and
-  `interaction_range ≤ chunk_size` forces a Chunk two clusters need into one.
+  *by construction* — the serialized Cartographer reconciles to the canonical footprint-overlap partition, and
+  `interaction_range ≤ chunk_size` forces a Chunk two Islands need into one.
 - **Structural determinism.** `BTreeMap`/`BTreeSet` ordering, id-ordered ticks, explicit sim clock,
   seeded RNG — no wall-clock. Clusters are entity-disjoint, so the tick parallelises with no `unsafe`
-  and stays identical to the serial run; one dense cluster on a single core is the accepted ceiling.
+  and stays identical to the serial run; one dense Island on a single core is the accepted ceiling.
 - **The Datastore is the durability boundary.** Clusters own runtime only; persistence flushes on
   SIGTERM and anchors the clock so timers survive restart; recovery is re-home + re-hydrate; the blocking
-  Postgres client stays off the Tokio workers. Act through your cluster, observe geography (changed-only
+  Postgres client stays off the Tokio workers. Act through your Island, observe geography (changed-only
   deltas → a Session's View window).
 - **Native client, server-authoritative, Mirror-predicted.** A `three-d`/egui Rust app; logic is a
   pure tested `ClientModel` that owns a **Mirror** (`client/src/mirror.rs`, `design/glossary.md`): a

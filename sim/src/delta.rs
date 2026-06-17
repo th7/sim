@@ -1,6 +1,6 @@
 //! Changed-only observation deltas, per chunk (region).
 //!
-//! Each tick a cluster publishes only what changed in the chunks it touched:
+//! Each tick an island publishes only what changed in the chunks it touched:
 //! `upserts` for entities that are new-to-the-chunk or whose wire state
 //! changed, `removes` for entities that left the chunk. An entity entering a
 //! chunk yields a full upsert (baseline-on-enter) since it was absent before;

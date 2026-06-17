@@ -1,9 +1,9 @@
 //! Interaction-clustered simulation — Rust shared-memory prototype.
 //!
 //! The model: one shared ECS
-//! world, partitioned by *interaction locality* into **clusters**; clusters
-//! are packed onto **workers** for execution; a single **Labeler** owns the
-//! partition and serializes topology changes. Actions run inside a cluster
+//! world, partitioned by *interaction locality* into **islands**; islands
+//! are packed onto **workers** for execution; a single **Cartographer** owns the
+//! partition and serializes topology changes. Actions run inside an island
 //! (single authority); observation is a separate changed-only delta stream.
 //!
 //! This crate is feature- and wire-compatible with the Elixir implementation
@@ -29,7 +29,7 @@ pub mod delta;
 pub mod dev;
 pub mod ecosystem;
 pub mod harness;
-pub mod labeler;
+pub mod cartographer;
 pub mod motivation;
 pub mod parallel;
 pub mod pgstore;

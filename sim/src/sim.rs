@@ -4,7 +4,7 @@
 //! deterministic clock, and the player→realm routing. [`Sim::tick`] advances
 //! every realm by one tick and the clock by [`consts::TICK_MS`]. Actions and
 //! Instance transitions are layered on in later modules; this core is enough to
-//! prove the cluster model: movement, crossings, merges, splits, and the
+//! prove the island model: movement, crossings, merges, splits, and the
 //! never-under-merge invariant.
 
 use crate::components::{Inventory, Position, PortalDirection, StructureKind, WireId};
@@ -13,7 +13,7 @@ use crate::motivation::{Drives, NpcKind};
 use crate::datastore::{Datastore, DurableStore, MemStore, PersistEvent, PlayerRecord, Thresholds};
 use crate::ecosystem::{self, Stratum};
 use crate::geometry::{chunk_center, coord_for, ChunkCoord};
-use crate::ids::{ClusterId, Realm};
+use crate::ids::{IslandId, Realm};
 use crate::actions::{ActionOutcome, ActionError};
 use crate::world::{instance_bounds, RealmWorld};
 use crate::worldgen;
@@ -256,7 +256,7 @@ impl Sim {
     }
 
     /// Attach a persistent worker pool of `workers` threads. Subsequent
-    /// [`Sim::tick_parallel`] calls dispatch cluster movement to it instead of
+    /// [`Sim::tick_parallel`] calls dispatch island movement to it instead of
     /// spawning threads per tick. Output is unchanged (still equals [`Sim::tick`]).
     pub fn enable_pool(&mut self, workers: usize) {
         self.pool = Some(crate::parallel::WorkerPool::new(workers));
@@ -579,7 +579,7 @@ impl Sim {
         self.maybe_flush();
     }
 
-    /// Advance the whole world by one tick, ticking each realm's clusters across
+    /// Advance the whole world by one tick, ticking each realm's islands across
     /// a pool of `workers` threads under per-worker tick-time `budget` (seconds).
     /// Produces state identical to [`Sim::tick`] for any `workers`/`budget`.
     pub fn tick_parallel(&mut self, workers: usize, budget: f64) {
@@ -923,9 +923,9 @@ impl Sim {
         self.realm_world(realm)?.position_of(username)
     }
 
-    pub fn cluster_of(&self, username: &str) -> Option<ClusterId> {
+    pub fn island_of(&self, username: &str) -> Option<IslandId> {
         let realm = self.realm_of(username)?;
-        self.realm_world(realm)?.cluster_of_username(username)
+        self.realm_world(realm)?.island_of_username(username)
     }
 
     pub fn overworld(&self) -> &RealmWorld {

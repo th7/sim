@@ -69,8 +69,8 @@ pub struct Portal {
     pub direction: PortalDirection,
 }
 
-/// Marker for an entity driven by a human Player, tagged with the Labeler actor
-/// id so the cluster topology can track it.
+/// Marker for an entity driven by a human Player, tagged with the Cartographer actor
+/// id so the island topology can track it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlayerControlled {
     pub actor: ActorId,
@@ -92,8 +92,8 @@ pub struct WireId(pub String);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Renderable;
 
-/// An NPC entity, tagged with its [`NpcKind`] and the Labeler actor id so the
-/// cluster topology can track it (the same role `PlayerControlled.actor` plays
+/// An NPC entity, tagged with its [`NpcKind`] and the Cartographer actor id so the
+/// island topology can track it (the same role `PlayerControlled.actor` plays
 /// for Players). Its per-tick Intent is produced by [`crate::motivation`], not a
 /// session. NPCs are actors but do not anchor the Warm set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

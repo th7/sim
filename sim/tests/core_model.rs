@@ -28,12 +28,12 @@ fn movement_integrates_at_four_units_per_second() {
 fn lone_player_cluster_owns_its_3x3_and_follows() {
     let mut sim = Sim::new();
     sim.connect("alice", ChunkCoord::new(0, 0));
-    let cid = sim.cluster_of("alice").unwrap();
+    let iid = sim.island_of("alice").unwrap();
     let rw = sim.overworld();
-    let cluster = rw.labeler.cluster(cid).unwrap();
-    assert_eq!(cluster.chunk_set.len(), 9, "lone player owns a 3×3 footprint");
-    assert!(cluster.chunk_set.contains(&ChunkCoord::new(-1, -1)));
-    assert!(cluster.chunk_set.contains(&ChunkCoord::new(1, 1)));
+    let island = rw.cartographer.island(iid).unwrap();
+    assert_eq!(island.chunk_set.len(), 9, "lone player owns a 3×3 footprint");
+    assert!(island.chunk_set.contains(&ChunkCoord::new(-1, -1)));
+    assert!(island.chunk_set.contains(&ChunkCoord::new(1, 1)));
 
     // Walk east across the chunk-1 boundary (8000 → past 16000 ≈ 40+ ticks).
     sim.set_intent("alice", 1.0, 0.0);
@@ -41,23 +41,23 @@ fn lone_player_cluster_owns_its_3x3_and_follows() {
         sim.tick();
     }
     assert!(sim.position("alice").unwrap().x >= 16_000, "crossed into chunk 1");
-    let cluster = {
-        let cid = sim.cluster_of("alice").unwrap();
-        sim.overworld().labeler.cluster(cid).unwrap().chunk_set.clone()
+    let island = {
+        let iid = sim.island_of("alice").unwrap();
+        sim.overworld().cartographer.island(iid).unwrap().chunk_set.clone()
     };
     // Footprint now centered on chunk (1,0)-ish: owns chunk 2, dropped chunk -1.
-    assert!(cluster.contains(&ChunkCoord::new(2, 0)));
-    assert!(!cluster.contains(&ChunkCoord::new(-1, 0)));
+    assert!(island.contains(&ChunkCoord::new(2, 0)));
+    assert!(!island.contains(&ChunkCoord::new(-1, 0)));
 }
 
 #[test]
 fn approach_triggers_merge_then_separation_splits() {
     let mut sim = Sim::new();
-    // Two players five chunks apart → two clusters. Walk along y=10_000, which
+    // Two players five chunks apart → two islands. Walk along y=10_000, which
     // is clear of every chunk's tree footprints (trees sit near y≈8_000).
     sim.connect_at("alice", pos(8_000, 10_000), Inventory::default());
     sim.connect_at("bob", pos(5 * 16_000 + 8_000, 10_000), Inventory::default());
-    assert_ne!(sim.cluster_of("alice"), sim.cluster_of("bob"));
+    assert_ne!(sim.island_of("alice"), sim.island_of("bob"));
 
     // Walk bob west toward alice until they merge.
     sim.set_intent("bob", -1.0, 0.0);
@@ -65,12 +65,12 @@ fn approach_triggers_merge_then_separation_splits() {
     for _ in 0..400 {
         sim.tick();
         assert_invariant(&sim, Realm::Overworld);
-        if sim.cluster_of("alice") == sim.cluster_of("bob") {
+        if sim.island_of("alice") == sim.island_of("bob") {
             merged = true;
             break;
         }
     }
-    assert!(merged, "approaching players must merge into one cluster");
+    assert!(merged, "approaching players must merge into one island");
 
     // Now walk bob back east; eventually they split again.
     sim.set_intent("bob", 1.0, 0.0);
@@ -78,13 +78,13 @@ fn approach_triggers_merge_then_separation_splits() {
     for _ in 0..400 {
         sim.tick();
         assert_invariant(&sim, Realm::Overworld);
-        if sim.cluster_of("alice") != sim.cluster_of("bob") {
+        if sim.island_of("alice") != sim.island_of("bob") {
             split = true;
             break;
         }
     }
-    assert!(split, "separating players must split back into two clusters");
-    assert_eq!(sim.overworld().labeler.cluster_count(), 2);
+    assert!(split, "separating players must split back into two islands");
+    assert_eq!(sim.overworld().cartographer.island_count(), 2);
 }
 
 #[test]
@@ -135,14 +135,14 @@ fn deterministic_under_identical_inputs() {
             }
             sim.tick();
         }
-        // Final observable state: each player's position + cluster id.
+        // Final observable state: each player's position + island id.
         names
             .iter()
             .map(|n| {
                 (
                     n.to_string(),
                     sim.position(n).unwrap(),
-                    sim.cluster_of(n).unwrap().0,
+                    sim.island_of(n).unwrap().0,
                 )
             })
             .collect()

@@ -1,6 +1,6 @@
 //! Chunk geometry — the single source of truth for chunk dimensions, in
 //! **sub-units**. Mirrors the Elixir `GameCore.ChunkGeometry` exactly so the
-//! cluster model lands actors in the same chunks the wire contract expects.
+//! island model lands actors in the same chunks the wire contract expects.
 //!
 //! 1 world unit = [`SUB_UNITS_PER_UNIT`] sub-units. Chunk `(cx, cy)` owns
 //! sub-unit positions in `[cx*CHUNK_SIZE, cx*CHUNK_SIZE + CHUNK_SIZE)` on each

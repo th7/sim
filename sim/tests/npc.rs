@@ -210,7 +210,7 @@ fn scattered_deer_form_a_herd() {
         sim.tick();
     }
     let after = spread(&sim);
-    assert!(after < before, "deer should cluster: spread {before} -> {after}");
+    assert!(after < before, "deer should island: spread {before} -> {after}");
 }
 
 #[test]

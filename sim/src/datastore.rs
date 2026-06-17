@@ -1,4 +1,4 @@
-//! The **Datastore** — the single persistence chokepoint. Clusters
+//! The **Datastore** — the single persistence chokepoint. Islands
 //! emit state changes here; durable reads go through here. Mirrors the Elixir
 //! `GamePersistence.Datastore` behaviour: an in-memory **pending writes** buffer
 //! (per-key last-write-wins, with delete tombstones) flushed to a durable
@@ -43,7 +43,7 @@ pub struct DepletionRecord {
     pub respawn_at_ms: u64,
 }
 
-/// A change a cluster emits toward persistence. Buffered as pending writes.
+/// A change an island emits toward persistence. Buffered as pending writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PersistEvent {
     UpsertPlayer(PlayerRecord),

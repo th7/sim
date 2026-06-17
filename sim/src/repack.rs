@@ -1,22 +1,22 @@
 //! Repack policy — a **pure** decision (no threads here; Phase 2 drives real
-//! workers with it). Given each cluster's smoothed tick-time, pack clusters
+//! workers with it). Given each island's smoothed tick-time, pack islands
 //! onto as few workers as possible without any worker exceeding a time budget.
 //!
 //! This is bin-packing; we use First-Fit-Decreasing, which is deterministic and
 //! within a small constant of optimal. The key properties the model relies on:
 //!
-//! - **Whole clusters only.** A worker sheds clusters to a new worker; it never
-//!   splits one. This is free because distinct clusters never interact (the
-//!   Labeler guarantees it), so moving a cluster across the worker cut changes
+//! - **Whole islands only.** A worker sheds islands to a new worker; it never
+//!   splits one. This is free because distinct islands never interact (the
+//!   Cartographer guarantees it), so moving an island across the worker cut changes
 //!   nothing about correctness.
-//! - **The one-core floor.** A single cluster whose tick-time exceeds the budget
+//! - **The one-core floor.** A single island whose tick-time exceeds the budget
 //!   gets a worker to itself and stays there — it cannot be subdivided. This is
 //!   the accepted single-core dense-fight ceiling.
 
-use crate::ids::{ClusterId, WorkerId};
+use crate::ids::{IslandId, WorkerId};
 use std::collections::BTreeMap;
 
-/// Smoothing factor for the cluster tick-time EWMA (`new = α·sample + (1-α)·old`).
+/// Smoothing factor for the island tick-time EWMA (`new = α·sample + (1-α)·old`).
 pub const EWMA_ALPHA: f64 = 0.2;
 
 /// Update an exponentially-weighted moving average of tick-time.
@@ -24,12 +24,12 @@ pub fn ewma(prev: f64, sample: f64) -> f64 {
     EWMA_ALPHA * sample + (1.0 - EWMA_ALPHA) * prev
 }
 
-/// Assign clusters to workers via First-Fit-Decreasing under `budget` (the
-/// max tick-time a worker should carry). Returns `cluster → worker`. Worker ids
-/// are dense from 0. Deterministic: clusters are ordered by tick-time
+/// Assign islands to workers via First-Fit-Decreasing under `budget` (the
+/// max tick-time a worker should carry). Returns `island → worker`. Worker ids
+/// are dense from 0. Deterministic: islands are ordered by tick-time
 /// descending, then by id ascending.
-pub fn repack(times: &BTreeMap<ClusterId, f64>, budget: f64) -> BTreeMap<ClusterId, WorkerId> {
-    let mut order: Vec<(ClusterId, f64)> = times.iter().map(|(&c, &t)| (c, t)).collect();
+pub fn repack(times: &BTreeMap<IslandId, f64>, budget: f64) -> BTreeMap<IslandId, WorkerId> {
+    let mut order: Vec<(IslandId, f64)> = times.iter().map(|(&c, &t)| (c, t)).collect();
     // Heaviest first; ties broken by id for determinism.
     order.sort_by(|a, b| {
         b.1.partial_cmp(&a.1)
@@ -40,8 +40,8 @@ pub fn repack(times: &BTreeMap<ClusterId, f64>, budget: f64) -> BTreeMap<Cluster
     let mut worker_loads: Vec<f64> = Vec::new();
     let mut assignment = BTreeMap::new();
 
-    for (cluster, time) in order {
-        // First worker that can still fit this cluster under budget.
+    for (island, time) in order {
+        // First worker that can still fit this island under budget.
         let fit = worker_loads
             .iter()
             .position(|&load| load + time <= budget);
@@ -53,14 +53,14 @@ pub fn repack(times: &BTreeMap<ClusterId, f64>, budget: f64) -> BTreeMap<Cluster
             }
         };
         worker_loads[w] += time;
-        assignment.insert(cluster, WorkerId(w as u32));
+        assignment.insert(island, WorkerId(w as u32));
     }
 
     assignment
 }
 
 /// How many workers a `repack` assignment uses.
-pub fn worker_count(assignment: &BTreeMap<ClusterId, WorkerId>) -> usize {
+pub fn worker_count(assignment: &BTreeMap<IslandId, WorkerId>) -> usize {
     assignment
         .values()
         .map(|w| w.0)
@@ -73,8 +73,8 @@ pub fn worker_count(assignment: &BTreeMap<ClusterId, WorkerId>) -> usize {
 mod tests {
     use super::*;
 
-    fn times(pairs: &[(u64, f64)]) -> BTreeMap<ClusterId, f64> {
-        pairs.iter().map(|&(c, t)| (ClusterId(c), t)).collect()
+    fn times(pairs: &[(u64, f64)]) -> BTreeMap<IslandId, f64> {
+        pairs.iter().map(|&(c, t)| (IslandId(c), t)).collect()
     }
 
     #[test]
@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn over_budget_total_splits_across_workers() {
-        // Three clusters at 0.6 each, budget 1.0 → two fit per... no: 0.6+0.6>1,
+        // Three islands at 0.6 each, budget 1.0 → two fit per... no: 0.6+0.6>1,
         // so each worker holds one → 3 workers? FFD: w0=0.6, next 0.6 doesn't
         // fit (1.2>1) → w1=0.6, next 0.6 → w2. Three workers.
         let a = repack(&times(&[(1, 0.6), (2, 0.6), (3, 0.6)]), 1.0);
@@ -109,11 +109,11 @@ mod tests {
 
     #[test]
     fn single_over_budget_cluster_gets_its_own_worker() {
-        // The indivisible dense cluster: 2.5 > budget 1.0 → one worker, alone.
+        // The indivisible dense island: 2.5 > budget 1.0 → one worker, alone.
         let a = repack(&times(&[(1, 2.5), (2, 0.1)]), 1.0);
         assert_eq!(worker_count(&a), 2);
         // The heavy one is alone on its worker.
-        let heavy = a[&ClusterId(1)];
+        let heavy = a[&IslandId(1)];
         assert!(a.iter().filter(|(_, &w)| w == heavy).count() == 1);
     }
 

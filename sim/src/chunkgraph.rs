@@ -1,20 +1,20 @@
 //! Chunk-graph connectivity over 8-adjacency.
 //!
-//! A cluster's working set is a set of chunks (the union of its actors' 3×3
-//! footprints). Two of the Labeler's three topology decisions are pure
+//! An island's working set is a set of chunks (the union of its actors' 3×3
+//! footprints). Two of the Cartographer's three topology decisions are pure
 //! functions of such sets:
 //!
-//! - **merge** — two clusters must merge iff their chunk-sets *intersect*
+//! - **merge** — two islands must merge iff their chunk-sets *intersect*
 //!   (share a chunk); see [`intersects`].
-//! - **split** — a cluster may split iff its chunk-set has ≥2 connected
+//! - **split** — an island may split iff its chunk-set has ≥2 connected
 //!   components under 8-adjacency; see [`connected_components`].
 //!
 //! Soundness rests on `interaction_range ≤ chunk_size`: two actors
 //! can only interact when their chunks are within Chebyshev distance 1, at
 //! which point their 3×3 footprints share chunks — so any interacting pair is
 //! already merged, by construction. The Chebyshev-distance-3 band (footprints
-//! border but don't overlap) is the hysteresis gap: a single cluster spanning
-//! it stays one connected component, while two separate clusters there don't
+//! border but don't overlap) is the hysteresis gap: a single island spanning
+//! it stays one connected component, while two separate islands there don't
 //! merge.
 
 use crate::geometry::ChunkCoord;
@@ -29,8 +29,8 @@ pub fn intersects(a: &BTreeSet<ChunkCoord>, b: &BTreeSet<ChunkCoord>) -> bool {
 }
 
 /// Partition a chunk-set into its 8-adjacency connected components. A set with
-/// 0 or 1 components needs no split; ≥2 means the cluster's actors have drifted
-/// into spatially disjoint groups and the cluster *may* split into them.
+/// 0 or 1 components needs no split; ≥2 means the island's actors have drifted
+/// into spatially disjoint groups and the island *may* split into them.
 ///
 /// Components are returned in a deterministic order (sorted by their minimum
 /// chunk) so callers — and tests — see stable results.

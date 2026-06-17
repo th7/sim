@@ -2,7 +2,7 @@
 
 A Rust prototype that is **feature- and wire-compatible** with the Elixir game under `apps/`, built on a
 deliberately different internal structure: one shared ECS world per realm, dynamic entities partitioned by
-*interaction locality* into **clusters**, a single serialized **Labeler** owning the partition, and a
+*interaction locality* into **Islands**, a single serialized **Cartographer** owning the partition, and a
 changed-only observation stream. No per-chunk processes, no message handoffs. See `../IDEA.md` for the
 model and the phase-by-phase build log.
 
@@ -16,7 +16,7 @@ model and the phase-by-phase build log.
 | `collision` | axis-decomposed body-circle clamping + build predicate (ported from Elixir) |
 | `worldgen`, `catalogue` | deterministic trees/portals; structure costs/HP/footprints |
 | `sim` | orchestrator: realms, clock, players, instances, verbs, persistence wiring |
-| `repack`, `parallel` | repack policy + parallel cluster execution (persistent worker pool) |
+| `repack`, `parallel` | repack policy + parallel Island execution (persistent worker pool) |
 | `datastore` | pending-writes buffer (LWW + tombstones), merged reads, flush, backpressure |
 | `delta`, `wire` | changed-only deltas; per-chunk snapshot + event payloads (contract-shaped) |
 | `phx`, `server`, `transport` | Phoenix Channels v2 codec, channel routing, async WebSocket runtime |

@@ -3,7 +3,7 @@
 //! Action→**Plan**), with **Pressure** modulating only goal arbitration.
 //!
 //! This module is **pure**: it has no ECS and no clock of its own. The caller
-//! supplies a [`Perception`] (what the NPC senses within its cluster-local range)
+//! supplies a [`Perception`] (what the NPC senses within its island-local range)
 //! and the NPC's persistent [`Drives`]; [`decide`] advances the Drives and returns
 //! one [`Decision`] for the tick. Fully deterministic — no wall-clock, no RNG
 //! (any tie or wander direction is resolved by the ECS layer with a seeded PRNG).
@@ -34,7 +34,7 @@ pub struct Sensed {
 
 /// What an NPC senses this tick. Everything here is within the NPC's perception
 /// range, which is ≤ chunk_size — so it is all inside the NPC's own
-/// cluster, and reading it never crosses a cluster boundary.
+/// island, and reading it never crosses an island boundary.
 #[derive(Clone, Debug, Default)]
 pub struct Perception {
     pub self_pos: P2,

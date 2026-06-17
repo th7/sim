@@ -61,7 +61,7 @@ Each decision was locked in order; later ones depend on earlier ones.
    statistics. **Revisit-at-PvP**: the whole mechanism re-prices under PvP.
 
 Geometry check: max press-frame reach ≈ interact 1.0 u + v_max×lead 2.1 u = 3.1 u, an
-order of magnitude inside the Labeler's 3×3-chunk merge margin — never-under-merge
+order of magnitude inside the Cartographer's 3×3-chunk merge margin — never-under-merge
 absorbs it untouched. (Judging-ring data must survive Island merges within the Lead
 window; recomputable either way.)
 

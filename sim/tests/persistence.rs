@@ -212,7 +212,7 @@ fn idle_chunk_deactivates_then_rehydrates_from_persistence() {
 #[test]
 fn tree_depletion_survives_walking_away_until_chunk_stops() {
     // A connected Player harvests a tree, then *walks* far enough that the
-    // cluster releases the tree's chunk and it idle-deactivates (stops). When
+    // island releases the tree's chunk and it idle-deactivates (stops). When
     // the Player walks back, the chunk restarts and the tree must still be
     // depleted — its state was persisted and rehydrated, not regenerated.
     let mut sim = Sim::new();
@@ -224,7 +224,7 @@ fn tree_depletion_survives_walking_away_until_chunk_stops() {
     assert!(sim.chunk_status(Realm::Overworld, ChunkCoord::new(0, 0)).0, "chunk hot while owned");
 
     // Step south off the tree row (still in chunk row cy=0), then walk far east
-    // — past chunk (0,0)'s 3×3 footprint — so the cluster releases chunk (0,0).
+    // — past chunk (0,0)'s 3×3 footprint — so the island releases chunk (0,0).
     sim.set_intent("alice", 0.0, 1.0);
     tick_until(&mut sim, 60, |s| s.position("alice").unwrap().y > 10_500);
     sim.set_intent("alice", 1.0, 0.0);

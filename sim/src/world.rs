@@ -1,12 +1,12 @@
 //! A single realm's simulation state: a `hecs::World` of entities, the
-//! [`Labeler`] partitioning its dynamic actors into clusters, and the tick that
+//! [`Cartographer`] partitioning its dynamic actors into islands, and the tick that
 //! advances it. The Overworld is one `RealmWorld`; each Instance is another.
 //!
-//! The tick (single-threaded in Phase 1) is: for each cluster in id order,
+//! The tick (single-threaded in Phase 1) is: for each island in id order,
 //! integrate its players' movement against the static footprints in the
-//! cluster's chunks; then detect chunk crossings and let the Labeler reconcile
+//! island's chunks; then detect chunk crossings and let the Cartographer reconcile
 //! the partition (merge/split); then respawn due resource nodes. Chunk static
-//! content is hydrated lazily when a chunk first becomes owned by a cluster.
+//! content is hydrated lazily when a chunk first becomes owned by an island.
 
 use crate::catalogue::{
     carcass_meat as npc_carcass_meat, npc_max_hp, resource_footprint, resource_yield,
@@ -19,8 +19,8 @@ use crate::consts::{DAMAGE_PER_CLICK, IDLE_TIMEOUT_MS, RESPAWN_MS};
 use crate::datastore::{DepletionRecord, PersistEvent, PlayerRecord, StructureRecord};
 use crate::ecosystem;
 use crate::geometry::{coord_for, ChunkCoord};
-use crate::ids::{ActorId, ClusterId, Realm};
-use crate::labeler::{Labeler, TopologyEvent};
+use crate::ids::{ActorId, IslandId, Realm};
+use crate::cartographer::{Cartographer, TopologyEvent};
 use crate::motivation::{decide, Decision, Drives, NpcKind, Params, Perception, Sensed, P2};
 use crate::actions::{ActionOutcome, ActionError};
 use crate::worldgen;
@@ -94,7 +94,7 @@ fn unit_toward(from: P2, to: P2, speed: f64) -> (f64, f64) {
 pub struct RealmWorld {
     pub realm: Realm,
     pub world: World,
-    pub labeler: Labeler,
+    pub cartographer: Cartographer,
     bounds: Option<Bounds>,
     /// Chunks whose static content has been seeded.
     loaded: BTreeSet<ChunkCoord>,
@@ -102,13 +102,13 @@ pub struct RealmWorld {
     actor_index: BTreeMap<ActorId, Entity>,
     wire_index: BTreeMap<WireId, Entity>,
     next_actor: u64,
-    /// EWMA of per-cluster tick wall-time (seconds), feeding the repack policy.
-    cluster_times: BTreeMap<ClusterId, f64>,
+    /// EWMA of per-island tick wall-time (seconds), feeding the repack policy.
+    island_times: BTreeMap<IslandId, f64>,
     /// Persistence changes emitted this step (Overworld only); drained by Sim.
     persist_events: Vec<PersistEvent>,
     /// Chunks first hydrated since the last drain; Sim overlays persisted state.
     newly_loaded: Vec<ChunkCoord>,
-    /// Sim-clock time each loaded chunk was last owned by a cluster — drives
+    /// Sim-clock time each loaded chunk was last owned by an island — drives
     /// idle deactivation (a chunk unowned for IDLE_TIMEOUT_MS goes cold).
     chunk_last_owned: BTreeMap<ChunkCoord, u64>,
     /// NPC deaths this step `(chunk, kind)` — drained by the Sim to deplete the
@@ -127,14 +127,14 @@ impl RealmWorld {
         RealmWorld {
             realm,
             world: World::new(),
-            labeler: Labeler::new(),
+            cartographer: Cartographer::new(),
             bounds,
             loaded: BTreeSet::new(),
             username_index: BTreeMap::new(),
             actor_index: BTreeMap::new(),
             wire_index: BTreeMap::new(),
             next_actor: 0,
-            cluster_times: BTreeMap::new(),
+            island_times: BTreeMap::new(),
             persist_events: Vec::new(),
             newly_loaded: Vec::new(),
             chunk_last_owned: BTreeMap::new(),
@@ -248,8 +248,8 @@ impl RealmWorld {
         }
     }
 
-    /// Spawn a player at `pos`, register it as a Labeler actor, and hydrate the
-    /// chunks its cluster comes to own. Returns the new actor's entity.
+    /// Spawn a player at `pos`, register it as a Cartographer actor, and hydrate the
+    /// chunks its island comes to own. Returns the new actor's entity.
     pub fn spawn_player(&mut self, username: &str, pos: Position, inventory: Inventory) -> Entity {
         let actor = ActorId(self.next_actor);
         self.next_actor += 1;
@@ -266,13 +266,13 @@ impl RealmWorld {
         self.actor_index.insert(actor, e);
         self.wire_index.insert(wid, e);
 
-        let _events = self.labeler.insert_actor(actor, pos.chunk());
+        let _events = self.cartographer.insert_actor(actor, pos.chunk());
         self.hydrate_owned_chunks();
         e
     }
 
-    /// Spawn an NPC at `pos` with initial [`Drives`], registering it as a Labeler
-    /// actor (so it joins clusters and is simulated like a Player). Unlike a
+    /// Spawn an NPC at `pos` with initial [`Drives`], registering it as a Cartographer
+    /// actor (so it joins islands and is simulated like a Player). Unlike a
     /// Player it does not extend the Warm set: we do not hydrate on its behalf —
     /// NPCs live inside Player-hot chunks.
     pub fn spawn_npc(&mut self, kind: NpcKind, pos: Position, drives: Drives) -> Entity {
@@ -292,16 +292,16 @@ impl RealmWorld {
         ));
         self.actor_index.insert(actor, e);
         self.wire_index.insert(wid, e);
-        let _ = self.labeler.insert_actor(actor, pos.chunk());
+        let _ = self.cartographer.insert_actor(actor, pos.chunk());
         e
     }
 
-    /// Despawn an NPC entity, deregistering its actor from the Labeler and the
+    /// Despawn an NPC entity, deregistering its actor from the Cartographer and the
     /// indices (used by the warm/cold boundary and chunk unload).
     pub fn despawn_npc(&mut self, e: Entity) {
         if let Ok(npc) = self.world.get::<&Npc>(e).map(|n| *n) {
             self.actor_index.remove(&npc.actor);
-            self.labeler.remove_actor(npc.actor);
+            self.cartographer.remove_actor(npc.actor);
         }
         if let Ok(wid) = self.world.get::<&WireId>(e).map(|w| w.clone()) {
             self.wire_index.remove(&wid);
@@ -345,7 +345,7 @@ impl RealmWorld {
     }
 
     /// The **Motivation** pre-movement phase: for each NPC, build
-    /// its cluster-local [`Perception`], run [`decide`], and write the resulting
+    /// its island-local [`Perception`], run [`decide`], and write the resulting
     /// movement Intent into its `Velocity`. Runs serially before the movement
     /// integrator, exactly where a Player's session writes intent. Deterministic.
     pub fn drive_npcs(&mut self, dt_ms: u64, clock_ms: u64) {
@@ -641,7 +641,7 @@ impl RealmWorld {
         let actor = self.world.get::<&PlayerControlled>(e).ok().map(|p| p.actor);
         if let Some(actor) = actor {
             self.actor_index.remove(&actor);
-            self.labeler.remove_actor(actor);
+            self.cartographer.remove_actor(actor);
         }
         self.wire_index.remove(&WireId(username.to_string()));
         let _ = self.world.despawn(e);
@@ -677,16 +677,16 @@ impl RealmWorld {
         self.world.get::<&Position>(*e).ok().map(|p| *p)
     }
 
-    pub fn cluster_of_username(&self, username: &str) -> Option<ClusterId> {
+    pub fn island_of_username(&self, username: &str) -> Option<IslandId> {
         let e = self.username_index.get(username)?;
         let pc = self.world.get::<&PlayerControlled>(*e).ok()?;
-        self.labeler.cluster_of(pc.actor)
+        self.cartographer.island_of(pc.actor)
     }
 
     /// Hydrate every owned-but-unloaded chunk (called after topology changes).
     fn hydrate_owned_chunks(&mut self) {
         let to_load: Vec<ChunkCoord> = self
-            .labeler
+            .cartographer
             .owned_chunks()
             .filter(|c| !self.loaded.contains(c))
             .collect();
@@ -713,13 +713,13 @@ impl RealmWorld {
         self.drive_npcs(dt_ms, clock_ms);
         let dt = dt_ms as f64 / 1000.0;
 
-        // 1. Movement, per cluster, in id order (determinism). Gather each
-        //    cluster's obstacle set from the chunks it owns.
-        let cluster_ids: Vec<ClusterId> = self.labeler.clusters().map(|c| c.id).collect();
-        for cid in cluster_ids {
-            let Some(cluster) = self.labeler.cluster(cid) else { continue };
-            let chunks = cluster.chunk_set.clone();
-            let actors: Vec<ActorId> = cluster.actors.iter().copied().collect();
+        // 1. Movement, per island, in id order (determinism). Gather each
+        //    island's obstacle set from the chunks it owns.
+        let island_ids: Vec<IslandId> = self.cartographer.islands().map(|c| c.id).collect();
+        for iid in island_ids {
+            let Some(island) = self.cartographer.island(iid) else { continue };
+            let chunks = island.chunk_set.clone();
+            let actors: Vec<ActorId> = island.actors.iter().copied().collect();
             let obstacles = self.obstacles_in(&chunks);
 
             for actor in actors {
@@ -745,9 +745,9 @@ impl RealmWorld {
     }
 
     /// Advance the realm by one tick using a worker pool of `worker_count`
-    /// threads. Movement compute is parallel across clusters (assigned by the
-    /// repack policy on cluster tick-times); topology reconcile stays serial in
-    /// the Labeler. The result is identical to [`RealmWorld::tick`] regardless
+    /// threads. Movement compute is parallel across islands (assigned by the
+    /// repack policy on island tick-times); topology reconcile stays serial in
+    /// the Cartographer. The result is identical to [`RealmWorld::tick`] regardless
     /// of `worker_count` — positions are applied in deterministic order.
     pub fn tick_parallel(
         &mut self,
@@ -763,14 +763,14 @@ impl RealmWorld {
         self.apply_movement(results, clock_ms)
     }
 
-    /// Extract one owned movement job per cluster (read-only). Safe to hand to
-    /// worker threads — distinct clusters are entity-disjoint by construction.
-    pub fn movement_jobs(&self) -> Vec<crate::parallel::ClusterJob> {
-        self.labeler
-            .clusters()
-            .map(|cluster| {
-                let obstacles = self.obstacles_in(&cluster.chunk_set);
-                let movers = cluster
+    /// Extract one owned movement job per island (read-only). Safe to hand to
+    /// worker threads — distinct islands are entity-disjoint by construction.
+    pub fn movement_jobs(&self) -> Vec<crate::parallel::IslandJob> {
+        self.cartographer
+            .islands()
+            .map(|island| {
+                let obstacles = self.obstacles_in(&island.chunk_set);
+                let movers = island
                     .actors
                     .iter()
                     .filter_map(|a| {
@@ -780,35 +780,35 @@ impl RealmWorld {
                         Some((e, p.x, p.y, v.vx, v.vy))
                     })
                     .collect();
-                crate::parallel::ClusterJob { cid: cluster.id, obstacles, movers, bounds: self.bounds }
+                crate::parallel::IslandJob { iid: island.id, obstacles, movers, bounds: self.bounds }
             })
             .collect()
     }
 
-    /// Repack assignment (`cluster → worker`) from the smoothed cluster
+    /// Repack assignment (`island → worker`) from the smoothed island
     /// tick-times under `budget`.
-    pub fn repack_assignment(&self, budget: f64) -> BTreeMap<ClusterId, u32> {
-        let times: BTreeMap<ClusterId, f64> = self
-            .labeler
-            .clusters()
-            .map(|c| (c.id, self.cluster_times.get(&c.id).copied().unwrap_or(0.0)))
+    pub fn repack_assignment(&self, budget: f64) -> BTreeMap<IslandId, u32> {
+        let times: BTreeMap<IslandId, f64> = self
+            .cartographer
+            .islands()
+            .map(|c| (c.id, self.island_times.get(&c.id).copied().unwrap_or(0.0)))
             .collect();
         crate::repack::repack(&times, budget).into_iter().map(|(c, w)| (c, w.0)).collect()
     }
 
-    /// Apply computed cluster movement (deterministic order), update tick-time
+    /// Apply computed island movement (deterministic order), update tick-time
     /// EWMAs, then run the serial topology reconcile + respawn.
     pub fn apply_movement(
         &mut self,
-        results: BTreeMap<ClusterId, crate::parallel::ClusterResult>,
+        results: BTreeMap<IslandId, crate::parallel::IslandResult>,
         clock_ms: u64,
     ) -> Vec<TopologyEvent> {
-        for (cid, result) in &results {
+        for (iid, result) in &results {
             let smoothed = crate::repack::ewma(
-                self.cluster_times.get(cid).copied().unwrap_or(result.elapsed_secs),
+                self.island_times.get(iid).copied().unwrap_or(result.elapsed_secs),
                 result.elapsed_secs,
             );
-            self.cluster_times.insert(*cid, smoothed);
+            self.island_times.insert(*iid, smoothed);
             for &(e, nx, ny) in &result.positions {
                 if let Ok(mut p) = self.world.get::<&mut Position>(e) {
                     p.x = nx;
@@ -816,16 +816,16 @@ impl RealmWorld {
                 }
             }
         }
-        let live: std::collections::BTreeSet<ClusterId> =
-            self.labeler.clusters().map(|c| c.id).collect();
-        self.cluster_times.retain(|c, _| live.contains(c));
+        let live: std::collections::BTreeSet<IslandId> =
+            self.cartographer.islands().map(|c| c.id).collect();
+        self.island_times.retain(|c, _| live.contains(c));
 
         self.reconcile_after_movement(clock_ms)
     }
 
-    /// Detect chunk crossings, let the Labeler reconcile (merge/split), hydrate
+    /// Detect chunk crossings, let the Cartographer reconcile (merge/split), hydrate
     /// any newly-owned chunks, and respawn due resource nodes. Shared by the
-    /// serial and parallel ticks; this is the serialized Labeler domain.
+    /// serial and parallel ticks; this is the serialized Cartographer domain.
     fn reconcile_after_movement(&mut self, clock_ms: u64) -> Vec<TopologyEvent> {
         // NPC verbs (attack/eat) resolve here so it covers both tick paths.
         self.resolve_npc_actions(clock_ms);
@@ -837,17 +837,17 @@ impl RealmWorld {
             .filter_map(|(&actor, &e)| {
                 let pos = self.world.get::<&Position>(e).ok()?;
                 let now = pos.chunk();
-                let home = self.labeler.home_of(actor)?;
+                let home = self.cartographer.home_of(actor)?;
                 (now != home).then_some((actor, now))
             })
             .collect();
         let crossed = !crossings.is_empty();
         for (actor, new_home) in crossings {
-            events.extend(self.labeler.move_actor(actor, new_home));
+            events.extend(self.cartographer.move_actor(actor, new_home));
         }
         // Hydrate whenever the owned chunk-set may have shifted — i.e. on any
         // crossing, not only on merge/split. A lone player walking into new
-        // territory produces no topology events, but its cluster's footprint
+        // territory produces no topology events, but its island's footprint
         // still slides onto fresh chunks that need their content seeded.
         if crossed {
             self.hydrate_owned_chunks();
@@ -894,12 +894,12 @@ impl RealmWorld {
         Some((x + (vx * lead_s) as i64, y + (vy * lead_s) as i64))
     }
 
-    /// Unload chunks no cluster has owned for at least IDLE_TIMEOUT_MS — the
-    /// cluster-model analogue of Chunk deactivation. Despawns the chunk's static
+    /// Unload chunks no island has owned for at least IDLE_TIMEOUT_MS — the
+    /// island-model analogue of Chunk deactivation. Despawns the chunk's static
     /// content (it is re-seeded from worldgen + persistence on re-entry);
     /// players are never in unowned chunks, so no dynamic state is lost.
     fn deactivate_idle_chunks(&mut self, clock_ms: u64) {
-        let owned: BTreeSet<ChunkCoord> = self.labeler.owned_chunks().collect();
+        let owned: BTreeSet<ChunkCoord> = self.cartographer.owned_chunks().collect();
         for c in &owned {
             self.chunk_last_owned.insert(*c, clock_ms);
         }
@@ -930,7 +930,7 @@ impl RealmWorld {
             self.wire_index.remove(&wid);
             if let Some(a) = actor {
                 self.actor_index.remove(&a);
-                self.labeler.remove_actor(a);
+                self.cartographer.remove_actor(a);
             }
             let _ = self.world.despawn(e);
         }
@@ -966,17 +966,17 @@ impl RealmWorld {
         self.wire_index.get(wid).copied()
     }
 
-    /// Number of chunks currently owned by some cluster (the "hot" chunks).
+    /// Number of chunks currently owned by some island (the "hot" chunks).
     pub fn owned_chunk_count(&self) -> usize {
-        self.labeler.owned_chunks().count()
+        self.cartographer.owned_chunks().count()
     }
 
-    /// Whether `coord` is owned by a cluster (hot).
+    /// Whether `coord` is owned by an island (hot).
     pub fn is_chunk_hot(&self, coord: ChunkCoord) -> bool {
-        self.labeler.owner_of_chunk(coord).is_some()
+        self.cartographer.owner_of_chunk(coord).is_some()
     }
 
-    /// Dev-overlay lifecycle of `coord` at `now_ms`: `Hot` if a cluster owns it,
+    /// Dev-overlay lifecycle of `coord` at `now_ms`: `Hot` if an island owns it,
     /// `IdleArmed` (with ms left until unload) if loaded but unowned, `Cold` if
     /// not loaded. The `IdleArmed` window is the [`IDLE_TIMEOUT_MS`] grace before
     /// [`Self::deactivate_idle_chunks`] despawns the chunk's static content.
@@ -1047,10 +1047,10 @@ impl RealmWorld {
         self.world.get::<&Inventory>(*e).ok().map(|i| (*i).clone())
     }
 
-    /// Obstacles in the chunks owned by `username`'s cluster (for build checks).
-    fn obstacles_for_cluster_of(&self, username: &str) -> Vec<Obstacle> {
-        match self.cluster_of_username(username).and_then(|c| self.labeler.cluster(c)) {
-            Some(cluster) => self.obstacles_in(&cluster.chunk_set),
+    /// Obstacles in the chunks owned by `username`'s island (for build checks).
+    fn obstacles_for_island_of(&self, username: &str) -> Vec<Obstacle> {
+        match self.island_of_username(username).and_then(|c| self.cartographer.island(c)) {
+            Some(island) => self.obstacles_in(&island.chunk_set),
             None => Vec::new(),
         }
     }
@@ -1171,7 +1171,7 @@ impl RealmWorld {
             Footprint::Aabb { w, h } => (w, h),
             Footprint::Circle { radius } => (radius * 2, radius * 2),
         };
-        let obstacles = self.obstacles_for_cluster_of(username);
+        let obstacles = self.obstacles_for_island_of(username);
         let players = self.player_positions();
         if crate::collision::aabb_blocked(x, y, w, h, &obstacles, &players) {
             return Err(ActionError::FootprintBlocked);
