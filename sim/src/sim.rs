@@ -276,6 +276,16 @@ impl Sim {
         self.pool = Some(crate::parallel::WorkerPool::new(workers));
     }
 
+    /// Test-only: make the attached worker pool panic on its next batch, to
+    /// exercise the lossless-crash path. Scoped to this Sim's pool — no process
+    /// global, so it can't disturb any other test's parallel tick.
+    #[cfg(test)]
+    pub(crate) fn inject_pool_panic(&self) {
+        if let Some(pool) = &self.pool {
+            pool.inject_panic();
+        }
+    }
+
     pub fn clock_ms(&self) -> u64 {
         self.clock_ms
     }
@@ -1580,7 +1590,6 @@ mod tests {
     /// as a lossless crash: durable state flushed, panic reported (not hung).
     #[test]
     fn pooled_tick_or_flush_crashes_losslessly_on_a_worker_panic() {
-        use std::sync::atomic::Ordering;
         let mut sim = Sim::new();
         sim.enable_pool(2);
         sim.connect_at("a", Position { x: 8_000, y: 8_000 }, Inventory::default());
@@ -1590,9 +1599,8 @@ mod tests {
 
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        crate::parallel::PANIC_IN_RUN_ISLAND.store(true, Ordering::Relaxed);
+        sim.inject_pool_panic();
         let res = sim.tick_or_flush();
-        crate::parallel::PANIC_IN_RUN_ISLAND.store(false, Ordering::Relaxed);
         std::panic::set_hook(prev);
 
         assert!(res.is_err(), "a worker panic must surface through the parallel tick, not be lost");

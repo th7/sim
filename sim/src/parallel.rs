@@ -56,19 +56,9 @@ pub struct IslandResult {
 /// cleanly via the tick's panic guard, rather than hanging on a missing result.
 type WorkerOutput = std::thread::Result<Vec<IslandResult>>;
 
-/// Test-only hook: when set, [`run_island`] panics, standing in for a worker
-/// bug so the panic-propagation path can be exercised from a test.
-#[cfg(test)]
-pub(crate) static PANIC_IN_RUN_ISLAND: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
 /// Run one island's movement: integrate each mover's velocity, clamp against
 /// the island's obstacles and bounds. Pure; no shared state.
 pub fn run_island(job: &IslandJob, dt: f64) -> IslandResult {
-    #[cfg(test)]
-    if PANIC_IN_RUN_ISLAND.load(std::sync::atomic::Ordering::Relaxed) {
-        panic!("injected run_island panic (test)");
-    }
     let start = Instant::now();
     let mut positions = Vec::with_capacity(job.movers.len());
     for &(e, x, y, vx, vy) in &job.movers {
@@ -150,6 +140,11 @@ pub struct WorkerPool {
     results: Receiver<WorkerOutput>,
     handles: Vec<JoinHandle<()>>,
     size: usize,
+    /// Test-only: when set, each worker panics instead of running its batch,
+    /// exercising the panic-propagation path. Per-pool (not a process global),
+    /// so it can never disturb an unrelated pool's `run_island` calls.
+    #[cfg(test)]
+    inject_panic: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 enum PoolMsg {
@@ -164,9 +159,13 @@ impl WorkerPool {
         let (result_tx, results) = channel::<WorkerOutput>();
         let mut senders = Vec::with_capacity(size);
         let mut handles = Vec::with_capacity(size);
+        #[cfg(test)]
+        let inject_panic = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         for _ in 0..size {
             let (task_tx, task_rx) = channel::<PoolMsg>();
             let result_tx = result_tx.clone();
+            #[cfg(test)]
+            let inject_panic = inject_panic.clone();
             let handle = std::thread::spawn(move || {
                 while let Ok(msg) = task_rx.recv() {
                     match msg {
@@ -176,6 +175,10 @@ impl WorkerPool {
                             // crash) instead of this thread dying and the caller
                             // blocking forever on the missing result.
                             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                #[cfg(test)]
+                                if inject_panic.load(std::sync::atomic::Ordering::Relaxed) {
+                                    panic!("injected worker panic (test)");
+                                }
                                 jobs.iter().map(|j| run_island(j, dt)).collect::<Vec<_>>()
                             }));
                             if result_tx.send(out).is_err() {
@@ -189,11 +192,25 @@ impl WorkerPool {
             senders.push(task_tx);
             handles.push(handle);
         }
-        WorkerPool { senders, results, handles, size }
+        WorkerPool {
+            senders,
+            results,
+            handles,
+            size,
+            #[cfg(test)]
+            inject_panic,
+        }
     }
 
     pub fn size(&self) -> usize {
         self.size
+    }
+
+    /// Test-only: make every subsequent batch on this pool panic in its worker
+    /// (simulating a worker bug) so the lossless-crash path can be exercised.
+    #[cfg(test)]
+    pub(crate) fn inject_panic(&self) {
+        self.inject_panic.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Run all `jobs` on the pool, grouped by the repack `assignment`, and return
@@ -259,7 +276,6 @@ impl Drop for WorkerPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::Ordering;
 
     /// A panic inside a worker must surface to the caller as a panic (so the
     /// tick's guard can crash cleanly) — never silently block `run()` forever on
@@ -274,13 +290,12 @@ mod tests {
             bounds: None,
         }];
 
+        pool.inject_panic();
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        PANIC_IN_RUN_ISLAND.store(true, Ordering::Relaxed);
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             pool.run(jobs, &BTreeMap::new(), 0.05)
         }));
-        PANIC_IN_RUN_ISLAND.store(false, Ordering::Relaxed);
         std::panic::set_hook(prev);
 
         assert!(res.is_err(), "a worker panic must reach the caller, not hang or vanish");
