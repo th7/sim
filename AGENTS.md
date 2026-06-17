@@ -10,14 +10,14 @@ Real-time multiplayer game. **Rust backend** (`sim/`): one shared ECS world per 
 
 Distilled from the former `docs/adr/` — load-bearing; change them only deliberately.
 
-- **Interaction-clustered authority.** A *cluster* is the single authority over a connected set of
+- **Interaction-clustered authority.** An *Island* is the single authority over a connected set of
   interacting entities + the Chunks they span; a Chunk is data, never a process. Never-under-merge holds
   *by construction* — the serialized Cartographer reconciles to the canonical footprint-overlap partition, and
   `interaction_range ≤ chunk_size` forces a Chunk two Islands need into one.
 - **Structural determinism.** `BTreeMap`/`BTreeSet` ordering, id-ordered ticks, explicit sim clock,
-  seeded RNG — no wall-clock. Clusters are entity-disjoint, so the tick parallelises with no `unsafe`
+  seeded RNG — no wall-clock. Islands are entity-disjoint, so the tick parallelises with no `unsafe`
   and stays identical to the serial run; one dense Island on a single core is the accepted ceiling.
-- **The Datastore is the durability boundary.** Clusters own runtime only; persistence flushes on
+- **The Datastore is the durability boundary.** Islands own runtime only; persistence flushes on
   SIGTERM and anchors the clock so timers survive restart; recovery is re-home + re-hydrate; the blocking
   Postgres client stays off the Tokio workers. Act through your Island, observe geography (changed-only
   deltas → a Session's View window).
@@ -40,5 +40,6 @@ Distilled from the former `docs/adr/` — load-bearing; change them only deliber
 
 ## Test guidelines
 
+- **Put a test where its subject lives.** A test that exercises one module belongs *in* that module as a co-located `#[cfg(test)] mod tests` (e.g. the Cartographer's merge/split spec is in `sim/src/cartographer.rs`); `sim/tests/` is for genuinely cross-module / end-to-end behaviour (`stories`, `core_model`, `persistence`, `npc`, `wire_server`, …). One module → co-located; many → `tests/`.
 - The Rust suite is unit + integration (`sim/tests/`); the cross-restart Postgres test self-skips unless `SIM_TEST_DATABASE_URL` is set.
 - `client/tests/integration.rs` is the load-bearing end-to-end description: it boots the real server in-process and drives the native client over a WebSocket, re-pinning every phase.

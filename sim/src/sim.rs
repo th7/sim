@@ -1569,9 +1569,9 @@ mod tests {
 
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        crate::parallel::PANIC_IN_RUN_CLUSTER.store(true, Ordering::Relaxed);
+        crate::parallel::PANIC_IN_RUN_ISLAND.store(true, Ordering::Relaxed);
         let res = sim.tick_or_flush();
-        crate::parallel::PANIC_IN_RUN_CLUSTER.store(false, Ordering::Relaxed);
+        crate::parallel::PANIC_IN_RUN_ISLAND.store(false, Ordering::Relaxed);
         std::panic::set_hook(prev);
 
         assert!(res.is_err(), "a worker panic must surface through the parallel tick, not be lost");

@@ -59,14 +59,14 @@ type WorkerOutput = std::thread::Result<Vec<IslandResult>>;
 /// Test-only hook: when set, [`run_island`] panics, standing in for a worker
 /// bug so the panic-propagation path can be exercised from a test.
 #[cfg(test)]
-pub(crate) static PANIC_IN_RUN_CLUSTER: std::sync::atomic::AtomicBool =
+pub(crate) static PANIC_IN_RUN_ISLAND: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Run one island's movement: integrate each mover's velocity, clamp against
 /// the island's obstacles and bounds. Pure; no shared state.
 pub fn run_island(job: &IslandJob, dt: f64) -> IslandResult {
     #[cfg(test)]
-    if PANIC_IN_RUN_CLUSTER.load(std::sync::atomic::Ordering::Relaxed) {
+    if PANIC_IN_RUN_ISLAND.load(std::sync::atomic::Ordering::Relaxed) {
         panic!("injected run_island panic (test)");
     }
     let start = Instant::now();
@@ -276,11 +276,11 @@ mod tests {
 
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        PANIC_IN_RUN_CLUSTER.store(true, Ordering::Relaxed);
+        PANIC_IN_RUN_ISLAND.store(true, Ordering::Relaxed);
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             pool.run(jobs, &BTreeMap::new(), 0.05)
         }));
-        PANIC_IN_RUN_CLUSTER.store(false, Ordering::Relaxed);
+        PANIC_IN_RUN_ISLAND.store(false, Ordering::Relaxed);
         std::panic::set_hook(prev);
 
         assert!(res.is_err(), "a worker panic must reach the caller, not hang or vanish");
