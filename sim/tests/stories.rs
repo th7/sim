@@ -12,10 +12,11 @@
 
 use sim::components::{Inventory, Item, Position, StructureKind, WireId};
 use sim::geometry::{chunk_center, ChunkCoord};
+use sim::ids::Realm;
 use sim::motivation::{Drives, NpcKind};
 use sim::sim::Sim;
 use sim::actions::ActionError;
-use sim::wire::{entity_states, EntityWire};
+use sim::wire::{EntityWire};
 
 fn at(x: i64, y: i64) -> Position {
     Position { x, y }
@@ -49,14 +50,14 @@ fn damage(sim: &mut Sim, who: &str, target: &str) -> Result<(), ActionError> {
 
 /// WireId of the first NPC on the wire.
 fn first_npc_wid(sim: &Sim) -> String {
-    entity_states(sim.overworld())
+    sim.entity_states(Realm::Overworld)
         .into_iter()
         .find_map(|(wid, s)| matches!(s, EntityWire::Npc { .. }).then_some(wid.0))
         .expect("an NPC is on the wire")
 }
 
 fn player_wire_count(sim: &Sim) -> usize {
-    entity_states(sim.overworld())
+    sim.entity_states(Realm::Overworld)
         .values()
         .filter(|s| matches!(s, EntityWire::Player { .. }))
         .count()
@@ -352,7 +353,7 @@ mod instances {
         // entity-directed verbs resolve by identity, and no Gatherable identity
         // exists in an Instance.
         let realm = sim.realm_of("p").unwrap();
-        let no_gatherables = entity_states(sim.realm_world(realm).unwrap())
+        let no_gatherables = sim.entity_states(realm)
             .values()
             .all(|s| !matches!(s, EntityWire::Node { .. } | EntityWire::Carcass { .. }));
         assert!(no_gatherables, "an Instance hosts no Resource nodes");
@@ -455,7 +456,7 @@ mod damage_structure {
             damage(&mut sim, "builder", "structure:3500:3000").unwrap(); // 100hp / 25 → 4 hits
         }
         assert!(
-            !entity_states(sim.overworld()).contains_key(&WireId("structure:3500:3000".into())),
+            !sim.entity_states(Realm::Overworld).contains_key(&WireId("structure:3500:3000".into())),
             "the wall is destroyed"
         );
 
@@ -494,7 +495,7 @@ mod harvest_carcass {
         damage(&mut sim, "alice", &deer).unwrap();
         damage(&mut sim, "alice", &deer).unwrap();
         assert!(!has_npc(&sim, NpcKind::Deer), "the deer is dead, leaving a Carcass");
-        let carcass = entity_states(sim.overworld())
+        let carcass = sim.entity_states(Realm::Overworld)
             .into_iter()
             .find_map(|(wid, s)| matches!(s, EntityWire::Carcass { .. }).then_some(wid))
             .expect("the dead deer leaves a Carcass");

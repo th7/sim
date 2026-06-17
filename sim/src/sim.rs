@@ -959,12 +959,21 @@ impl Sim {
         self.realm_world(realm)?.island_of_username(username)
     }
 
-    pub fn overworld(&self) -> &RealmWorld {
-        &self.overworld
+    /// The wire entity states of a realm — the observable `WireId → EntityWire`
+    /// map a client would see. The inspection seam for tests (and any observer),
+    /// in place of reaching through a whole `RealmWorld`.
+    pub fn entity_states(&self, realm: Realm) -> BTreeMap<WireId, crate::wire::EntityWire> {
+        self.realm_world(realm).map(crate::wire::entity_states).unwrap_or_default()
     }
 
-    pub fn overworld_mut(&mut self) -> &mut RealmWorld {
-        &mut self.overworld
+    /// Number of Islands the Cartographer holds in a realm (topology inspection).
+    pub fn island_count(&self, realm: Realm) -> usize {
+        self.realm_world(realm).map_or(0, |rw| rw.cartographer.island_count())
+    }
+
+    /// The chunk set an Island owns in a realm (topology inspection).
+    pub fn island_chunks(&self, realm: Realm, iid: IslandId) -> Option<BTreeSet<ChunkCoord>> {
+        self.realm_world(realm)?.cartographer.island(iid).map(|i| i.chunk_set.clone())
     }
 
     pub fn instance(&self, id: u64) -> Option<&RealmWorld> {
@@ -1177,7 +1186,7 @@ mod tests {
 
     /// WireId of the first NPC on the wire.
     fn first_npc_wid(sim: &Sim) -> WireId {
-        crate::wire::entity_states(sim.overworld())
+        sim.entity_states(Realm::Overworld)
             .into_iter()
             .find_map(|(wid, s)| {
                 matches!(s, crate::wire::EntityWire::Npc { .. }).then_some(wid)

@@ -156,7 +156,7 @@ fn snapshot_payload_conforms() {
     sim.enqueue_action("alice", Action::Build { kind: StructureKind::Wall, x: 3_500, y: 3_000 }, 0, 0);
     sim.tick();
 
-    let states = sim.overworld().snapshot_states();
+    let states = sim.entity_states(Realm::Overworld);
     let snap = chunk_snapshot(&states, ChunkCoord::new(0, 0), sim.tick_count());
     let value = serde_json::to_value(&snap).unwrap();
 

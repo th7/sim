@@ -309,11 +309,11 @@ mod tests {
         route(&mut sim, &mut conn, &mv(2, 0.0, 0.0));
         // Tick 1 consumes frame 1 only: one tick east = 4000 * 0.05 = 200.
         sim.tick();
-        let p = sim.overworld().position_of("alice").unwrap();
+        let p = sim.position("alice").unwrap();
         assert_eq!((p.x, p.y), (8_200, 8_000), "frame 2 must not pre-empt frame 1");
         // Tick 2 consumes frame 2 (stop): no further movement.
         sim.tick();
-        let p = sim.overworld().position_of("alice").unwrap();
+        let p = sim.position("alice").unwrap();
         assert_eq!((p.x, p.y), (8_200, 8_000), "frame 2 stops the player");
     }
 
@@ -328,14 +328,14 @@ mod tests {
         sim.connect_at("alice", crate::components::Position { x: 8_000, y: 8_000 }, Default::default());
         sim.enqueue_move("alice", 1, 1.0, 0.0);
         sim.tick(); // consumes the frame: one tick east = 200
-        assert_eq!(sim.overworld().position_of("alice").unwrap().x, 8_200);
+        assert_eq!(sim.position("alice").unwrap().x, 8_200);
         // Frames stop. The Intent holds through the grace window…
         for _ in 0..INTENT_GRACE_TICKS {
             sim.tick();
         }
         let held = 8_200 + 200 * INTENT_GRACE_TICKS as i64;
         assert_eq!(
-            sim.overworld().position_of("alice").unwrap().x,
+            sim.position("alice").unwrap().x,
             held,
             "the last Intent holds through the grace window"
         );
@@ -343,7 +343,7 @@ mod tests {
         sim.tick();
         sim.tick();
         assert_eq!(
-            sim.overworld().position_of("alice").unwrap().x,
+            sim.position("alice").unwrap().x,
             held,
             "expired Intent stops the player"
         );

@@ -9,9 +9,10 @@
 use sim::components::{Inventory, Item, Position, StructureKind, WireId};
 use sim::datastore::DurableStore;
 use sim::geometry::ChunkCoord;
+use sim::ids::Realm;
 use sim::pgstore::PgStore;
 use sim::sim::{Action, Sim};
-use sim::wire::{entity_states, EntityWire};
+use sim::wire::{EntityWire};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn pg_url() -> Option<String> {
@@ -64,7 +65,7 @@ fn cross_restart_durability_via_postgres() {
             "spent inventory survives restart"
         );
 
-        let states = entity_states(sim.overworld());
+        let states = sim.entity_states(Realm::Overworld);
         match states.get(&WireId("structure:3500:3000".into())) {
             Some(EntityWire::Structure { hp, owner, .. }) => {
                 assert_eq!(*hp, 100);

@@ -6,7 +6,7 @@ use sim::geometry::ChunkCoord;
 use sim::ids::Realm;
 use sim::sim::Sim;
 use sim::actions::ActionError;
-use sim::wire::{entity_states, EntityWire};
+use sim::wire::{EntityWire};
 
 fn at(x: i64, y: i64) -> Position {
     Position { x, y }
@@ -44,7 +44,7 @@ fn harvest_yields_wood_and_depletes_then_respawns() {
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&1));
 
     // Node is now depleted.
-    let states = entity_states(sim.overworld());
+    let states = sim.entity_states(Realm::Overworld);
     match states.get(&WireId("tree:8000:8000".into())) {
         Some(EntityWire::Node { depleted, .. }) => assert!(*depleted),
         other => panic!("expected depleted node, got {other:?}"),
@@ -83,7 +83,7 @@ fn build_places_wall_and_spends_wood() {
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&2));
 
     // The structure appears on the wire with full HP.
-    let states = entity_states(sim.overworld());
+    let states = sim.entity_states(Realm::Overworld);
     match states.get(&WireId("structure:3000:3000".into())) {
         Some(EntityWire::Structure { hp, owner, .. }) => {
             assert_eq!(*hp, 100);
@@ -151,14 +151,14 @@ fn damage_reduces_hp_and_destroys_at_zero() {
     for _ in 0..3 {
         assert_eq!(damage(&mut sim, "alice", "structure:3500:3000"), Ok(()));
     }
-    let states = entity_states(sim.overworld());
+    let states = sim.entity_states(Realm::Overworld);
     match states.get(&WireId("structure:3500:3000".into())) {
         Some(EntityWire::Structure { hp, .. }) => assert_eq!(*hp, 25),
         other => panic!("expected structure at 25hp, got {other:?}"),
     }
     // Fourth hit destroys it.
     assert_eq!(damage(&mut sim, "alice", "structure:3500:3000"), Ok(()));
-    let states = entity_states(sim.overworld());
+    let states = sim.entity_states(Realm::Overworld);
     assert!(!states.contains_key(&WireId("structure:3500:3000".into())));
     // Now no target there.
     assert_eq!(damage(&mut sim, "alice", "structure:3500:3000"), Err(ActionError::NoTarget));

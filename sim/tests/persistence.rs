@@ -5,7 +5,7 @@ use sim::components::{Inventory, Item, Position, StructureKind, WireId};
 use sim::geometry::ChunkCoord;
 use sim::ids::Realm;
 use sim::sim::{Action, Sim};
-use sim::wire::{entity_states, EntityWire};
+use sim::wire::{EntityWire};
 
 fn at(x: i64, y: i64) -> Position {
     Position { x, y }
@@ -41,7 +41,7 @@ fn tick_until(sim: &mut Sim, max: usize, pred: impl Fn(&Sim) -> bool) {
 /// True iff the resource node `wid` is present and depleted in the live world.
 fn tree_depleted(sim: &Sim, wid: &str) -> bool {
     matches!(
-        entity_states(sim.overworld()).get(&WireId(wid.into())),
+        sim.entity_states(Realm::Overworld).get(&WireId(wid.into())),
         Some(EntityWire::Node { depleted: true, .. })
     )
 }
@@ -98,7 +98,7 @@ fn structure_survives_restart() {
     // Restart from the durable store; a fresh player hydrates chunk (0,0).
     let mut sim2 = Sim::with_persistence(store);
     sim2.connect_at("bob", at(2_000, 3_000), Inventory::default());
-    let states = entity_states(sim2.overworld());
+    let states = sim2.entity_states(Realm::Overworld);
     match states.get(&WireId("structure:3500:3000".into())) {
         Some(EntityWire::Structure { hp, owner, .. }) => {
             assert_eq!(*hp, 100);
@@ -127,7 +127,7 @@ fn destroyed_structure_stays_gone_after_restart() {
 
     let mut sim2 = Sim::with_persistence(store);
     sim2.connect_at("bob", at(2_000, 3_000), Inventory::default());
-    let states = entity_states(sim2.overworld());
+    let states = sim2.entity_states(Realm::Overworld);
     assert!(
         !states.contains_key(&WireId("structure:3500:3000".into())),
         "a destroyed structure (tombstone) must not reappear after restart"
@@ -145,7 +145,7 @@ fn depletion_survives_restart() {
 
     let mut sim2 = Sim::with_persistence(store);
     sim2.connect_at("bob", at(8_000, 8_000), Inventory::default());
-    let states = entity_states(sim2.overworld());
+    let states = sim2.entity_states(Realm::Overworld);
     match states.get(&WireId("tree:8000:8000".into())) {
         Some(EntityWire::Node { depleted, .. }) => {
             assert!(*depleted, "depletion should survive restart");
@@ -169,7 +169,7 @@ fn reconnect_replaces_prior_live_session() {
     assert_eq!(sim.inventory_of("alice").unwrap().items.get(&Item::Wood), Some(&1));
 
     // Exactly one player entity is on the wire.
-    let states = entity_states(sim.overworld());
+    let states = sim.entity_states(Realm::Overworld);
     let players = states.values().filter(|s| matches!(s, EntityWire::Player { .. })).count();
     assert_eq!(players, 1, "no duplicate player entity left behind");
 }
@@ -200,7 +200,7 @@ fn idle_chunk_deactivates_then_rehydrates_from_persistence() {
     // Reconnect → chunk re-hydrates; the persisted wall comes back.
     sim.connect("alice", ChunkCoord::new(0, 0));
     assert!(sim.chunk_status(Realm::Overworld, ChunkCoord::new(0, 0)).0, "hot again");
-    let states = entity_states(sim.overworld());
+    let states = sim.entity_states(Realm::Overworld);
     assert!(
         states.contains_key(&WireId("structure:3500:3000".into())),
         "wall re-hydrated from persistence after deactivation"
@@ -240,7 +240,7 @@ fn tree_depletion_survives_walking_away_until_chunk_stops() {
     assert!(!hot, "chunk (0,0) stopped after the Player walked away");
     assert_eq!(count, 0, "its tree was unloaded with the chunk");
     assert!(
-        entity_states(sim.overworld()).get(&WireId("tree:8000:8000".into())).is_none(),
+        sim.entity_states(Realm::Overworld).get(&WireId("tree:8000:8000".into())).is_none(),
         "the depleted tree is gone from the live world while the chunk is cold"
     );
 

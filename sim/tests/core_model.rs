@@ -29,11 +29,10 @@ fn lone_player_cluster_owns_its_3x3_and_follows() {
     let mut sim = Sim::new();
     sim.connect("alice", ChunkCoord::new(0, 0));
     let iid = sim.island_of("alice").unwrap();
-    let rw = sim.overworld();
-    let island = rw.cartographer.island(iid).unwrap();
-    assert_eq!(island.chunk_set.len(), 9, "lone player owns a 3×3 footprint");
-    assert!(island.chunk_set.contains(&ChunkCoord::new(-1, -1)));
-    assert!(island.chunk_set.contains(&ChunkCoord::new(1, 1)));
+    let chunks = sim.island_chunks(Realm::Overworld, iid).unwrap();
+    assert_eq!(chunks.len(), 9, "lone player owns a 3×3 footprint");
+    assert!(chunks.contains(&ChunkCoord::new(-1, -1)));
+    assert!(chunks.contains(&ChunkCoord::new(1, 1)));
 
     // Walk east across the chunk-1 boundary (8000 → past 16000 ≈ 40+ ticks).
     sim.set_intent("alice", 1.0, 0.0);
@@ -43,7 +42,7 @@ fn lone_player_cluster_owns_its_3x3_and_follows() {
     assert!(sim.position("alice").unwrap().x >= 16_000, "crossed into chunk 1");
     let island = {
         let iid = sim.island_of("alice").unwrap();
-        sim.overworld().cartographer.island(iid).unwrap().chunk_set.clone()
+        sim.island_chunks(Realm::Overworld, iid).unwrap()
     };
     // Footprint now centered on chunk (1,0)-ish: owns chunk 2, dropped chunk -1.
     assert!(island.contains(&ChunkCoord::new(2, 0)));
@@ -84,7 +83,7 @@ fn approach_triggers_merge_then_separation_splits() {
         }
     }
     assert!(split, "separating players must split back into two islands");
-    assert_eq!(sim.overworld().cartographer.island_count(), 2);
+    assert_eq!(sim.island_count(Realm::Overworld), 2);
 }
 
 #[test]

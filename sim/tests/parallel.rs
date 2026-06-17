@@ -28,7 +28,7 @@ fn observe(sim: &Sim, names: &[&str]) -> (Vec<(String, Position, u64)>, usize) {
         .iter()
         .map(|n| (n.to_string(), sim.position(n).unwrap(), sim.island_of(n).unwrap().0))
         .collect();
-    (v, sim.overworld().cartographer.island_count())
+    (v, sim.island_count(Realm::Overworld))
 }
 
 fn drive(sim: &mut Sim, names: &[&str], ticks: usize, parallel: Option<(usize, f64)>) {
@@ -99,14 +99,14 @@ fn single_dense_cluster_is_one_job_the_one_core_floor() {
         // All within chunk (0,0), clear of the central trees (y ≈ 12_000).
         sim.connect_at(n, at(2_000 + (i as i64 % 8) * 1_000, 12_000), Inventory::default());
     }
-    assert_eq!(sim.overworld().cartographer.island_count(), 1, "one dense island");
+    assert_eq!(sim.island_count(Realm::Overworld), 1, "one dense island");
 
     // Even with 8 workers offered, the island cannot be subdivided.
     for _ in 0..20 {
         sim.tick_parallel(8, 0.0);
     }
     assert_invariant(&sim, Realm::Overworld);
-    assert_eq!(sim.overworld().cartographer.island_count(), 1, "still one island — the floor");
+    assert_eq!(sim.island_count(Realm::Overworld), 1, "still one island — the floor");
 }
 
 #[test]

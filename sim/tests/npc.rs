@@ -5,7 +5,8 @@
 use sim::components::{Inventory, Item, Position};
 use sim::motivation::{Drives, NpcKind};
 use sim::sim::{Action, Sim};
-use sim::wire::{entity_states, EntityWire};
+use sim::ids::Realm;
+use sim::wire::{EntityWire};
 
 fn pos(x: i64, y: i64) -> Position {
     Position { x, y }
@@ -24,7 +25,7 @@ fn npc_x(sim: &Sim, kind: NpcKind) -> i64 {
 /// WireId of the first NPC of `kind` on the wire.
 fn npc_wid(sim: &Sim, kind: NpcKind) -> sim::components::WireId {
     let prefix = format!("npc:{}:", kind.as_str());
-    entity_states(sim.overworld())
+    sim.entity_states(Realm::Overworld)
         .into_iter()
         .find_map(|(wid, s)| (matches!(s, EntityWire::Npc { .. }) && wid.0.starts_with(&prefix)).then_some(wid))
     .expect("npc on the wire")
@@ -104,7 +105,7 @@ fn player_kills_deer_into_carcass_then_harvests_meat_and_hide() {
     assert!(!has_npc(&sim, NpcKind::Deer), "deer should be dead");
 
     // The Carcass it left is harvestable into meat + hide — by its identity.
-    let carcass = entity_states(sim.overworld())
+    let carcass = sim.entity_states(Realm::Overworld)
         .into_iter()
         .find_map(|(wid, s)| matches!(s, EntityWire::Carcass { .. }).then_some(wid))
         .expect("the dead deer leaves a Carcass");
@@ -126,7 +127,7 @@ fn damage_by_identity_hits_the_named_deer_not_the_nearest() {
     sim.spawn_npc(NpcKind::Deer, pos(8_800, 8_000), Drives::default()); // farther
 
     // Find the farther deer's WireId.
-    let farther = entity_states(sim.overworld())
+    let farther = sim.entity_states(Realm::Overworld)
         .into_iter()
         .find_map(|(wid, s)| match s {
             EntityWire::Npc { x, .. } if x == 8_800 => Some(wid),
@@ -137,7 +138,7 @@ fn damage_by_identity_hits_the_named_deer_not_the_nearest() {
     sim.enqueue_action("alice", Action::Damage { target: farther.clone() }, 0, 0);
     sim.tick();
 
-    let hps: Vec<(String, i64)> = entity_states(sim.overworld())
+    let hps: Vec<(String, i64)> = sim.entity_states(Realm::Overworld)
         .into_iter()
         .filter_map(|(wid, s)| match s {
             EntityWire::Npc { hp, .. } => Some((wid.0, hp)),
@@ -271,8 +272,7 @@ fn a_herd_flees_a_predator_together() {
 
 /// The Demeanor of the first NPC of `kind`, as the snapshot wire carries it.
 fn wire_demeanor(sim: &Sim, kind: NpcKind) -> protocol::types::Demeanor {
-    sim.overworld()
-        .snapshot_states()
+    sim.entity_states(Realm::Overworld)
         .into_values()
         .find_map(|e| match e {
             sim::wire::EntityWire::Npc { kind: k, demeanor, .. } if k == kind => Some(demeanor),
@@ -303,8 +303,7 @@ fn snapshot_carries_the_npcs_demeanor() {
 
 /// The wire velocity magnitude of the first NPC of `kind`.
 fn wire_speed(sim: &Sim, kind: NpcKind) -> f64 {
-    sim.overworld()
-        .snapshot_states()
+    sim.entity_states(Realm::Overworld)
         .into_values()
         .find_map(|e| match e {
             sim::wire::EntityWire::Npc { kind: k, vx, vy, .. } if k == kind => {

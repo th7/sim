@@ -9,6 +9,7 @@ use client::mirror::Mirror;
 use protocol::geometry::ChunkCoord;
 use sim::components::Position;
 use sim::sim::Sim;
+use sim::ids::Realm;
 use sim::wire::chunk_snapshot;
 
 /// The named tail, pinned: under network jitter speculation *does* diverge —
@@ -30,7 +31,7 @@ fn diverges_under_jitter_and_reconverges_exactly_at_rest() {
 
     let coord = ChunkCoord::new(0, 0);
     let mut mirror = Mirror::new("alice");
-    let snap = chunk_snapshot(&sim.overworld().snapshot_states(), coord, sim.tick_count());
+    let snap = chunk_snapshot(&sim.entity_states(Realm::Overworld), coord, sim.tick_count());
     mirror.on_snapshot(coord, &snap);
 
     // The wire, with jitter: frames the server hasn't received yet, keyed by
@@ -59,7 +60,7 @@ fn diverges_under_jitter_and_reconverges_exactly_at_rest() {
                           mirror: &mut Mirror,
                           auth_in_flight: &mut Vec<(u64, u32, sim::wire::ChunkSnapshot)>| {
         if sim.tick_count() % 2 == 0 {
-            let snap = chunk_snapshot(&sim.overworld().snapshot_states(), coord_b, sim.tick_count());
+            let snap = chunk_snapshot(&sim.entity_states(Realm::Overworld), coord_b, sim.tick_count());
             auth_in_flight.push((
                 sim.tick_count() + AUTH_DELAY,
                 sim.last_move_seq("alice").unwrap_or(0),
@@ -90,7 +91,7 @@ fn diverges_under_jitter_and_reconverges_exactly_at_rest() {
         mirror.tick();
         broadcast(&mut sim, &mut mirror, &mut auth_in_flight);
 
-        let server = sim.overworld().position_of("alice").unwrap();
+        let server = sim.position("alice").unwrap();
         let (mx, _my) = mirror.position_of("alice").unwrap();
         max_divergence = max_divergence.max((mx - server.x).abs());
         // Promise 2: divergence is bounded by what the Lead allows.
@@ -129,7 +130,7 @@ fn diverges_under_jitter_and_reconverges_exactly_at_rest() {
     }
 
     // Promise 3: at rest, speculation and authority agree exactly.
-    let server = sim.overworld().position_of("alice").unwrap();
+    let server = sim.position("alice").unwrap();
     assert_eq!(
         mirror.position_of("alice"),
         Some((server.x, server.y)),
@@ -151,7 +152,7 @@ fn override_plus_replay_is_bit_identical_to_the_server() {
 
     let coord = ChunkCoord::new(0, 0);
     let mut mirror = Mirror::new("alice");
-    let snap = chunk_snapshot(&sim.overworld().snapshot_states(), coord, sim.tick_count());
+    let snap = chunk_snapshot(&sim.entity_states(Realm::Overworld), coord, sim.tick_count());
     mirror.on_snapshot(coord, &snap);
 
     // Walk square into the tree at (7500,7500) — contact clamps x at 6900 —
@@ -172,11 +173,11 @@ fn override_plus_replay_is_bit_identical_to_the_server() {
             if sim.tick_count() % 2 == 0 {
                 mirror.on_ack(seq, sim.tick_count());
                 let snap =
-                    chunk_snapshot(&sim.overworld().snapshot_states(), coord, sim.tick_count());
+                    chunk_snapshot(&sim.entity_states(Realm::Overworld), coord, sim.tick_count());
                 mirror.on_snapshot(coord, &snap);
             }
 
-            let server = sim.overworld().position_of("alice").unwrap();
+            let server = sim.position("alice").unwrap();
             assert_eq!(
                 mirror.position_of("alice"),
                 Some((server.x, server.y)),
