@@ -7,6 +7,7 @@
 
 pub mod conn;
 pub mod dev;
+pub mod displayed_world;
 pub mod mirror;
 pub mod model;
 pub mod pose;

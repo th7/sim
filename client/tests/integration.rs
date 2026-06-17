@@ -70,14 +70,14 @@ async fn nudge_until(
 }
 
 fn return_portal_visible(m: &ClientModel) -> bool {
-    m.portals().values().any(|p| p.direction == "out_of_instance")
+    m.displayed().portals().values().any(|p| p.direction == "out_of_instance")
 }
 
 /// Drive alice from her overworld spawn northwest onto the `into_instance`
 /// portal at world (4,4) and wait for the realm switch, then release movement so
 /// she ends up standing still inside a fresh instance.
 async fn enter_instance(alice: &mut Session) {
-    assert!(alice.pump_until(T, |m| m.player_pos("alice").is_some()).await);
+    assert!(alice.pump_until(T, |m| m.displayed().player_pos("alice").is_some()).await);
     assert_eq!(alice.model().realm(), RealmWire::Overworld);
     alice.movement(true, false, false, true).await.unwrap(); // northwest
     let entered = alice
@@ -92,11 +92,11 @@ async fn connect_and_see_self() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
     assert!(
-        alice.pump_until(T, |m| m.player_pos("alice").is_some()).await,
+        alice.pump_until(T, |m| m.displayed().player_pos("alice").is_some()).await,
         "alice should appear in her own view after connecting"
     );
     // Spawned at chunk-(0,0) centre.
-    let p = alice.model().player_pos("alice").unwrap();
+    let p = alice.model().displayed().player_pos("alice").unwrap();
     assert_eq!((p.x, p.y), (8_000, 8_000));
 }
 
@@ -105,20 +105,20 @@ async fn two_clients_see_each_other() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
     let mut bob = Session::connect(&url(port), "bob", ChunkCoord::new(0, 0)).await.unwrap();
-    assert!(alice.pump_until(T, |m| m.player_pos("bob").is_some()).await, "alice sees bob");
-    assert!(bob.pump_until(T, |m| m.player_pos("alice").is_some()).await, "bob sees alice");
+    assert!(alice.pump_until(T, |m| m.displayed().player_pos("bob").is_some()).await, "alice sees bob");
+    assert!(bob.pump_until(T, |m| m.displayed().player_pos("alice").is_some()).await, "bob sees alice");
 }
 
 #[tokio::test]
 async fn movement_moves_the_player() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
-    assert!(alice.pump_until(T, |m| m.player_pos("alice").is_some()).await);
-    let x0 = alice.model().player_pos("alice").unwrap().x;
+    assert!(alice.pump_until(T, |m| m.displayed().player_pos("alice").is_some()).await);
+    let x0 = alice.model().displayed().player_pos("alice").unwrap().x;
 
     alice.movement(false, false, true, false).await.unwrap(); // east
     let moved = alice
-        .pump_until(T, |m| m.player_pos("alice").map(|p| p.x > x0).unwrap_or(false))
+        .pump_until(T, |m| m.displayed().player_pos("alice").map(|p| p.x > x0).unwrap_or(false))
         .await;
     assert!(moved, "walking east increases x");
 }
@@ -129,7 +129,7 @@ async fn click_targets_the_tree_and_the_verb_button_harvests_it() {
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
     // Wait for the chunk snapshot carrying the centre tree.
     assert!(
-        alice.pump_until(T, |m| m.nodes().contains_key("tree:8000:8000")).await,
+        alice.pump_until(T, |m| m.displayed().nodes().contains_key("tree:8000:8000")).await,
         "the centre tree should be visible"
     );
     // Clicking the tree designates it the Target — and issues no Action.
@@ -151,12 +151,12 @@ async fn click_targets_the_tree_and_the_verb_button_harvests_it() {
 async fn walking_across_multiple_chunk_boundaries_stays_visible() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
-    assert!(alice.pump_until(T, |m| m.player_pos("alice").is_some()).await);
+    assert!(alice.pump_until(T, |m| m.displayed().player_pos("alice").is_some()).await);
 
     // Walk south past the first boundary, then far east across several more.
     alice.movement(false, true, false, false).await.unwrap(); // south
     assert!(
-        alice.pump_until(T, |m| m.player_pos("alice").map(|p| p.y > 10_000).unwrap_or(false)).await
+        alice.pump_until(T, |m| m.displayed().player_pos("alice").map(|p| p.y > 10_000).unwrap_or(false)).await
     );
     alice.movement(false, false, false, false).await.unwrap();
 
@@ -164,11 +164,11 @@ async fn walking_across_multiple_chunk_boundaries_stays_visible() {
     // we go. The window pans to keep alice's chunk subscribed, so she stays in
     // the merged view the whole way and her x never jumps backward.
     alice.movement(false, false, true, false).await.unwrap();
-    let mut prev_x = alice.model().player_pos("alice").unwrap().x;
+    let mut prev_x = alice.model().displayed().player_pos("alice").unwrap().x;
     let mut reached = false;
     for _ in 0..120 {
         alice.pump_for(Duration::from_millis(100)).await;
-        let p = alice.model().player_pos("alice").expect("alice stays visible across boundaries");
+        let p = alice.model().displayed().player_pos("alice").expect("alice stays visible across boundaries");
         assert!(p.x + 1 >= prev_x, "x is monotonic (no backward glitch on a pan)");
         prev_x = p.x;
         if p.x > 33_000 {
@@ -187,7 +187,7 @@ async fn gather_build_and_destroy_a_wall() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
     // The five worldgen trees around the chunk centre load in.
-    assert!(alice.pump_until(T, |m| m.nodes().len() >= 5).await, "all five trees visible");
+    assert!(alice.pump_until(T, |m| m.displayed().nodes().len() >= 5).await, "all five trees visible");
 
     // Chop all five (alice spawns within interact range of the cluster) → 5 wood.
     let (cx, cy) = (8_000_i64, 8_000_i64);
@@ -203,7 +203,7 @@ async fn gather_build_and_destroy_a_wall() {
     // Walk east, clear of the depleted-but-still-solid tree cluster, then settle.
     alice.movement(false, false, true, false).await.unwrap();
     assert!(
-        alice.pump_until(T, |m| m.player_pos("alice").map(|p| p.x >= 10_500).unwrap_or(false)).await,
+        alice.pump_until(T, |m| m.displayed().player_pos("alice").map(|p| p.x >= 10_500).unwrap_or(false)).await,
         "alice walks east out of the cluster"
     );
     alice.movement(false, false, false, false).await.unwrap();
@@ -211,12 +211,12 @@ async fn gather_build_and_destroy_a_wall() {
 
     // Place the wall 1u east: its AABB clears alice's body and sits exactly at
     // interact range (mirrors the old phase-8 e2e's hand-computed placement).
-    let me = alice.model().player_pos("alice").unwrap();
+    let me = alice.model().displayed().player_pos("alice").unwrap();
     let (wx, wy) = (me.x + 1_000, me.y);
     alice.send_build("wall", wx, wy).await.unwrap();
 
-    assert!(alice.pump_until(T, |m| !m.structures().is_empty()).await, "the wall appears");
-    let wall = alice.model().structures().values().next().cloned().unwrap();
+    assert!(alice.pump_until(T, |m| !m.displayed().structures().is_empty()).await, "the wall appears");
+    let wall = alice.model().displayed().structures().values().next().cloned().unwrap();
     assert_eq!(wall.hp, 100);
     assert_eq!(wall.owner, "alice");
     assert_eq!(wall.kind, "wall");
@@ -231,7 +231,7 @@ async fn gather_build_and_destroy_a_wall() {
         alice.pump_for(Duration::from_millis(150)).await;
     }
     assert!(
-        alice.pump_until(T, |m| m.structures().is_empty()).await,
+        alice.pump_until(T, |m| m.displayed().structures().is_empty()).await,
         "the wall is destroyed after 100 damage"
     );
 }
@@ -240,7 +240,7 @@ async fn gather_build_and_destroy_a_wall() {
 async fn dev_mode_receives_stats() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
-    assert!(alice.pump_until(T, |m| m.player_pos("alice").is_some()).await);
+    assert!(alice.pump_until(T, |m| m.displayed().player_pos("alice").is_some()).await);
     // No stats until dev mode is on.
     assert!(alice.model().stats().is_none());
 
@@ -266,7 +266,7 @@ async fn walking_into_the_portal_enters_an_instance() {
     let port = start_server().await;
     // chunk (0,0) holds the into_instance portal at world (4,4); spawn at (8,8).
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
-    assert!(alice.pump_until(T, |m| m.player_pos("alice").is_some()).await);
+    assert!(alice.pump_until(T, |m| m.displayed().player_pos("alice").is_some()).await);
     assert_eq!(alice.model().realm(), RealmWire::Overworld);
 
     // Walk northwest toward the portal (west = -x, north = -y).
@@ -279,7 +279,7 @@ async fn walking_into_the_portal_enters_an_instance() {
     // The client re-subscribed to the instance's chunks and sees the return portal.
     assert!(
         alice
-            .pump_until(T, |m| m.portals().values().any(|p| p.direction == "out_of_instance"))
+            .pump_until(T, |m| m.displayed().portals().values().any(|p| p.direction == "out_of_instance"))
             .await,
         "the instance's return portal should be visible after the realm switch"
     );
@@ -314,7 +314,7 @@ async fn instance_objects_do_not_flicker_while_standing_still() {
 
     // Let the instance's content load into view before we start watching.
     assert!(
-        alice.pump_until(T, |m| return_portal_visible(m) && m.player_pos("alice").is_some()).await,
+        alice.pump_until(T, |m| return_portal_visible(m) && m.displayed().player_pos("alice").is_some()).await,
         "the return portal and alice should be visible once inside the instance"
     );
 
@@ -328,7 +328,7 @@ async fn instance_objects_do_not_flicker_while_standing_still() {
             "return portal vanished at sample {samples} — flicker while standing in the instance"
         );
         assert!(
-            alice.model().player_pos("alice").is_some(),
+            alice.model().displayed().player_pos("alice").is_some(),
             "player vanished at sample {samples} — flicker while standing in the instance"
         );
     }
@@ -375,7 +375,7 @@ async fn instance_objects_do_not_flicker_while_walking_around() {
                 "the circuit must stay inside the instance (not re-enter the return portal)"
             );
             assert!(
-                alice.model().player_pos("alice").is_some(),
+                alice.model().displayed().player_pos("alice").is_some(),
                 "player vanished while walking — flicker inside the instance"
             );
             assert!(
@@ -404,7 +404,7 @@ async fn instance_objects_do_not_flicker_while_walking_around() {
 async fn building_on_the_depleted_cluster_is_rejected() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
-    assert!(alice.pump_until(T, |m| m.nodes().len() >= 5).await);
+    assert!(alice.pump_until(T, |m| m.displayed().nodes().len() >= 5).await);
 
     // Harvest the five trees clustered at chunk centre → 5 wood. They become
     // `depleted: true` but their Footprint stays solid at (±500, ±500).
@@ -418,7 +418,7 @@ async fn building_on_the_depleted_cluster_is_rejected() {
             .pump_until(T, |m| {
                 m.inventory().get("wood").copied().unwrap_or(0) >= 5
                     && centre_trees.iter().all(|(x, y)| {
-                        m.nodes().get(&format!("tree:{x}:{y}")).map(|n| n.depleted).unwrap_or(false)
+                        m.displayed().nodes().get(&format!("tree:{x}:{y}")).map(|n| n.depleted).unwrap_or(false)
                     })
             })
             .await,
@@ -436,7 +436,7 @@ async fn building_on_the_depleted_cluster_is_rejected() {
         alice.pump_for(Duration::from_millis(200)).await;
     }
     assert!(
-        alice.model().structures().is_empty(),
+        alice.model().displayed().structures().is_empty(),
         "no wall is placed — every reachable cell at chunk centre is footprint-blocked"
     );
     assert_eq!(
@@ -457,7 +457,7 @@ async fn building_on_the_depleted_cluster_is_rejected() {
 async fn click_builds_a_wall_in_the_cell_directly_next_to_the_cluster() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
-    assert!(alice.pump_until(T, |m| m.nodes().len() >= 5).await);
+    assert!(alice.pump_until(T, |m| m.displayed().nodes().len() >= 5).await);
 
     let centre_trees = [(8_000, 8_000), (7_500, 7_500), (7_500, 8_500), (8_500, 7_500), (8_500, 8_500)];
     for (x, y) in centre_trees {
@@ -469,7 +469,7 @@ async fn click_builds_a_wall_in_the_cell_directly_next_to_the_cluster() {
             .pump_until(T, |m| {
                 m.inventory().get("wood").copied().unwrap_or(0) >= 5
                     && centre_trees.iter().all(|(x, y)| {
-                        m.nodes().get(&format!("tree:{x}:{y}")).map(|n| n.depleted).unwrap_or(false)
+                        m.displayed().nodes().get(&format!("tree:{x}:{y}")).map(|n| n.depleted).unwrap_or(false)
                     })
             })
             .await
@@ -483,14 +483,14 @@ async fn click_builds_a_wall_in_the_cell_directly_next_to_the_cluster() {
     // about one tick wide, so open-loop walking would overshoot it.
     assert!(
         nudge_until(&mut alice, (true, false, false, false), |m| {
-            m.player_pos("alice").map(|p| p.y <= 6_500).unwrap_or(false)
+            m.displayed().player_pos("alice").map(|p| p.y <= 6_500).unwrap_or(false)
         })
         .await,
         "taps north past the cluster"
     );
     assert!(
         nudge_until(&mut alice, (false, false, false, true), |m| {
-            m.player_pos("alice")
+            m.displayed().player_pos("alice")
                 .map(|p| {
                     // The placement precondition itself: body clear of the
                     // target cell's AABB, click target within interact range.
@@ -508,10 +508,10 @@ async fn click_builds_a_wall_in_the_cell_directly_next_to_the_cluster() {
     // the depleted (8500, 7500) tree.
     alice.click(8.5, 6.5).await.unwrap();
     assert!(
-        alice.pump_until(T, |m| !m.structures().is_empty()).await,
+        alice.pump_until(T, |m| !m.displayed().structures().is_empty()).await,
         "the click placed a wall in the cell directly adjacent to the cluster"
     );
-    let wall = alice.model().structures().values().next().cloned().unwrap();
+    let wall = alice.model().displayed().structures().values().next().cloned().unwrap();
     assert_eq!((wall.x, wall.y), (8_500, 6_500), "wall is in the cell directly N of (8500, 7500)");
     assert_eq!((wall.kind.as_str(), wall.hp), ("wall", 100));
 }
@@ -527,7 +527,7 @@ async fn click_builds_a_wall_in_the_cell_directly_next_to_the_cluster() {
 async fn a_rejected_press_surfaces_the_islands_reason_in_last_error() {
     let port = start_server().await;
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
-    assert!(alice.pump_until(T, |m| m.nodes().len() >= 5).await);
+    assert!(alice.pump_until(T, |m| m.displayed().nodes().len() >= 5).await);
 
     let centre_trees = [(8_000, 8_000), (7_500, 7_500), (7_500, 8_500), (8_500, 7_500), (8_500, 8_500)];
     for (x, y) in centre_trees {
@@ -539,7 +539,7 @@ async fn a_rejected_press_surfaces_the_islands_reason_in_last_error() {
             .pump_until(T, |m| {
                 m.inventory().get("wood").copied().unwrap_or(0) >= 5
                     && centre_trees.iter().all(|(x, y)| {
-                        m.nodes().get(&format!("tree:{x}:{y}")).map(|n| n.depleted).unwrap_or(false)
+                        m.displayed().nodes().get(&format!("tree:{x}:{y}")).map(|n| n.depleted).unwrap_or(false)
                     })
             })
             .await
@@ -572,13 +572,13 @@ async fn a_press_the_moment_the_button_lights_succeeds_while_moving() {
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
     // The neighbour chunk's centre tree, ~16 units east — far out of range.
     assert!(
-        alice.pump_until(T, |m| m.nodes().contains_key("tree:24000:8000")).await,
+        alice.pump_until(T, |m| m.displayed().nodes().contains_key("tree:24000:8000")).await,
         "the neighbour chunk's tree is visible"
     );
     alice.click(24.0, 8.0).await.unwrap();
     assert_eq!(alice.model().target(), Some("tree:24000:8000"));
     assert_eq!(
-        alice.model().action_button(),
+        alice.model().displayed().action_button(),
         client::model::ActionButton::Dimmed("harvest"),
         "far target: dimmed"
     );
@@ -587,7 +587,7 @@ async fn a_press_the_moment_the_button_lights_succeeds_while_moving() {
     alice.movement(false, false, true, false).await.unwrap();
     assert!(
         alice
-            .pump_until(T, |m| m.action_button() == client::model::ActionButton::Ready("harvest"))
+            .pump_until(T, |m| m.displayed().action_button() == client::model::ActionButton::Ready("harvest"))
             .await,
         "the button lights as the lawful render enters range"
     );
@@ -620,8 +620,8 @@ async fn hunt_target_press_kill_then_harvest_the_carcass() {
     tokio::spawn(sim::transport::serve(listener, sim::transport::Shared::with_sim(sim)));
 
     let mut alice = Session::connect(&url(port), "alice", ChunkCoord::new(0, 0)).await.unwrap();
-    assert!(alice.pump_until(T, |m| !m.npcs().is_empty()).await, "the wolf is visible");
-    let (wolf_id, wolf) = alice.model().npcs().into_iter().next().unwrap();
+    assert!(alice.pump_until(T, |m| !m.displayed().npcs().is_empty()).await, "the wolf is visible");
+    let (wolf_id, wolf) = alice.model().displayed().npcs().into_iter().next().unwrap();
 
     // Click the wolf's rendered position → it becomes the Target.
     alice.click(wolf.x as f64 / 1_000.0, wolf.y as f64 / 1_000.0).await.unwrap();
@@ -632,13 +632,13 @@ async fn hunt_target_press_kill_then_harvest_the_carcass() {
         alice.press_action().await.unwrap();
     }
     assert!(
-        alice.pump_until(T, |m| m.npcs().is_empty() && !m.carcasses().is_empty()).await,
+        alice.pump_until(T, |m| m.displayed().npcs().is_empty() && !m.displayed().carcasses().is_empty()).await,
         "the wolf dies into a Carcass"
     );
     assert_eq!(alice.model().target(), None, "despawn cleared the Target — no auto-transfer");
 
     // Retarget the Carcass and harvest it.
-    let (carcass_id, c) = alice.model().carcasses().into_iter().next().unwrap();
+    let (carcass_id, c) = alice.model().displayed().carcasses().into_iter().next().unwrap();
     alice.click(c.x as f64 / 1_000.0, c.y as f64 / 1_000.0).await.unwrap();
     assert_eq!(alice.model().target(), Some(carcass_id.as_str()));
     alice.press_action().await.unwrap();
@@ -661,7 +661,7 @@ async fn client_sees_wildlife_materialize() {
     let port = start_server_wild().await;
     let mut alice = Session::connect(&url(port), "alice", chunk).await.unwrap();
     assert!(
-        alice.pump_until(T, |m| !m.npcs().is_empty()).await,
+        alice.pump_until(T, |m| !m.displayed().npcs().is_empty()).await,
         "wildlife should materialize near the player and reach the client",
     );
     // The dev stats also report a non-zero world NPC count.

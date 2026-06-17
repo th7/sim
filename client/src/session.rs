@@ -46,21 +46,22 @@ impl RenderState {
     /// where model state becomes a render frame — the live session and the
     /// showcase's synthetic scenarios both go through here.
     pub fn from_model(model: &ClientModel) -> Self {
+        let dw = model.displayed();
         RenderState {
             own: model.username().to_string(),
             realm: model.realm(),
             window_center: model.window_center(),
-            players: model.players(),
-            nodes: model.nodes(),
-            structures: model.structures(),
-            portals: model.portals(),
-            npcs: model.npcs(),
-            carcasses: model.carcasses(),
+            players: dw.players(),
+            nodes: dw.nodes(),
+            structures: dw.structures(),
+            portals: dw.portals(),
+            npcs: dw.npcs(),
+            carcasses: dw.carcasses(),
             inventory: model.inventory().clone(),
             stats: model.stats().cloned(),
             last_error: model.last_error().map(str::to_string),
             target: model.target().map(str::to_string),
-            action_button: model.action_button(),
+            action_button: dw.action_button(),
             frozen: model.mirror_frozen(),
         }
     }

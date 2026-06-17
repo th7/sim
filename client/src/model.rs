@@ -5,13 +5,13 @@
 //! old `window.__game`. Positions are sub-units (1 world unit = 1000).
 
 use crate::dev::DevState;
+use crate::displayed_world::DisplayedWorld;
 use crate::mirror::Mirror;
 use protocol::consts::{INTERACT_RANGE_SQ, WALL_COST};
 use protocol::geometry::{coord_for, neighborhood, ChunkCoord, SUB_UNITS_PER_UNIT};
 use protocol::wire::{
-    AckPayload, BuildPayload, CarcassWire, ChunkSnapshot, DamagePayload, HarvestPayload,
-    MovePayload, NodeWire, NpcWire, PlayerWire, PortalWire, RealmWire, RelocatedPayload,
-    SelfPayload, StatsPayload, StructureWire,
+    AckPayload, BuildPayload, ChunkSnapshot, DamagePayload, HarvestPayload, MovePayload, RealmWire,
+    RelocatedPayload, SelfPayload, StatsPayload,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -230,7 +230,7 @@ impl ClientModel {
         let tol = SUB_UNITS_PER_UNIT / 2; // 0.5 world units, in sub-units
         let cx = (wx * SUB_UNITS_PER_UNIT as f64).round() as i64;
         let cy = (wy * SUB_UNITS_PER_UNIT as f64).round() as i64;
-        if let Some(wid) = self.targetable_at(cx, cy, tol) {
+        if let Some(wid) = self.displayed().targetable_at(cx, cy, tol) {
             self.target = Some(wid);
             return Vec::new();
         }
@@ -243,41 +243,11 @@ impl ClientModel {
         cmds
     }
 
-    /// The targetable entity at the click, if any: the WireId of the *nearest*
-    /// Resource node, Structure, NPC, or Carcass whose rendered position is
-    /// within `tol` — nearest, not first-category, so a wolf standing beside a
-    /// tree doesn't lose the click to the tree. Players and Portals are not
-    /// targetable.
-    fn targetable_at(&self, cx: i64, cy: i64, tol: i64) -> Option<String> {
-        let mut best: Option<(i64, String)> = None;
-        let mut consider = |x: i64, y: i64, wid: String| {
-            if (x - cx).abs() < tol && (y - cy).abs() < tol {
-                let d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-                if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
-                    best = Some((d, wid));
-                }
-            }
-        };
-        for (wid, n) in self.nodes() {
-            consider(n.x, n.y, wid);
-        }
-        for (wid, s) in self.structures() {
-            consider(s.x, s.y, wid);
-        }
-        for (wid, npc) in self.npcs() {
-            consider(npc.x, npc.y, wid);
-        }
-        for (wid, c) in self.carcasses() {
-            consider(c.x, c.y, wid);
-        }
-        best.map(|(_, wid)| wid)
-    }
-
     /// The click-to-build path: place a wall on the clicked empty cell if
     /// affordable and in range (a client-side UX gate; the server stays
     /// authoritative).
     fn build_click(&self, wx: f64, wy: f64) -> Vec<Cmd> {
-        let Some(me) = self.player_pos(&self.username) else {
+        let Some(me) = self.displayed().player_pos(&self.username) else {
             return Vec::new();
         };
         if self.inventory.get("wood").copied().unwrap_or(0) < WALL_COST {
@@ -310,43 +280,6 @@ impl ClientModel {
         self.target.as_deref()
     }
 
-    /// The Action the current Target implies and the entity's rendered position
-    /// — `None` when no Target is visible.
-    fn target_action_and_pos(&self) -> Option<(&'static str, i64, i64)> {
-        let wid = self.target.as_deref()?;
-        if let Some(n) = self.nodes().get(wid) {
-            return Some(("harvest", n.x, n.y));
-        }
-        if let Some(c) = self.carcasses().get(wid) {
-            return Some(("harvest", c.x, c.y));
-        }
-        if let Some(npc) = self.npcs().get(wid) {
-            return Some(("damage", npc.x, npc.y));
-        }
-        if let Some(s) = self.structures().get(wid) {
-            return Some(("damage", s.x, s.y));
-        }
-        None
-    }
-
-    /// The Action button's display state — see [`ActionButton`]. The range hint
-    /// reads the lawful render (own Mirror position vs the Target's rendered
-    /// position), the same frame the Island judges in.
-    pub fn action_button(&self) -> ActionButton {
-        let Some((verb, tx, ty)) = self.target_action_and_pos() else {
-            return ActionButton::Inert;
-        };
-        let Some(me) = self.player_pos(&self.username) else {
-            return ActionButton::Dimmed(verb);
-        };
-        let (dx, dy) = (me.x - tx, me.y - ty);
-        if dx * dx + dy * dy <= INTERACT_RANGE_SQ {
-            ActionButton::Ready(verb)
-        } else {
-            ActionButton::Dimmed(verb)
-        }
-    }
-
     /// The Action button: issue the entity-directed Action the current Target
     /// implies — a Gatherable (Resource node or Carcass) → harvest; a
     /// Structure or NPC → damage. Inert without a Target. With one, it always
@@ -360,9 +293,16 @@ impl ClientModel {
         // The press asserts the session's Frontier: the last authoritative
         // tick the Mirror has incorporated — the lawful-render judging basis.
         let frontier = self.mirror.auth_tick().unwrap_or(0);
-        let out = if self.nodes().contains_key(&wid) || self.carcasses().contains_key(&wid) {
+        let (gatherable, damageable) = {
+            let dw = self.displayed();
+            (
+                dw.nodes().contains_key(&wid) || dw.carcasses().contains_key(&wid),
+                dw.npcs().contains_key(&wid) || dw.structures().contains_key(&wid),
+            )
+        };
+        let out = if gatherable {
             Outbound::Harvest(HarvestPayload { target: wid, seq: self.move_seq, frontier })
-        } else if self.npcs().contains_key(&wid) || self.structures().contains_key(&wid) {
+        } else if damageable {
             Outbound::Damage(DamagePayload { target: wid, seq: self.move_seq, frontier })
         } else {
             // The Target is no longer visible — nothing to act on.
@@ -400,78 +340,32 @@ impl ClientModel {
         self.window_center
     }
 
-    /// All players currently visible: entity facts merged across subscribed
-    /// chunk snapshots, positions speculated by the Mirror. The own player is
-    /// present whenever the Mirror has it — independent of which chunk's
-    /// snapshot last listed us, so a boundary crossing can never blink us out.
-    pub fn players(&self) -> BTreeMap<String, PlayerWire> {
-        let mut out = BTreeMap::new();
-        for snap in self.snaps.values() {
-            for (name, p) in &snap.players {
-                out.insert(name.clone(), *p);
-            }
+    /// The displayed world: snapshot facts ∪ Mirror-speculated positions — the
+    /// observable state the view and the Action button read. The one place
+    /// `snaps` and `mirror` combine; see [`crate::displayed_world`].
+    pub fn displayed(&self) -> DisplayedWorld<'_> {
+        DisplayedWorld {
+            snaps: &self.snaps,
+            mirror: &self.mirror,
+            username: &self.username,
+            target: self.target.as_deref(),
         }
-        for (name, p) in out.iter_mut() {
-            if let Some((x, y)) = self.mirror.position_of(name) {
-                p.x = x;
-                p.y = y;
-            }
-        }
-        if !out.contains_key(&self.username) {
-            if let Some((x, y)) = self.mirror.position_of(&self.username) {
-                out.insert(
-                    self.username.clone(),
-                    PlayerWire { x, y, ..PlayerWire::default() },
-                );
-            }
-        }
-        out
-    }
-
-    pub fn player_pos(&self, name: &str) -> Option<PlayerWire> {
-        self.players().get(name).copied()
-    }
-
-    pub fn nodes(&self) -> BTreeMap<String, NodeWire> {
-        merge(&self.snaps, |s| &s.resource_nodes)
-    }
-    pub fn structures(&self) -> BTreeMap<String, StructureWire> {
-        merge(&self.snaps, |s| &s.structures)
-    }
-    pub fn portals(&self) -> BTreeMap<String, PortalWire> {
-        merge(&self.snaps, |s| &s.portals)
-    }
-    /// All NPCs (wolves/deer) currently visible: facts merged across
-    /// snapshots, positions speculated by the Mirror.
-    pub fn npcs(&self) -> BTreeMap<String, NpcWire> {
-        let mut out: BTreeMap<String, NpcWire> = merge(&self.snaps, |s| &s.npcs);
-        for (id, n) in out.iter_mut() {
-            if let Some((x, y)) = self.mirror.npc_position_of(id) {
-                n.x = x;
-                n.y = y;
-            }
-        }
-        out
-    }
-    /// All Carcasses currently visible, merged across snapshots.
-    pub fn carcasses(&self) -> BTreeMap<String, CarcassWire> {
-        merge(&self.snaps, |s| &s.carcasses)
     }
 
     /// The dev-HUD "view" count: number of players currently rendered.
     pub fn view_count(&self) -> usize {
-        self.players().len()
+        self.displayed().players().len()
     }
 
     /// Dev-HUD: number of NPCs currently in view.
     pub fn npc_count(&self) -> usize {
-        self.npcs().len()
+        self.displayed().npcs().len()
     }
 
     // --- internals ---
 
     fn maybe_shift_window(&mut self) -> Vec<Cmd> {
-        let Some(me) = self.player_pos(&self.username) else {
+        let Some(me) = self.displayed().player_pos(&self.username) else {
             return Vec::new();
         };
         let now = coord_for(me.x, me.y);
@@ -498,22 +392,10 @@ fn window(c: ChunkCoord) -> Vec<ChunkCoord> {
     neighborhood(c, VIEW_RADIUS)
 }
 
-fn merge<T: Clone>(
-    snaps: &BTreeMap<ChunkCoord, ChunkSnapshot>,
-    pick: impl Fn(&ChunkSnapshot) -> &BTreeMap<String, T>,
-) -> BTreeMap<String, T> {
-    let mut out = BTreeMap::new();
-    for snap in snaps.values() {
-        for (id, v) in pick(snap) {
-            out.insert(id.clone(), v.clone());
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::wire::{CarcassWire, NodeWire, NpcWire, PlayerWire, StructureWire};
 
     fn cc(x: i32, y: i32) -> ChunkCoord {
         ChunkCoord::new(x, y)
@@ -539,10 +421,10 @@ mod tests {
         let (mut m, _) = ClientModel::new("alice", cc(0, 0));
         m.on_snapshot(cc(0, 0), snap_with_player("alice", 8_000, 8_000));
         m.on_snapshot(cc(1, 0), snap_with_player("bob", 20_000, 8_000));
-        let players = m.players();
+        let players = m.displayed().players();
         assert_eq!(players.len(), 2);
-        assert_eq!(m.player_pos("alice"), Some(PlayerWire { x: 8_000, y: 8_000, ..PlayerWire::default() }));
-        assert_eq!(m.player_pos("bob"), Some(PlayerWire { x: 20_000, y: 8_000, ..PlayerWire::default() }));
+        assert_eq!(m.displayed().player_pos("alice"), Some(PlayerWire { x: 8_000, y: 8_000, ..PlayerWire::default() }));
+        assert_eq!(m.displayed().player_pos("bob"), Some(PlayerWire { x: 20_000, y: 8_000, ..PlayerWire::default() }));
         assert_eq!(m.view_count(), 2);
     }
 
@@ -574,7 +456,7 @@ mod tests {
         assert_eq!(m.realm(), RealmWire::Instance { id: 7 });
         assert_eq!(m.window_center(), cc(1, 1));
         // Old chunk state is cleared; the new 3×3 is subscribed.
-        assert!(m.players().is_empty());
+        assert!(m.displayed().players().is_empty());
         assert!(m.subscribed().contains(&cc(1, 1)) && m.subscribed().contains(&cc(0, 0)));
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Unsubscribe(_))));
         assert_eq!(cmds.iter().filter(|c| matches!(c, Cmd::Subscribe(_))).count(), 9);
@@ -597,7 +479,7 @@ mod tests {
         m.on_snapshot(cc(0, 0), snap_with_player("alice", 8_000, 8_000));
         m.set_movement(false, false, true, false);
         m.input_frame(); // one client tick
-        let p = m.player_pos("alice").unwrap();
+        let p = m.displayed().player_pos("alice").unwrap();
         assert_eq!((p.x, p.y), (8_200, 8_000), "one tick east, locally, immediately");
     }
 
@@ -663,8 +545,8 @@ mod tests {
         snap.carcasses.insert("carcass:9".into(), CarcassWire { x: 8_300, y: 8_300, meat: 3 });
         m.on_snapshot(cc(0, 0), snap);
         assert_eq!(m.npc_count(), 1);
-        assert_eq!(m.npcs().get("npc:wolf:3").unwrap().kind, "wolf");
-        assert_eq!(m.carcasses().get("carcass:9").unwrap().meat, 3);
+        assert_eq!(m.displayed().npcs().get("npc:wolf:3").unwrap().kind, "wolf");
+        assert_eq!(m.displayed().carcasses().get("carcass:9").unwrap().meat, 3);
     }
 
     /// Demeanor and hp are discrete authoritative facts: the Mirror speculates
@@ -690,7 +572,7 @@ mod tests {
         for _ in 0..5 {
             let _ = m.input_frame();
         }
-        let n = m.npcs().get("npc:wolf:3").cloned().unwrap();
+        let n = m.displayed().npcs().get("npc:wolf:3").cloned().unwrap();
         assert!(n.x > 8_200, "position speculates along the last-known Intent");
         assert_eq!(n.demeanor, "aggressive", "Demeanor is never speculated");
         assert_eq!(n.hp, 27, "Health is never speculated");
@@ -814,7 +696,7 @@ mod tests {
         // Inert without a Target; Ready with one in lawful-rendered range;
         // Dimmed (but still pressable — always-send) out of range.
         let mut m = model_with_player_at(8_000, 8_000);
-        assert_eq!(m.action_button(), ActionButton::Inert);
+        assert_eq!(m.displayed().action_button(), ActionButton::Inert);
 
         let mut snap = snap_with_player("alice", 8_000, 8_000);
         snap.resource_nodes.insert(
@@ -828,10 +710,10 @@ mod tests {
         m.on_snapshot(cc(0, 0), snap);
 
         m.click(8.5, 8.0);
-        assert_eq!(m.action_button(), ActionButton::Ready("harvest"), "in-range Gatherable");
+        assert_eq!(m.displayed().action_button(), ActionButton::Ready("harvest"), "in-range Gatherable");
 
         m.click(12.0, 8.0);
-        assert_eq!(m.action_button(), ActionButton::Dimmed("damage"), "out-of-range NPC: dimmed, not denied");
+        assert_eq!(m.displayed().action_button(), ActionButton::Dimmed("damage"), "out-of-range NPC: dimmed, not denied");
         assert!(
             matches!(&m.press_action()[..], [Cmd::Send(Outbound::Damage(_))]),
             "a dimmed press still sends — the Island judges"
