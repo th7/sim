@@ -168,6 +168,20 @@ impl Default for Sim {
     }
 }
 
+/// How a tick advances each realm's movement — the one phase that differs
+/// between the serial and parallel ticks. Everything else in the tick is
+/// identical, so [`Sim::advance`] holds the phase order once and only the
+/// movement phase branches on this.
+#[derive(Debug, Clone, Copy)]
+enum MoveExec {
+    /// Integrate movement inline on this thread (`RealmWorld::tick`).
+    Serial,
+    /// Extract each island's movement into jobs and run them across workers
+    /// (the persistent pool if attached, else `parallel::execute` over
+    /// `workers` threads under a per-worker tick-time `budget` in seconds).
+    Parallel { workers: usize, budget: f64 },
+}
+
 impl Sim {
     pub fn new() -> Self {
         Sim::with_store(MemStore::default())
@@ -551,25 +565,42 @@ impl Sim {
         }
     }
 
-    /// Advance the whole world by one tick: movement + topology reconcile in
-    /// every realm, then Instance entry/exit for any player overlapping a portal.
+    /// Advance the whole world by one tick with serial movement.
     pub fn tick(&mut self) {
+        self.advance(MoveExec::Serial);
+    }
+
+    /// Advance the whole world by one tick with parallel movement: each realm's
+    /// islands tick across a pool of `workers` threads under per-worker tick-time
+    /// `budget` (seconds). Produces state identical to [`Sim::tick`] for any
+    /// `workers`/`budget` — same [`Sim::advance`] pipeline, only the movement
+    /// phase differs.
+    pub fn tick_parallel(&mut self, workers: usize, budget: f64) {
+        self.advance(MoveExec::Parallel { workers, budget });
+    }
+
+    /// The single tick pipeline; the phase order — the simultaneity law — lives
+    /// here once. Movement first, verbs after: an intent is processed *with its
+    /// tick* (this tick's frame is consumed and integrated, then verbs resolve,
+    /// judged at exactly the position the press frame displayed — a verb pinned
+    /// to seq S resolves in the very tick S integrates). Arrival-into beats
+    /// placement: a build is judged against final positions, so a wall can never
+    /// appear under a body. Within the phase, NPC actions (inside the realm tick)
+    /// precede player verbs; portals trigger last, so a verb always resolves in
+    /// the realm it was pressed in. Only the movement phase branches on
+    /// [`MoveExec`], so serial ≡ parallel is by construction.
+    fn advance(&mut self, exec: MoveExec) {
         self.clock_ms += TICK_MS;
         self.tick_count += 1;
-        // Movement first, verbs after — the simultaneity law. An intent is
-        // processed *with its tick*: this tick's frame is consumed and
-        // integrated, then verbs resolve, judged at exactly the position the
-        // press frame displayed (a verb pinned to seq S resolves in the very
-        // tick S integrates). Arrival-into beats placement: a build is judged
-        // against final positions, so a wall can never appear under a body.
-        // Within the phase, NPC actions (inside the realm tick) precede
-        // player verbs; portals trigger last, so a verb always resolves in
-        // the realm it was pressed in.
         self.consume_move_frames();
-        self.overworld.tick(TICK_MS, self.clock_ms);
+
+        let clock = self.clock_ms;
+        let dt = TICK_MS as f64 / 1000.0;
+        Self::move_realm(&mut self.overworld, exec, clock, dt, self.pool.as_ref());
         for inst in self.instances.values_mut() {
-            inst.tick(TICK_MS, self.clock_ms);
+            Self::move_realm(inst, exec, clock, dt, self.pool.as_ref());
         }
+
         self.resolve_action_intents();
         self.process_portals();
         self.update_wildlife(self.clock_ms);
@@ -579,41 +610,31 @@ impl Sim {
         self.maybe_flush();
     }
 
-    /// Advance the whole world by one tick, ticking each realm's islands across
-    /// a pool of `workers` threads under per-worker tick-time `budget` (seconds).
-    /// Produces state identical to [`Sim::tick`] for any `workers`/`budget`.
-    pub fn tick_parallel(&mut self, workers: usize, budget: f64) {
-        self.clock_ms += TICK_MS;
-        self.tick_count += 1;
-        let dt = TICK_MS as f64 / 1000.0;
-        let clock = self.clock_ms;
-
-        self.consume_move_frames();
-
-        let tick_realm = |rw: &mut RealmWorld| {
-            rw.drive_npcs(TICK_MS, clock);
-            let jobs = rw.movement_jobs();
-            let assignment = rw.repack_assignment(budget);
-            let results = match &self.pool {
-                Some(pool) => pool.run(jobs, &assignment, dt),
-                None => crate::parallel::execute(jobs, &assignment, workers, dt),
-            };
-            rw.apply_movement(results, clock);
-        };
-
-        tick_realm(&mut self.overworld);
-        for inst in self.instances.values_mut() {
-            tick_realm(inst);
+    /// Advance one realm's movement by `exec` — the only phase that differs
+    /// between the serial and parallel ticks. Both arms leave the realm in the
+    /// same post-movement, reconciled state.
+    fn move_realm(
+        rw: &mut RealmWorld,
+        exec: MoveExec,
+        clock: u64,
+        dt: f64,
+        pool: Option<&crate::parallel::WorkerPool>,
+    ) {
+        match exec {
+            MoveExec::Serial => {
+                rw.tick(TICK_MS, clock);
+            }
+            MoveExec::Parallel { workers, budget } => {
+                rw.drive_npcs(TICK_MS, clock);
+                let jobs = rw.movement_jobs();
+                let assignment = rw.repack_assignment(budget);
+                let results = match pool {
+                    Some(pool) => pool.run(jobs, &assignment, dt),
+                    None => crate::parallel::execute(jobs, &assignment, workers, dt),
+                };
+                rw.apply_movement(results, clock);
+            }
         }
-        // Same phase law as the serial tick: movement first, verbs after,
-        // portals last.
-        self.resolve_action_intents();
-        self.process_portals();
-        self.update_wildlife(self.clock_ms);
-        self.emit_move_acks();
-        self.overlay_persisted_overworld();
-        self.drain_persistence();
-        self.maybe_flush();
     }
 
     /// Overlay persisted structures + depletion state onto any Overworld chunks
